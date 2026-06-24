@@ -39,3 +39,19 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.env.local
+# duplicate backup files from local copy/cloud sync
+* 2.*
+* 2.md
+* 2.json
+* 2.ts
+* 2.mjs
+
+# local/private files
+.env
+.env.local
+.env*.local
+node_modules
+.next
+.vercel
+.DS_Store
