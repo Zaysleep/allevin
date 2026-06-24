@@ -283,7 +283,7 @@ function stripUnsafeMarkup(value?: string) {
    return clean;
 }
 
-function sanitizePlainText(value?: string, maxLength = SANITIZE_LIMITS.aidockMessage, options: { preserveEdges?: boolean } = {}) {
+function sanitizePlainText(value?: string, maxLength: number = SANITIZE_LIMITS.aidockMessage, options: { preserveEdges?: boolean } = {}) {
    const withoutMarkup = stripUnsafeMarkup(value)
       .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
       .replace(/\u2028|\u2029/g, "\n")
@@ -296,11 +296,11 @@ function sanitizeLiveAIDockInput(value?: string) {
    return sanitizePlainText(value, SANITIZE_LIMITS.aidockMessage, { preserveEdges: true });
 }
 
-function sanitizeTitle(value?: string, maxLength = SANITIZE_LIMITS.title) {
+function sanitizeTitle(value?: string, maxLength: number = SANITIZE_LIMITS.title) {
    return sanitizePlainText(value, maxLength).replace(/\n+/g, " ").trim() || "Untitled";
 }
 
-function sanitizeLongText(value?: string, maxLength = SANITIZE_LIMITS.projectBody) {
+function sanitizeLongText(value?: string, maxLength: number = SANITIZE_LIMITS.projectBody) {
    return sanitizePlainText(value, maxLength);
 }
 
@@ -1193,24 +1193,6 @@ function getUniqueRecurringCalendarEvents() {
 
          return true;
       });
-}
-
-function getProjectCalendarEvents() {
-   const profile = getProjectMemoryProfile();
-
-   const titleKey = getNormalizedTitleKey(profile.title);
-
-   if (!titleKey) {
-      return [];
-   }
-
-   return getUpcomingCalendarEvents().filter((event) => {
-      const eventTitleKey = getNormalizedTitleKey(event.sourceTitle || event.title);
-
-      const bodyKey = getNormalizedTitleKey(`${event.description || ""} ${event.workingSummary || ""} ${event.sourceContent || ""}`);
-
-      return Boolean(eventTitleKey.includes(titleKey) || titleKey.includes(eventTitleKey) || bodyKey.includes(titleKey));
-   });
 }
 
 function getFreeCalendarWindows(dayOffset = 0) {
