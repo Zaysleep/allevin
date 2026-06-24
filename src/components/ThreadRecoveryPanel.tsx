@@ -213,6 +213,12 @@ function getNormalizedTitleKey(value?: string) {
    return cleanTitle.replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+function getStableWorkflowIdFromTitle(value?: string) {
+   const titleKey = getNormalizedTitleKey(value);
+
+   return titleKey ? `thread-${titleKey}` : "";
+}
+
 function isMeaningfulTitleForDedupe(value?: string) {
    const cleanTitle = normalizeProjectTitle(value);
 
@@ -905,6 +911,8 @@ function getTimelineBackfillThreads() {
          const cleanSourceContent = getBestTimelineContent(bestEvent);
 
          return {
+            id: latestEvent.workflowId || key,
+
             workflowId: latestEvent.workflowId || key,
 
             originBoardItemId: latestEvent.originBoardItemId || key,
@@ -914,6 +922,19 @@ function getTimelineBackfillThreads() {
             cleanSourceContent,
 
             workingSummary: compactText(bestEvent.workingSummary) || compactText(bestEvent.summary) || cleanSourceContent,
+
+            latestVisibleState: cleanSourceContent,
+
+            movementHistory: sortedEvents.map((event) => ({
+               id: event.id || crypto.randomUUID(),
+               source: event.source || "system",
+               destination: event.destination || "system",
+               title: getBestTimelineTitle(event),
+               summary: compactText(event.summary) || getBestTimelineContent(event),
+               createdAt: event.createdAt || Date.now(),
+            })),
+
+            createdAt: latestEvent.createdAt || Date.now(),
 
             currentStage: getStageFromTimelineDestination(latestEvent.destination),
 
@@ -1086,6 +1107,8 @@ function getCurrentCanvasRecoveryThread() {
       }
 
       return {
+         id: parsed.workflowId || getStableWorkflowIdFromTitle(title) || parsed.originBoardItemId || `canvas-${Date.now()}`,
+
          workflowId: parsed.workflowId || getStableWorkflowIdFromTitle(title) || parsed.originBoardItemId || `canvas-${Date.now()}`,
 
          originBoardItemId: parsed.originBoardItemId || parsed.workflowId || getStableWorkflowIdFromTitle(title),
@@ -1097,6 +1120,12 @@ function getCurrentCanvasRecoveryThread() {
          cleanSourceContent,
 
          workingSummary: compactText(parsed.workingSummary) || cleanSourceContent,
+
+         latestVisibleState: cleanSourceContent,
+
+         movementHistory: [],
+
+         createdAt: Math.max(Number(parsed.updatedAt || 0), Date.now()),
 
          currentStage: "drafting",
 
@@ -1150,6 +1179,8 @@ function getProjectMemoryThreads() {
          const cleanSourceContent = compactText(project.sourceContent) || compactText(project.body) || compactText(project.workingSummary) || title;
 
          return {
+            id: project.workflowId || project.originBoardItemId || getNormalizedTitleKey(title) || crypto.randomUUID(),
+
             workflowId: project.workflowId,
 
             originBoardItemId: project.originBoardItemId,
@@ -1161,6 +1192,21 @@ function getProjectMemoryThreads() {
             cleanSourceContent,
 
             workingSummary: compactText(project.workingSummary) || compactText(project.latestSummary) || cleanSourceContent,
+
+            latestVisibleState: cleanSourceContent,
+
+            movementHistory: Array.isArray(project.history)
+               ? project.history.slice(-8).map((event) => ({
+                    id: event.id || crypto.randomUUID(),
+                    source: event.source || "system",
+                    destination: event.destination || "system",
+                    title: event.title || title,
+                    summary: event.summary || cleanSourceContent,
+                    createdAt: event.createdAt || Date.now(),
+                 }))
+               : [],
+
+            createdAt: project.createdAt || project.updatedAt || Date.now(),
 
             currentStage: getThreadStageFromProjectStage(project.stage),
 

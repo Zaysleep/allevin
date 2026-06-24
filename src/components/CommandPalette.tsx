@@ -87,7 +87,7 @@ function stripUnsafeCommandMarkup(value?: string) {
    return clean;
 }
 
-function sanitizeCommandText(value?: string, maxLength = COMMAND_SANITIZE_LIMITS.query, options: { preserveEdges?: boolean } = {}) {
+function sanitizeCommandText(value?: string, maxLength: number = COMMAND_SANITIZE_LIMITS.query, options: { preserveEdges?: boolean } = {}) {
    const cleaned = stripUnsafeCommandMarkup(value)
       .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
       .replace(/\u2028|\u2029/g, "\n")

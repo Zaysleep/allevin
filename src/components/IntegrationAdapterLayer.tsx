@@ -84,7 +84,7 @@ function stripUnsafeProjectMarkup(value?: string) {
    return clean;
 }
 
-function sanitizeProjectPlainText(value?: string, maxLength = PROJECT_SANITIZE_LIMITS.body, options: { preserveEdges?: boolean } = {}) {
+function sanitizeProjectPlainText(value?: string, maxLength: number = PROJECT_SANITIZE_LIMITS.body, options: { preserveEdges?: boolean } = {}) {
    const cleaned = stripUnsafeProjectMarkup(value)
       .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
       .replace(/\u2028|\u2029/g, "\n")
@@ -405,6 +405,40 @@ function getDefaultProjectTracking(project: ProjectLibraryItem): ProjectTracking
       calendarTaskDurationMinutes: 60,
       updatedAt: project.updatedAt || getNow(),
    };
+}
+
+function getProjectMemoryStageFromTrackingStatus(status: ProjectTrackingStatus) {
+   switch (status) {
+      case "idea":
+         return "idea";
+
+      case "active":
+         return "tracking";
+
+      case "check":
+         return "reviewing";
+
+      case "done":
+         return "completed";
+
+      default:
+         return "unknown";
+   }
+}
+
+function getProjectMemoryStatusFromTrackingStatus(status: ProjectTrackingStatus) {
+   switch (status) {
+      case "done":
+         return "completed";
+
+      case "check":
+         return "ready";
+
+      case "idea":
+      case "active":
+      default:
+         return "active";
+   }
 }
 
 function getProjectStatusLabel(status: ProjectTrackingStatus) {
@@ -1085,8 +1119,8 @@ function saveProjectDirectly(item: InternalOutputItem) {
       workingSummary: sanitizeProjectSummary(item.workingSummary || summary || body),
       workflowId: item.workflowId,
       originBoardItemId: item.originBoardItemId,
-      source: "projects",
-      destination: "projects",
+      source: "notes",
+      destination: "integrations",
       stage: "preserved",
       status: "active",
       priority: "medium",
@@ -1205,7 +1239,7 @@ function upsertProjectLibraryNote({
 
            latestMovement: "Saved to Projects",
 
-           notes: [note, ...existing.notes.filter((existingNote) => existingNote.id !== note.id && cleanProjectTitle(existingNote.title) !== cleanTitle)].slice(0, 30),
+           notes: [note, ...existing.notes.filter((existingNote: ProjectLibraryNote) => existingNote.id !== note.id && cleanProjectTitle(existingNote.title) !== cleanTitle)].slice(0, 30),
 
            updatedAt: getNow(),
         }
@@ -1602,10 +1636,10 @@ export default function IntegrationAdapterLayer() {
          workingSummary: project.latestSummary,
          workflowId: project.workflowId,
          originBoardItemId: project.originBoardItemId,
-         source: "projects",
-         destination: "projects",
-         stage: nextTracking.status,
-         status: nextTracking.status === "done" ? "completed" : "active",
+         source: "notes",
+         destination: "integrations",
+         stage: getProjectMemoryStageFromTrackingStatus(nextTracking.status),
+         status: getProjectMemoryStatusFromTrackingStatus(nextTracking.status),
          priority: nextTracking.priority,
          latestMovement: `Projects → ${getProjectStatusLabel(nextTracking.status)}`,
          recommendedNextAction: nextTracking.nextStep || getTrackingGuidance(nextTracking.status),
@@ -1848,7 +1882,7 @@ export default function IntegrationAdapterLayer() {
 
          const response = await requestAllevinLLM({
             mode: "export-polish",
-            source: "projects",
+            source: "export",
             title: item.title,
             focus: item.rawBody || item.body,
             usefulContext: `Keep this saved with the project.`,
@@ -1861,7 +1895,7 @@ export default function IntegrationAdapterLayer() {
             userInstruction: "Polish this project note. Keep it clear, simple, and useful. Preserve the actual project substance.",
          });
 
-         const polished = sanitizeProjectBody(response.content || response.summary || item.body);
+         const polished = sanitizeProjectBody(response.focus || response.summary || response.nextStep || item.body);
 
          commitOutputs((current) =>
             current.map((output) =>

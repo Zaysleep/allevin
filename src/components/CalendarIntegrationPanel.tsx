@@ -209,7 +209,7 @@ function stripUnsafeCalendarMarkup(value?: string) {
    return clean;
 }
 
-function sanitizeCalendarPlainText(value?: string, maxLength = CALENDAR_SANITIZE_LIMITS.description, options: { preserveEdges?: boolean } = {}) {
+function sanitizeCalendarPlainText(value?: string, maxLength: number = CALENDAR_SANITIZE_LIMITS.description, options: { preserveEdges?: boolean } = {}) {
    const cleaned = stripUnsafeCalendarMarkup(value)
       .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
       .replace(/\u2028|\u2029/g, "\n")
@@ -1871,13 +1871,13 @@ export default function CalendarIntegrationPanel() {
 
          workflowId,
 
-         originProjectsItemId,
+         originBoardItemId: originProjectsItemId,
 
          source: "system",
 
          destination: "calendar",
 
-         stage: "checking",
+         stage: "reviewing",
 
          status: "active",
 

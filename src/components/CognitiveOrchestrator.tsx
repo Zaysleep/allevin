@@ -93,7 +93,7 @@ export default function CognitiveOrchestrator() {
       // Deep Focus Stability
       // ========================================
 
-      if (focusMode === "deep" && currentEnvironment === "focus") {
+      if (focusMode === "deep" && currentEnvironment === "deep-focus") {
          setOrchestration({
             cognitiveLoad: "moderate",
 

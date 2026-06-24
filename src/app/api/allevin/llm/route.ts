@@ -120,7 +120,7 @@ function stripUnsafeRouteMarkup(value?: string) {
    return clean;
 }
 
-function sanitizeRouteText(value?: string, maxLength = ROUTE_SANITIZE_LIMITS.summary) {
+function sanitizeRouteText(value?: string, maxLength: number = ROUTE_SANITIZE_LIMITS.summary) {
    const clean = stripUnsafeRouteMarkup(value)
       .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
       .replace(/\u2028|\u2029/g, "\n")
@@ -345,7 +345,6 @@ function buildFallbackResponse(request: AllevinLLMRequestWithContext, error?: st
       confidence: error ? 55 : 72,
       usedFallback: Boolean(error),
       error: error ? "LLM request fell back safely." : undefined,
-      error,
    };
 }
 
@@ -578,7 +577,7 @@ export async function POST(request: Request) {
       );
    }
 
-   const apiKey = process.env._KEY;
+   const apiKey = process.env.OPENAI_API_KEY;
 
    const model = process.env.ALLEVIN_LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
 

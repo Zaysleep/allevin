@@ -77,7 +77,7 @@ function stripUnsafeCanvasMarkup(value?: string) {
    return clean;
 }
 
-function sanitizeCanvasPlainText(value?: string, maxLength = CANVAS_SANITIZE_LIMITS.bodyHard, options: { preserveEdges?: boolean } = {}) {
+function sanitizeCanvasPlainText(value?: string, maxLength: number = CANVAS_SANITIZE_LIMITS.bodyHard, options: { preserveEdges?: boolean } = {}) {
    const cleaned = stripUnsafeCanvasMarkup(value)
       .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
       .replace(/\u2028|\u2029/g, "\n")
@@ -300,6 +300,14 @@ interface IntegrationSavePayload {
    workingSummary?: string;
 
    cleanSourceContent?: string;
+
+   recommendation?: {
+      destination?: "notes" | "calendar" | "tasks";
+      objectType?: "canvas-draft" | "research-note" | "project-summary" | "task-action" | "workflow-review";
+      reason?: string;
+      suggestedNextStep?: string;
+      [key: string]: unknown;
+   };
 }
 
 // ========================================
@@ -1139,6 +1147,7 @@ function mergeUsefulContextLines(lines: Array<string | null | undefined>) {
    const seen = new Set<string>();
 
    return lines
+      .filter((line): line is string => typeof line === "string")
       .map((line) => cleanText(line))
       .filter(Boolean)
       .filter((line) => {
@@ -2495,7 +2504,7 @@ export default function AdaptiveWorkCanvas() {
          workingSummary: content,
          workflowId,
          originBoardItemId,
-         source: payload.source === "projects" ? "project" : "canvas",
+         source: payload.source === "projects" ? "notes" : "canvas",
          destination: "canvas",
          stage: "drafting",
          status: "active",

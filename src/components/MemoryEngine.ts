@@ -384,7 +384,7 @@ function stripUnsafeMemoryEngineMarkup(value?: string) {
    return clean;
 }
 
-function sanitizeMemoryEngineText(value?: string, maxLength = MEMORY_ENGINE_SANITIZE_LIMITS.body) {
+function sanitizeMemoryEngineText(value?: string, maxLength: number = MEMORY_ENGINE_SANITIZE_LIMITS.body) {
    return limitMemoryEngineTextLength(
       stripUnsafeMemoryEngineMarkup(value)
          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
@@ -827,9 +827,9 @@ export function getWorkflowTimelineEvents(): WorkflowTimelineEvent[] {
 
       return parsed
          .map((event) => sanitizeWorkflowTimelineEvent(event))
-         .filter(Boolean)
-         .filter((event) => event && event.id && event.createdAt && !isDeletedProjectTimelineEvent(event))
-         .sort((a, b) => b.createdAt - a.createdAt) as WorkflowTimelineEvent[];
+         .filter((event): event is WorkflowTimelineEvent => Boolean(event))
+         .filter((event) => event.id && event.createdAt && !isDeletedProjectTimelineEvent(event))
+         .sort((a, b) => b.createdAt - a.createdAt);
    } catch {
       localStorage.removeItem(WORKFLOW_TIMELINE_STORAGE_KEY);
 

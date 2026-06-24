@@ -778,7 +778,7 @@ function cleanDescriptionForBoard({ description, sourceContent }: { description?
    }
 
    return cleanText(description)
-      .replace(/^Canvas Title:\s*.*?\n\n/ims, "")
+      .replace(/^Canvas Title:\s*[\s\S]*?\n\n/im, "")
       .replace(/^Canvas Context:\s*/i, "")
       .replace(/\n\nWorkflow Metadata:[\s\S]*$/i, "")
       .replace(/^Workflow Metadata:[\s\S]*$/i, "")
@@ -836,6 +836,25 @@ function getTaskLiveContent(task: Task) {
    return removeRepeatedProjectTitlePrefixFromTaskContent(bestContent, cleanTitle);
 }
 
+function getTaskSourceLabel(source: Task["source"]) {
+   switch (source) {
+      case "canvas":
+         return "Canvas";
+
+      case "research":
+         return "Research";
+
+      case "project":
+         return "Projects";
+
+      case "system":
+         return "Projects";
+
+      default:
+         return "Manual";
+   }
+}
+
 function buildTaskCanvasBody({ title, sourceContent, priority, sourceLabel }: { title: string; sourceContent: string; priority: Task["priority"]; sourceLabel: string }) {
    const cleanTitle = cleanProjectTitle(title) || title || "Task Work Item";
 
@@ -883,7 +902,7 @@ function buildTaskBoardDescription(task: Task) {
       `Current stage: Tracking`,
       `Current location: Board`,
       `Priority: ${task.priority}`,
-      `From: ${getFromLabel(task.source)}`,
+      `From: ${getTaskSourceLabel(task.source)}`,
       `Latest movement: Tasks → Board`,
       `Task context: This next action is moving to the Board so progress can be tracked.`,
       `Recent update: ALLEVIN is treating the latest task content as the current project version.`,
@@ -1084,7 +1103,7 @@ export default function AdaptiveTaskSystem() {
          workingSummary: extractCleanTaskContent(workingSummary) || cleanFromContent,
          workflowId: stableWorkflowId,
          originBoardItemId: originBoardItemId || stableWorkflowId,
-         source: source === "task" ? "task" : source || "task",
+         source: source === "project" ? "notes" : source === "task" ? "task" : source || "task",
          destination: destination || "task",
          stage: destination === "board" ? "tracking" : destination === "canvas" ? "drafting" : "tasking",
          status: destination === "system" ? "ready" : "active",
@@ -1365,27 +1384,29 @@ export default function AdaptiveTaskSystem() {
          return;
       }
 
-      setExpandedTaskIds((currentIds) => currentIds.filter((taskId) => taskId !== archivedTask?.id));
+      const archivedTaskSnapshot = archivedTask as Task;
 
-      const cleanTitle = cleanProjectTitle(archivedTask.sourceTitle || archivedTask.title) || archivedTask.title;
+      setExpandedTaskIds((currentIds) => currentIds.filter((taskId) => taskId !== archivedTaskSnapshot.id));
 
-      const liveTaskContent = getTaskLiveContent(archivedTask);
+      const cleanTitle = cleanProjectTitle(archivedTaskSnapshot.sourceTitle || archivedTaskSnapshot.title) || archivedTaskSnapshot.title;
 
-      const workflowId = payload.workflowId || archivedTask.workflowId || archivedTask.id;
+      const liveTaskContent = getTaskLiveContent(archivedTaskSnapshot);
 
-      const originBoardItemId = payload.originBoardItemId || archivedTask.originBoardItemId || workflowId;
+      const workflowId = payload.workflowId || archivedTaskSnapshot.workflowId || archivedTaskSnapshot.id;
+
+      const originBoardItemId = payload.originBoardItemId || archivedTaskSnapshot.originBoardItemId || workflowId;
 
       recordProjectMemory({
          title: cleanTitle,
          body: liveTaskContent,
          sourceTitle: cleanTitle,
          sourceContent: liveTaskContent,
-         workingSummary: archivedTask.workingSummary || liveTaskContent,
+         workingSummary: archivedTaskSnapshot.workingSummary || liveTaskContent,
          workflowId,
          originBoardItemId,
          source: "task",
          destination: "board",
-         priority: archivedTask.priority,
+         priority: archivedTaskSnapshot.priority,
          recommendedNextAction: "Track this work on the Board, move it forward by status, or send it back to Canvas if it needs more writing.",
          latestMovement: "Tasks → Board",
       });
@@ -1793,22 +1814,7 @@ export default function AdaptiveTaskSystem() {
    // ========================================
 
    function getFromLabel(source: Task["source"]) {
-      switch (source) {
-         case "canvas":
-            return "Canvas";
-
-         case "research":
-            return "Research";
-
-         case "project":
-            return "Projects";
-
-         case "system":
-            return "Projects";
-
-         default:
-            return "Manual";
-      }
+      return getTaskSourceLabel(source);
    }
 
    // ========================================

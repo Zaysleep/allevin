@@ -115,7 +115,7 @@ function stripUnsafeLLMClientMarkup(value?: string) {
    return clean;
 }
 
-function sanitizeLLMClientText(value?: string, maxLength = LLM_CLIENT_SANITIZE_LIMITS.responseText) {
+function sanitizeLLMClientText(value?: string, maxLength: number = LLM_CLIENT_SANITIZE_LIMITS.responseText) {
    return limitLLMClientTextLength(
       stripUnsafeLLMClientMarkup(value)
          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
@@ -146,7 +146,7 @@ function sanitizeLLMSmallText(value?: string) {
    return sanitizeLLMClientText(value, LLM_CLIENT_SANITIZE_LIMITS.smallText).replace(/\n+/g, " ").trim();
 }
 
-function sanitizeLLMStringArray(values?: string[], maxItems = LLM_CLIENT_SANITIZE_LIMITS.contextTitles) {
+function sanitizeLLMStringArray(values?: string[], maxItems: number = LLM_CLIENT_SANITIZE_LIMITS.contextTitles) {
    return Array.isArray(values)
       ? values
            .map((value) => sanitizeLLMTitle(value))
@@ -157,6 +157,10 @@ function sanitizeLLMStringArray(values?: string[], maxItems = LLM_CLIENT_SANITIZ
 
 function clampLLMConfidence(value?: number, fallback = 60) {
    return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : fallback;
+}
+
+function sanitizeLLMPriority(value?: AllevinLLMRequest["priority"]) {
+   return value === "low" || value === "medium" || value === "high" ? value : undefined;
 }
 
 function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinContextPacket | undefined {
@@ -222,10 +226,10 @@ function sanitizeLLMRequest(request: AllevinLLMRequestWithContext): AllevinLLMRe
       focus: sanitizeLLMSummary(request.focus),
       usefulContext: sanitizeLLMSummary(request.usefulContext),
       nextStep: sanitizeLLMNextStep(request.nextStep),
-      source: sanitizeLLMSmallText(request.source),
+      source: request.source,
       projectStage: sanitizeLLMSmallText(request.projectStage),
       currentLocation: sanitizeLLMSmallText(request.currentLocation),
-      priority: sanitizeLLMSmallText(request.priority),
+      priority: sanitizeLLMPriority(request.priority),
       contextPacket: sanitizeContextPacket(request.contextPacket),
    };
 }
@@ -235,7 +239,7 @@ function sanitizeLLMResponse(response: AllevinLLMResponse, fallbackRequest?: All
       ...response,
       ok: response.ok === true,
       mode: response.mode || fallbackRequest?.mode,
-      source: sanitizeLLMSmallText(response.source || fallbackRequest?.source),
+      source: response.source || fallbackRequest?.source || "system",
       title: sanitizeLLMTitle(response.title || fallbackRequest?.title || "ALLEVIN Project"),
       focus: sanitizeLLMSummary(response.focus),
       usefulContext: sanitizeLLMSummary(response.usefulContext),

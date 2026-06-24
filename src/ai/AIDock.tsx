@@ -2062,6 +2062,87 @@ function looksLikeInternalIntegrationQuestion(prompt: string) {
    );
 }
 
+type AllevinCognitionModeForIntegration = "balanced" | "calm" | "deep-work" | "context-switching" | "planning" | "creative" | "research";
+
+function isAllevinCognitionModeForIntegration(value?: string): value is AllevinCognitionModeForIntegration {
+   return value === "balanced" || value === "calm" || value === "deep-work" || value === "context-switching" || value === "planning" || value === "creative" || value === "research";
+}
+
+function getActiveCognitionResponseModeForIntegration(): AllevinCognitionModeForIntegration {
+   if (typeof window === "undefined") {
+      return "balanced";
+   }
+
+   const storedMode = localStorage.getItem(COGNITION_ACTIVE_MODE_STORAGE_KEY);
+
+   if (isAllevinCognitionModeForIntegration(storedMode || "")) {
+      return storedMode as AllevinCognitionModeForIntegration;
+   }
+
+   try {
+      const storedState = localStorage.getItem(COGNITION_STATE_STORAGE_KEY);
+
+      if (!storedState) {
+         return "balanced";
+      }
+
+      const parsed = JSON.parse(storedState);
+
+      const parsedState = typeof parsed?.state === "string" ? parsed.state : "";
+
+      return isAllevinCognitionModeForIntegration(parsedState) ? parsedState : "balanced";
+   } catch {
+      return "balanced";
+   }
+}
+
+function getCognitionModeProfileForIntegration(mode: AllevinCognitionModeForIntegration) {
+   switch (mode) {
+      case "calm":
+         return {
+            label: "Calm",
+            suggestion: "Keep the next step small and low-friction.",
+         };
+
+      case "deep-work":
+         return {
+            label: "Deep Work",
+            suggestion: "Protect focus and keep the response to one clear move.",
+         };
+
+      case "context-switching":
+         return {
+            label: "Context Switching",
+            suggestion: "Keep transitions clean and avoid mixing project threads.",
+         };
+
+      case "planning":
+         return {
+            label: "Planning",
+            suggestion: "Turn the next move into a clear sequence or schedule block.",
+         };
+
+      case "creative":
+         return {
+            label: "Creative",
+            suggestion: "Keep momentum open while still choosing one useful next move.",
+         };
+
+      case "research":
+         return {
+            label: "Research",
+            suggestion: "Clarify the question, source, or evidence needed next.",
+         };
+
+      case "balanced":
+      default:
+         return {
+            label: "Balanced",
+            suggestion: "Keep responses balanced and useful for normal project work.",
+         };
+   }
+}
+
 function getInternalIntegrationIntent(prompt: string): InternalIntegrationIntent {
    const project = getInternalIntegrationProjectContext();
 
@@ -2106,9 +2187,9 @@ function getInternalIntegrationIntent(prompt: string): InternalIntegrationIntent
    }
 
    if (looksLikeCognitionToAidockIntegration(prompt)) {
-      const mode = getActiveCognitionResponseMode();
+      const mode = getActiveCognitionResponseModeForIntegration();
 
-      const profile = getCognitionModeProfile(mode);
+      const profile = getCognitionModeProfileForIntegration(mode);
 
       return {
          source: "cognition",
@@ -5810,7 +5891,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
    }
 
    function hasSourceAwareProject() {
-      if (!sourceAwareProject?.hasActiveProject || !sourceAwareProject.title || sourceAwareProject.title === "No active project detected") {
+      if (!sourceAwareProject?.title || sourceAwareProject.title === "No active project detected") {
          return false;
       }
 
@@ -5820,7 +5901,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
       const sourceAwareBody = compactText(sourceAwareProject.body || sourceAwareProject.summary || sourceAwareProject.recommendedNextAction);
 
-      if (!sourceAwareBody && (sourceAwareProject.source === "projects" || sourceAwareProject.source === "thread" || sourceAwareProject.source === "calendar")) {
+      if (!sourceAwareBody && (sourceAwareProject.source === "calendar" || sourceAwareProject.source === "thread-memory" || sourceAwareProject.source === "timeline")) {
          return false;
       }
 
@@ -5894,7 +5975,10 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          case "projects":
             return "Projects";
 
-         case "thread":
+         case "thread-memory":
+            return "Projects";
+
+         case "timeline":
             return "Projects";
 
          case "calendar":
@@ -6814,6 +6898,18 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
       return lower === "add this to canvas" || lower === "add it to canvas" || lower === "put this in canvas" || lower === "send this to canvas" || lower === "add the insight to canvas" || lower === "add that to canvas" || lower === "save that to canvas";
    }
 
+   function buildCanvasReadyInsightNote() {
+      const title = getSafeThreadTitle();
+
+      const insightLine = buildTypeAwareProjectInsight();
+
+      const nextLine = buildTypeAwareNextMoveLine();
+
+      const calendarLine = getNextCalendarSummaryForContext();
+
+      return cleanFinalAIDockResponse([`Project: ${title}`, insightLine ? `Insight:\n${insightLine}` : "", nextLine ? `Next Move:\n${nextLine}` : "", calendarLine ? `Schedule Context:\n${calendarLine}` : ""].filter(Boolean).join("\n\n"));
+   }
+
    function addCurrentInsightToCanvas() {
       if (!hasActiveVisibleWork()) {
          return getEmptyWorkspaceResponse();
@@ -7697,7 +7793,7 @@ ${getSafeRecommendedNextAction()}
 
          body: getThreadSourceContent(),
 
-         source: latestProject?.source || "system",
+         source: "system",
 
          currentStage: latestProject?.stage || threadMemory.currentStage,
 
@@ -7716,8 +7812,6 @@ ${getSafeRecommendedNextAction()}
          signalCount: getDisplaySignalCount(latestProject?.signalCount ?? threadMemory.signalCount),
 
          confidence: latestProject?.confidence ?? threadMemory.confidence,
-
-         hasPendingAction: pendingWorkflowActions.length > 0,
 
          hasActiveThread: hasUsableActiveThread() || hasUsableProjectMemory(),
 
@@ -8016,7 +8110,7 @@ The useful next move is ${polishWorkflowControlLanguage(recommendation.suggested
 
       const recommendation = getWorkflowRecommendation();
 
-      if (!recommendation.actionRequired) {
+      if (!getWorkflowRecommendationCommand(recommendation)) {
          return `
 
 
@@ -8678,30 +8772,6 @@ I could not turn this recommendation into a clean action yet.
       }
 
       return sentenceCaseFirstLetter(clean);
-   }
-
-   function removeDuplicateSentences(value: string) {
-      const seen = new Set<string>();
-
-      return value
-         .split(/(?<=[.!?])\s+/)
-         .map((sentence) => sentence.trim())
-         .filter((sentence) => {
-            if (!sentence) {
-               return false;
-            }
-
-            const key = sentence.toLowerCase();
-
-            if (seen.has(key)) {
-               return false;
-            }
-
-            seen.add(key);
-
-            return true;
-         })
-         .join(" ");
    }
 
    function applyAllevinResponseGuardrails(focus: string, nextStep: string, prompt = "") {
@@ -10258,7 +10328,7 @@ Try one of these:
       setPendingDirectCalendarEvent(null);
 
       if (wasDirectCalendarEventRecentlyApproved(event)) {
-         openProductModule("calendar", "workspace", "calendar", "", "work-area");
+         openProductModule("calendar", "work-area", "workspace", "");
 
          return `Calendar event was already approved. I opened Calendar.\n\n${getDirectCalendarEventPreview(event)}`;
       }
@@ -10267,7 +10337,7 @@ Try one of these:
 
       const saved = saveDirectCalendarEvent(event);
 
-      openProductModule("calendar", "workspace", "calendar", "", "work-area");
+      openProductModule("calendar", "work-area", "workspace", "");
 
       if (!saved) {
          return `Calendar event was already on your calendar. I opened Calendar.\n\n${getDirectCalendarEventPreview(event)}`;

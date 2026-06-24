@@ -1195,7 +1195,7 @@ ${historyPcheck || "No history available."}
    function getProjectMemoryStageFromLane(lane: BoardLane) {
       if (lane === "backlog") return "idea";
       if (lane === "active") return "tracking";
-      if (lane === "check") return "checking";
+      if (lane === "check") return "reviewing";
       if (lane === "complete") return "completed";
 
       return "unknown";

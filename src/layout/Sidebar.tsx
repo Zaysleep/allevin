@@ -79,7 +79,7 @@ function stripUnsafeSidebarMarkup(value?: string) {
    return clean;
 }
 
-function sanitizeSidebarText(value?: string, maxLength = SIDEBAR_SANITIZE_LIMITS.buttonText) {
+function sanitizeSidebarText(value?: string, maxLength: number = SIDEBAR_SANITIZE_LIMITS.buttonText) {
    return limitSidebarTextLength(
       stripUnsafeSidebarMarkup(value)
          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
@@ -342,7 +342,7 @@ function saveActiveProductModule(moduleId: ProductModuleId) {
    localStorage.setItem(ACTIVE_PRODUCT_MODULE_STORAGE_KEY, sanitizeSidebarRouteValue(moduleId));
 }
 
-function getStoredActiveProductModule() {
+function getStoredActiveProductModule(): ProductModuleId | null {
    if (typeof window === "undefined") {
       return null;
    }
@@ -353,7 +353,31 @@ function getStoredActiveProductModule() {
       return "integrations";
    }
 
-   return isProductModuleId(stored || undefined) ? stored : null;
+   switch (stored) {
+      case "home":
+         return "home";
+
+      case "canvas":
+         return "canvas";
+
+      case "tasks":
+      case "board":
+      case "recovery":
+      case "control":
+         return "integrations";
+
+      case "calendar":
+         return "calendar";
+
+      case "integrations":
+         return "integrations";
+
+      case "advanced":
+         return "advanced";
+
+      default:
+         return null;
+   }
 }
 
 function scrollToSection(targetId: string) {
@@ -559,6 +583,10 @@ export default function Sidebar() {
          }
 
          window.setTimeout(() => {
+            if (!isProductModuleId(moduleId)) {
+               return;
+            }
+
             syncActiveProductModule(moduleId, {
                updateWorkspace: false,
 

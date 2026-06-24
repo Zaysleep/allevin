@@ -172,7 +172,7 @@ function stripUnsafePageMarkup(value?: string) {
    return clean;
 }
 
-function sanitizePageText(value?: string, maxLength = PAGE_SANITIZE_LIMITS.preview) {
+function sanitizePageText(value?: string, maxLength: number = PAGE_SANITIZE_LIMITS.preview) {
    return limitPageTextLength(
       stripUnsafePageMarkup(value)
          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")

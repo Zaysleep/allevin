@@ -49,7 +49,7 @@ function stripUnsafeProjectMemoryMarkup(value?: string) {
    return clean;
 }
 
-function sanitizeProjectMemoryText(value?: string, maxLength = PROJECT_MEMORY_SANITIZE_LIMITS.body) {
+function sanitizeProjectMemoryText(value?: string, maxLength: number = PROJECT_MEMORY_SANITIZE_LIMITS.body) {
    return limitProjectMemoryTextLength(
       stripUnsafeProjectMemoryMarkup(value)
          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
@@ -440,7 +440,7 @@ function buildSignalProfile(input: ProjectMemoryInput, content: string, stage: A
    const hasCalendarContext = input.source === "calendar" || destination === "calendar" || combined.includes("calendar") || combined.includes("meeting") || combined.includes("event");
    const hasExportContext = destination === "integrations" || destination === "google-docs" || stage === "exporting" || combined.includes("export") || combined.includes("google docs");
    const needsReview = combined.includes("review") || stage === "reviewing" || destination === "integrations" || destination === "google-docs";
-   const needsAction = hasTaskContext || stage === "drafting" || stage === "tasking";
+   const needsAction = hasTaskContext || stage === "drafting";
    const needsExport = hasExportContext || combined.includes("final") || combined.includes("ready to export");
 
    let projectType: ProjectSignalProfile["projectType"] = "general";
