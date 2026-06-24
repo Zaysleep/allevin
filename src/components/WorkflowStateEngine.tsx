@@ -212,7 +212,7 @@ export default function WorkflowStateEngine() {
       >
          <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
-               <p className="text-sm text-[var(--color-text-secondary)]">ALLEVIN MK IV</p>
+               <p className="text-sm text-[var(--color-text-secondary)]">ALLEVIN MK V</p>
 
                <h2 className="mt-1 text-3xl">Cognition</h2>
 
