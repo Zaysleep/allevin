@@ -1581,22 +1581,164 @@ function getNextDateForDirectSchedule(dayName: string) {
    return target;
 }
 
+type DirectScheduleDateResult = {
+   date: Date;
+   label: string;
+};
+
+function buildSpecificDirectScheduleDate(month: number, day: number, year?: number) {
+   const now = new Date();
+
+   const resolvedYear = year || now.getFullYear();
+
+   const date = new Date(resolvedYear, month, day);
+
+   date.setHours(0, 0, 0, 0);
+
+   if (date.getMonth() !== month || date.getDate() !== day) {
+      return null;
+   }
+
+   // If the user gives a month/day without a year and that date already passed,
+   // assume the next occurrence instead of silently scheduling in the past.
+   if (!year) {
+      const today = new Date(now);
+
+      today.setHours(0, 0, 0, 0);
+
+      if (date.getTime() < today.getTime()) {
+         date.setFullYear(date.getFullYear() + 1);
+      }
+   }
+
+   return date;
+}
+
+function getDirectScheduleDateFromPrompt(value?: string): DirectScheduleDateResult | null {
+   const clean = compactText(value);
+
+   const relativeMatch = clean.match(/\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+
+   if (relativeMatch) {
+      const date = getNextDateForDirectSchedule(relativeMatch[1]);
+
+      return date
+         ? {
+              date,
+              label: relativeMatch[0],
+           }
+         : null;
+   }
+
+   const isoMatch = clean.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+
+   if (isoMatch) {
+      const date = buildSpecificDirectScheduleDate(Number(isoMatch[2]) - 1, Number(isoMatch[3]), Number(isoMatch[1]));
+
+      return date
+         ? {
+              date,
+              label: isoMatch[0],
+           }
+         : null;
+   }
+
+   const slashMatch = clean.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?\b/);
+
+   if (slashMatch) {
+      const rawYear = slashMatch[3] ? Number(slashMatch[3]) : undefined;
+
+      const year = rawYear && rawYear < 100 ? 2000 + rawYear : rawYear;
+
+      const date = buildSpecificDirectScheduleDate(Number(slashMatch[1]) - 1, Number(slashMatch[2]), year);
+
+      return date
+         ? {
+              date,
+              label: slashMatch[0],
+           }
+         : null;
+   }
+
+   const monthNames: Record<string, number> = {
+      jan: 0,
+      january: 0,
+      feb: 1,
+      february: 1,
+      mar: 2,
+      march: 2,
+      apr: 3,
+      april: 3,
+      may: 4,
+      jun: 5,
+      june: 5,
+      jul: 6,
+      july: 6,
+      aug: 7,
+      august: 7,
+      sep: 8,
+      sept: 8,
+      september: 8,
+      oct: 9,
+      october: 9,
+      nov: 10,
+      november: 10,
+      dec: 11,
+      december: 11,
+   };
+
+   const monthMatch = clean.match(/\b(january|february|march|april|may|june|july|august|september|sept|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?\b/i);
+
+   if (monthMatch) {
+      const month = monthNames[monthMatch[1].toLowerCase()];
+
+      const date = buildSpecificDirectScheduleDate(month, Number(monthMatch[2]), monthMatch[3] ? Number(monthMatch[3]) : undefined);
+
+      return date
+         ? {
+              date,
+              label: monthMatch[0],
+           }
+         : null;
+   }
+
+   return null;
+}
+
+function getDirectScheduleTitleFromPrompt(cleanPrompt: string, dateLabel?: string) {
+   const quotedTitle = cleanPrompt.match(/[“\"]([^”\"]+)[”\"]/)?.[1];
+
+   if (quotedTitle) {
+      return sanitizeCalendarTitle(quotedTitle);
+   }
+
+   const beforeTimeMatch = cleanPrompt.match(/(?:schedule|add|put)\s+(.+?)\s+(?:from|at)\s+[0-9]{1,2}/i);
+
+   let candidate = beforeTimeMatch?.[1] || "";
+
+   candidate = candidate.replace(/^\s*(?:a|an|the)\s+/i, "");
+
+   candidate = candidate.replace(/\s+(?:on\s+)?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*$/i, "");
+
+   if (dateLabel) {
+      const escapedDateLabel = dateLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+      candidate = candidate.replace(new RegExp(`\\s+(?:on\\s+)?${escapedDateLabel}\\s*$`, "i"), "");
+   }
+
+   candidate = candidate.replace(/\s+(?:to|for)?\s*(?:my|the)?\s*calendar\s*$/i, "");
+
+   return sanitizeCalendarTitle(candidate);
+}
+
 function parseDirectCalendarScheduleRequest(prompt: string): PendingDirectCalendarEvent | null {
    const clean = sanitizePlainText(prompt, SANITIZE_LIMITS.aidockMessage);
 
-   const titleMatch = clean.match(/[“"]([^”"]+)[”"]/);
+   const scheduleDate = getDirectScheduleDateFromPrompt(clean);
 
-   let title = sanitizeCalendarTitle(titleMatch?.[1] || "");
+   const date = scheduleDate?.date || null;
 
-   if (!title) {
-      const fallbackTitleMatch = clean.match(/(?:schedule|add|put)\s+(.+?)\s+(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:from|at)\s+/i);
-
-      title = sanitizeCalendarTitle(fallbackTitleMatch?.[1] || "");
-   }
-
-   const dateMatch = clean.match(/\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
-
-   const date = dateMatch ? getNextDateForDirectSchedule(dateMatch[1]) : null;
+   const title = getDirectScheduleTitleFromPrompt(clean, scheduleDate?.label);
 
    const timeRangeMatch = clean.match(/\bfrom\s+([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)\s+(?:to|-|until)\s+([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)/i);
 
@@ -2369,7 +2511,7 @@ function getIntentTypeFromPrompt(prompt: string) {
       return "next-step";
    }
 
-   if (lower.includes("what should i add to canvas") || lower.includes("add to canvas")) {
+   if (lower.includes("what should i add to canvas") || lower.includes("add to canvas") || lower.includes("help me build structure") || lower.includes("build structure") || lower.includes("project structure") || lower.includes("structure this project")) {
       return "canvas-structure";
    }
 
@@ -6206,6 +6348,16 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          };
       }
 
+      if (hasAny(["retirement party", "party", "rsvp", "guest list", "guests", "venue", "decor", "catering", "slideshow", "tribute video", "video", "speeches", "program", "event timeline", "run of show", "invitation", "invitations"])) {
+         return {
+            type: "event planning project",
+            purpose: "turning the event idea into a clear guest, timeline, media, and day-of plan",
+            missingPiece: "event goal, date and location, guest list or RSVPs, media needs, responsibilities, and day-of timeline",
+            canvasNote: "Event goal:\nDate and location:\nGuest list / RSVPs:\nMedia or video needs:\nResponsibilities:\nDay-of timeline:\nFirst planning move:",
+            nextMove: "choose the first planning move: confirm the date, guest list, media needs, or day-of timeline",
+         };
+      }
+
       if (hasAny(["volunteer", "community", "event", "roles", "assigned", "attendees", "people arrive", "garden beds", "workshop", "check-in", "sign-up"])) {
          return {
             type: "community planning project",
@@ -6451,6 +6603,16 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          ]);
       }
 
+      if (profile.type.includes("event planning")) {
+         return pickRandomLine([
+            "Event signal acquired. Let’s give it a clean run of show.",
+            "This is planning work, not chaos with decorations. Promising.",
+            "The event has shape. Let’s keep the moving pieces visible.",
+            "A clean event path is available here.",
+            "This one wants timing, people, and responsibilities to stop floating around.",
+         ]);
+      }
+
       if (profile.type.includes("career")) {
          return pickRandomLine([
             "Career signal acquired. Let’s make it useful.",
@@ -6515,6 +6677,14 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          ]);
       }
 
+      if (profile.type.includes("event planning")) {
+         return pickRandomLine([
+            "This does not need a bigger idea yet. It needs the guest/RSVP picture, the media needs, and the day-of timeline to be visible together.",
+            "The useful structure is people, timing, responsibilities, and one polished event moment. Keep those together and the plan gets easier to steer.",
+            "For event planning, the danger is scattered details. Put the RSVPs, video or media needs, and run of show in one clean structure.",
+         ]);
+      }
+
       if (profile.type.includes("career")) {
          return pickRandomLine([
             "Career projects get clearer when the role target is specific. The resume, portfolio proof, and interview examples need something to aim at.",
@@ -6564,6 +6734,15 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
             "Next move: remove expired or unused items first. Shopping comes later.",
             "Next move: group what remains before deciding whether bins or labels are needed.",
             "Next move: make one small area easier to use this week.",
+         ]);
+      }
+
+      if (profile.type.includes("event planning")) {
+         return pickRandomLine([
+            "Next move: confirm the event date, guest/RSVP list, and who owns the video or media piece.",
+            "Next move: build the day-of timeline first, then attach people and materials to each block.",
+            "Next move: make one list for guests, one for media, and one for day-of responsibilities.",
+            "Next move: decide what must be ready before the event feels smooth: RSVPs, video, venue details, or the run of show.",
          ]);
       }
 
@@ -6867,12 +7046,18 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          ? pickRandomLine(["That keeps the story flexible without letting it dissolve into vibes and neon.", "That gives the story a spine before the plot starts sprinting.", "Small structure first. The drama can make its entrance after."])
          : profile.type.includes("home organization")
            ? pickRandomLine(["That keeps the reset physical, simple, and actually finishable.", "That is enough structure to make the space easier without turning it into a command center.", "The pantry may not thank us, but future you probably will."])
-           : pickRandomLine([
-                `That gives the ${profile.type} a cleaner shape without adding clutter.`,
-                "That is enough structure to make the next move easier without turning this into a dashboard.",
-                "That should help the project breathe a little without inviting the paperwork gremlins.",
-                "Small structure, useful direction. Very adult of us.",
-             ]);
+           : profile.type.includes("event planning")
+             ? pickRandomLine([
+                  "That gives the event a cleaner spine: people, timing, media, and ownership.",
+                  "That keeps the event from becoming twelve floating details wearing a trench coat.",
+                  "Good event planning is mostly making the invisible pieces visible before they become tiny emergencies.",
+               ])
+             : pickRandomLine([
+                  `That gives the ${profile.type} a cleaner shape without adding clutter.`,
+                  "That is enough structure to make the next move easier without turning this into a dashboard.",
+                  "That should help the project breathe a little without inviting the paperwork gremlins.",
+                  "Small structure, useful direction. Very adult of us.",
+               ]);
 
       return `${buildTypeAwareOpener(title)}\n\n${intro}\n\n${canvasBlock}\n\n${closing}${cognitionLine ? `\n\n${cognitionLine}` : ""}`;
    }
@@ -6888,7 +7073,13 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          lower.includes("add to canvas") ||
          lower.includes("canvas idea") ||
          lower.includes("what should i add") ||
-         lower.includes("what is missing")
+         lower.includes("what is missing") ||
+         lower.includes("help me build structure") ||
+         lower.includes("build structure") ||
+         lower.includes("structure this project") ||
+         lower.includes("project structure") ||
+         lower.includes("help structure") ||
+         lower.includes("give this project structure")
       );
    }
 
@@ -9047,7 +9238,7 @@ Rules:
          nextStep: context.nextStep,
          rawContent: buildCleanContinuationBody(),
          contextPacket: buildAllevinInternalContextPacket(prompt),
-         userInstruction: `${prompt}\n\nUse ALLEVIN MK V natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, lightly personable, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Keep it to 2-5 sentences unless the user asks for detail.`,
+         userInstruction: `${prompt}\n\nUse ALLEVIN MK V natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, lightly personable, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. For event-planning projects, do not invent extra party details; use the saved notes and give slight, concrete structure around guests/RSVPs, timing, media needs, responsibilities, and day-of flow. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Keep it to 2-5 sentences unless the user asks for detail.`,
          projectStage: context.stageLabel,
          currentLocation: context.locationLabel,
          priority: focusMode === "deep" ? "high" : "medium",
@@ -10748,7 +10939,7 @@ Try one of these:
                {
                   role: "assistant" as const,
 
-                  content: "I can schedule that, but I need the title, day, and time window. Try: Schedule “Start on script” tomorrow from 9:00am to 9:30am.",
+                  content: "I can schedule that, but I need the title, day, and time window. Try: Schedule “Start on script” June 25 from 9:00am to 9:30am, or Schedule “Start on script” tomorrow from 9:00am to 9:30am.",
                },
             ]);
 

@@ -1612,7 +1612,7 @@ export default function IntegrationAdapterLayer() {
          ...currentTracking,
          ...updates,
          nextStep: sanitizeProjectNextStep(updates.nextStep ?? currentTracking.nextStep),
-         calendarTaskTitle: sanitizeProjectTitle(updates.calendarTaskTitle ?? currentTracking.calendarTaskTitle),
+         calendarTaskTitle: sanitizeLiveProjectTitle(updates.calendarTaskTitle ?? currentTracking.calendarTaskTitle),
          calendarTaskDate: sanitizeProjectPlainText(updates.calendarTaskDate ?? currentTracking.calendarTaskDate, 40),
          calendarTaskTime: sanitizeProjectPlainText(updates.calendarTaskTime ?? currentTracking.calendarTaskTime, 40),
          calendarTaskDurationMinutes: Math.max(15, Math.min(480, Number(updates.calendarTaskDurationMinutes ?? currentTracking.calendarTaskDurationMinutes ?? 60))),
