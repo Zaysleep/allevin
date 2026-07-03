@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK V Tester Profile Helper
+// ALLEVIN MK VI Tester Profile Helper
 // Purpose:
 // Lightweight local-only profile and tester workspace reset utilities.
 // Testers do not need accounts. Their name and workspace stay in their browser.
@@ -14,24 +14,30 @@ export type AllevinUserProfile = {
 export const ALLEVIN_USER_PROFILE_STORAGE_KEY = "allevin-user-profile";
 
 const TESTER_WORKSPACE_STORAGE_KEYS = [
+   // Current MK VI workspace data
    "allevin-adaptive-work-canvas",
    "allevin-project-library",
+   "allevin-project-materials-mkvi",
+   "allevin-calendar-events-mki",
+   "allevin-cognition-state",
+   "allevin-cognition-active-response-mode",
+
+   // Project memory / guidance data
    "allevin-mkii-project-memory",
    "allevin-project-memory",
+   "allevin-global-workflow-timeline",
+   "allevin-thread-memory-v2",
+   "allevin-project-deleted",
+   "allevin-project-deleted-keys",
+
+   // Legacy cleanup keys kept so old tester data does not resurface
    "allevin-internal-output-hub",
    "allevin-project-tracking-map",
-   "allevin-calendar-events-mki",
    "allevin-calendar-notes-mki",
    "allevin-calendar-deleted-events",
    "allevin-calendar-deleted-keys",
-   "allevin-global-workflow-timeline",
-   "allevin-thread-memory-v2",
    "allevin-thread-recovery-deleted",
    "allevin-thread-recovery-deleted-keys",
-   "allevin-project-deleted",
-   "allevin-project-deleted-keys",
-   "allevin-cognition-state",
-   "allevin-cognition-active-response-mode",
    "allevin-direct-calendar-approval-guard",
 ];
 
@@ -140,6 +146,7 @@ export function resetAllevinTesterWorkspace({ preserveProfile = true }: { preser
    window.dispatchEvent(new CustomEvent("allevin-workspace-reset"));
    window.dispatchEvent(new CustomEvent("allevin-project-library-update"));
    window.dispatchEvent(new CustomEvent("allevin-project-memory-update"));
+   window.dispatchEvent(new CustomEvent("allevin-project-materials-update"));
    window.dispatchEvent(new CustomEvent("allevin-memory-update"));
    window.dispatchEvent(new CustomEvent("allevin-calendar-events-updated", { detail: { source: "tester-reset" } }));
    window.dispatchEvent(new Event("storage"));

@@ -2,9 +2,10 @@
 // Workspace Context
 // Purpose:
 // Global adaptive workspace state management
-// MK V:
-// Adds a calm internal system state layer while
-// preserving existing activeView / setActiveView usage.
+// MK VI:
+// Keeps Projects, Canvas, Calendar, Cognition,
+// and ALLEVIN guidance aligned without exposing
+// old workflow language to users.
 // ========================================
 
 "use client";
@@ -68,7 +69,7 @@ interface WorkspaceContextType {
 const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefined);
 
 // ========================================
-// MK V Build 6K1 — Deferred Workspace State Updates
+// MK VI Build 7 — Deferred Workspace State Updates
 // Purpose:
 // Some modules can report status while another component is still rendering.
 // Deferring shared state updates prevents React cross-component update warnings.
@@ -85,7 +86,7 @@ function scheduleWorkspaceStateUpdate(callback: () => void) {
 }
 
 // ========================================
-// MK V Build 6 — Workspace Context Safety
+// MK VI Build 7 — Workspace Context Safety
 // Purpose:
 // This file only owns allowed state values.
 // It does not store user-written content, but
@@ -146,26 +147,26 @@ function getSystemStatusLabel(status: WorkspaceSystemStatus) {
 
    switch (safeStatus) {
       case "workspace-stable":
-         return "Workspace stable";
+         return "Workspace ready";
 
       case "focused-work-active":
-         return "Focused work active";
+         return "Canvas active";
 
       case "awaiting-approval":
          return "Review ready";
 
       case "recovery-available":
-         return "Recovery available";
+         return "Project context available";
 
       case "schedule-context-active":
-         return "Schedule context active";
+         return "Schedule ready";
 
       case "integration-ready":
          return "Projects ready";
 
       case "system-observing":
       default:
-         return "Observing workspace";
+         return "Guidance ready";
    }
 }
 
@@ -174,26 +175,26 @@ function getWelcomeMessage(status: WorkspaceSystemStatus) {
 
    switch (safeStatus) {
       case "awaiting-approval":
-         return "I found something that needs your review. I will ask before moving anything.";
+         return "I found something that needs review. I will keep it clear before anything changes.";
 
       case "recovery-available":
-         return "A recovery path is available. You can resume the last thread without rebuilding the context.";
+         return "Project context is available. You can reopen saved work without rebuilding everything from scratch.";
 
       case "schedule-context-active":
-         return "Calendar context is active. I can help turn schedule notes into follow-up work when you are ready.";
+         return "Calendar is ready. Use it to see scheduled project blocks, deadlines, and events.";
 
       case "integration-ready":
-         return "Projects are ready. Saved work can be reopened, continued, or scheduled when useful.";
+         return "Projects are ready. Open a project to see its schedule, materials, and next place to continue.";
 
       case "focused-work-active":
-         return "Focused work is active. I will keep guidance clear and move one step at a time.";
+         return "Canvas is active. Keep working from the project, with references nearby when you need them.";
 
       case "workspace-stable":
-         return "Your workspace is ready. Start in Canvas, continue a project, or ask ALLEVIN for the next useful move.";
+         return "Your workspace is ready. Start with Projects, continue in Canvas, or ask ALLEVIN for guidance.";
 
       case "system-observing":
       default:
-         return "I am keeping the workspace steady and the next useful move within reach.";
+         return "Guidance is ready. I will keep the next useful move within reach.";
    }
 }
 
@@ -316,7 +317,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
          welcomeMessage: getWelcomeMessage(systemStatus),
 
-         approvalReminder: "I will ask before moving or creating anything important.",
+         approvalReminder: "I will keep changes clear before anything important moves.",
 
          lastActiveAt,
 

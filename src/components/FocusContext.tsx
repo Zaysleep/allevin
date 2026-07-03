@@ -12,7 +12,10 @@ export type FocusMode = "calm" | "standard" | "deep";
 
 // ========================================
 // Focus Profile
-// MK II Finale Personality Layer
+// MK VI Guidance Tone Layer
+// Purpose:
+// Keeps ALLEVIN's guidance style aligned with the user's current pace.
+// This does not move work or change projects; it only adjusts tone.
 // ========================================
 
 export interface FocusProfile {
@@ -59,26 +62,26 @@ function getFocusProfile(mode: FocusMode = "standard"): FocusProfile {
 
             systemTone: "Focused",
 
-            guidanceStyle: "Minimal guidance. One clear next action at a time.",
+            guidanceStyle: "Short guidance. One clear project move at a time.",
 
-            description: "ALLEVIN reduces extra prompts and keeps attention on the current work.",
+            description: "ALLEVIN keeps guidance minimal so the current project stays easy to work on.",
 
-            assistantCue: "I’ll keep this focused. One move at a time.",
+            assistantCue: "I’ll keep this focused. One useful move at a time.",
          };
 
       case "calm":
          return {
             mode: "calm",
 
-            label: "Calm Recovery",
+            label: "Calm",
 
             systemTone: "Calm",
 
-            guidanceStyle: "Gentle guidance. Lower pressure and simplified choices.",
+            guidanceStyle: "Softer guidance. Lower pressure and fewer choices.",
 
-            description: "ALLEVIN softens the workspace and helps you resume without overload.",
+            description: "ALLEVIN slows the pace and helps you continue the project without adding clutter.",
 
-            assistantCue: "We can slow this down. Choose one small next step.",
+            assistantCue: "We can keep this light. Choose one small project move.",
          };
 
       case "standard":
@@ -86,15 +89,15 @@ function getFocusProfile(mode: FocusMode = "standard"): FocusProfile {
          return {
             mode: "standard",
 
-            label: "Standard",
+            label: "Balanced",
 
             systemTone: "Balanced",
 
-            guidanceStyle: "Balanced guidance. Helpful, clear, and review-based.",
+            guidanceStyle: "Balanced guidance. Clear, useful, and project-aware.",
 
-            description: "ALLEVIN keeps the workspace steady and easy to continue.",
+            description: "ALLEVIN keeps guidance steady while you move between Projects, Canvas, Materials, and Calendar.",
 
-            assistantCue: "Workspace ready. I can help recommend the next move.",
+            assistantCue: "Workspace ready. I can help choose the next useful project move.",
          };
    }
 }
@@ -180,7 +183,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
 
    const [cognitionResetActive, setCognitionResetActive] = useState(readManualCognitionReset().active);
 
-   const [focusMode, setFocusModeState] = useState<FocusMode>(readManualCognitionReset().active ? "standard" : "standard");
+   const [focusMode, setFocusModeState] = useState<FocusMode>("standard");
 
    // ========================================
    // Safe Focus Setter
@@ -231,7 +234,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
    }, []);
 
    // ========================================
-   // Restore Cognitive State
+   // Restore Guidance Tone
    // ========================================
 
    useEffect(() => {
@@ -254,7 +257,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
       const calmCount = memory.filter((item: any) => item?.focusMode === "calm").length;
 
       // ========================================
-      // Infer Dominant State
+      // Infer Dominant Tone
       // ========================================
 
       if (deepCount > calmCount) {
@@ -273,7 +276,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
    }, [cognitionResetActive]);
 
    // ========================================
-   // Intelligent Inference
+   // Intelligent Tone Inference
    // ========================================
 
    function inferFocusMode(input: string): FocusMode {
@@ -286,7 +289,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
       const lower = normalizeInput(input);
 
       // ========================================
-      // Calm / Recovery
+      // Calm Guidance
       // ========================================
 
       const calmSignals = ["calm", "relax", "slow down", "mindful", "overwhelmed", "stress", "stressed", "burnout", "too much", "recovery", "lower pressure", "quiet"];
@@ -298,7 +301,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
       }
 
       // ========================================
-      // Deep Focus
+      // Deep Focus Guidance
       // ========================================
 
       const deepSignals = ["focus", "deep work", "concentration", "productivity", "minimal distractions", "lock in", "work mode", "study mode", "heads down", "priority"];
@@ -310,7 +313,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
       }
 
       // ========================================
-      // Standard
+      // Balanced Guidance
       // ========================================
 
       setFocusModeState("standard");

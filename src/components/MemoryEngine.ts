@@ -1,11 +1,11 @@
 // ========================================
 // Memory Engine
 // Purpose:
-// Persistent behavioral memory system
+// Persistent project memory system
 // with temporal weighting, cognitive load,
-// behavioral prediction, profile inference,
-// active workflow thread awareness,
-// and Thread Memory V2.
+// project context awareness,
+// source-aware active project selection,
+// and legacy thread-memory compatibility.
 // ========================================
 
 export interface MemoryEntry {
@@ -57,7 +57,7 @@ export interface CognitiveLoadState {
 }
 
 // ========================================
-// MK V Session / Welcome Summary
+// MK VI Session / Welcome Summary
 // Purpose:
 // Lightweight system memory read for the
 // welcome layer, AIDock, and calm status UI.
@@ -282,7 +282,7 @@ export interface ThreadMemoryState {
    updatedAt: number;
 }
 
-export type SourceAwareProjectSource = "canvas" | "projects" | "thread-memory" | "calendar" | "timeline";
+export type SourceAwareProjectSource = "canvas" | "projects" | "materials" | "thread-memory" | "calendar" | "timeline";
 
 export interface SourceAwareActiveProject {
    source: SourceAwareProjectSource;
@@ -344,9 +344,11 @@ const CANVAS_STORAGE_KEY = "allevin-adaptive-work-canvas";
 
 const PROJECT_LIBRARY_STORAGE_KEY = "allevin-project-library";
 
+const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
+
 // ========================================
-// MK V Build 6 — Memory Engine Sanitization
-// MemoryEngine reads many localStorage sources. Every stored field is treated as untrusted.
+// MK VI Build — Memory Engine Sanitization
+// MemoryEngine reads Canvas, Projects, Calendar, and Materials sources. Every stored field is treated as untrusted.
 // ========================================
 
 const MEMORY_ENGINE_SANITIZE_LIMITS = {
@@ -1074,7 +1076,7 @@ export function getBehavioralPrediction(): BehavioralPrediction {
 
          confidence: 50,
 
-         recommendation: "Awaiting additional behavioral signals.",
+         recommendation: "Waiting for more project activity.",
       };
    }
 
@@ -1134,7 +1136,7 @@ export function getBehavioralPrediction(): BehavioralPrediction {
 
          value: recovery,
 
-         recommendation: "Reduce interface complexity and encourage decompression.",
+         recommendation: "Keep guidance lighter and focus on one project step at a time.",
       },
 
       {
@@ -1142,7 +1144,7 @@ export function getBehavioralPrediction(): BehavioralPrediction {
 
          value: focus,
 
-         recommendation: "Prioritize high-focus modules and suppress distractions.",
+         recommendation: "Prioritize the current project and keep guidance focused.",
       },
 
       {
@@ -1150,7 +1152,7 @@ export function getBehavioralPrediction(): BehavioralPrediction {
 
          value: creative,
 
-         recommendation: "Increase exploratory workspace flexibility.",
+         recommendation: "Support idea-shaping in Canvas without over-structuring the project.",
       },
 
       {
@@ -1158,7 +1160,7 @@ export function getBehavioralPrediction(): BehavioralPrediction {
 
          value: planning,
 
-         recommendation: "Organize tasks and surface structured workflow guidance.",
+         recommendation: "Organize project actions and surface a clear next move.",
       },
 
       {
@@ -1166,7 +1168,7 @@ export function getBehavioralPrediction(): BehavioralPrediction {
 
          value: research,
 
-         recommendation: "Surface research tools and support information synthesis.",
+         recommendation: "Surface project materials and support reference-based guidance.",
       },
 
       {
@@ -1174,7 +1176,7 @@ export function getBehavioralPrediction(): BehavioralPrediction {
 
          value: switching,
 
-         recommendation: "Reduce context switching and group related tasks together.",
+         recommendation: "Reduce context switching and keep related project actions together.",
       },
    ];
 
@@ -1186,7 +1188,7 @@ export function getBehavioralPrediction(): BehavioralPrediction {
 
          confidence: 50,
 
-         recommendation: "Awaiting additional behavioral signals.",
+         recommendation: "Waiting for more project activity.",
       };
    }
 
@@ -1212,7 +1214,7 @@ export function getCognitiveProfile(): CognitiveProfile {
 
          confidence: 50,
 
-         recommendation: "Insufficient behavioral data available.",
+         recommendation: "Not enough project activity yet.",
       };
    }
 
@@ -1276,7 +1278,7 @@ export function getCognitiveProfile(): CognitiveProfile {
 
          score: recoveryScore,
 
-         recommendation: "Adaptive pacing and reduced environmental intensity recommended.",
+         recommendation: "Use softer project guidance and smaller next steps.",
       },
 
       {
@@ -1284,7 +1286,7 @@ export function getCognitiveProfile(): CognitiveProfile {
 
          score: focusScore,
 
-         recommendation: "High-focus workflow environments improve sustained cognition.",
+         recommendation: "Short, focused project guidance will work best here.",
       },
 
       {
@@ -1292,7 +1294,7 @@ export function getCognitiveProfile(): CognitiveProfile {
 
          score: creativeScore,
 
-         recommendation: "Open exploratory interfaces improve ideation flow.",
+         recommendation: "Use Canvas for open idea-shaping before saving structure.",
       },
 
       {
@@ -1300,7 +1302,7 @@ export function getCognitiveProfile(): CognitiveProfile {
 
          score: planningScore,
 
-         recommendation: "Structured task sequencing and workflow organization are recommended.",
+         recommendation: "Use structured next actions and clear project order.",
       },
 
       {
@@ -1308,7 +1310,7 @@ export function getCognitiveProfile(): CognitiveProfile {
 
          score: researchScore,
 
-         recommendation: "Analytical workspace support and reference organization are recommended.",
+         recommendation: "Use project materials and references to support the work.",
       },
 
       {
@@ -1316,7 +1318,7 @@ export function getCognitiveProfile(): CognitiveProfile {
 
          score: switchingScore,
 
-         recommendation: "Interruption reduction and task grouping recommended.",
+         recommendation: "Group related project work and avoid unnecessary page switching.",
       },
    ];
 
@@ -1328,7 +1330,7 @@ export function getCognitiveProfile(): CognitiveProfile {
 
          confidence: 50,
 
-         recommendation: "Insufficient behavioral data available.",
+         recommendation: "Not enough project activity yet.",
       };
    }
 
@@ -1961,7 +1963,7 @@ function getEventTitleForThread(events: WorkflowTimelineEvent[]) {
       return fallbackTitle;
    }
 
-   return "Active ALLEVIN thread";
+   return "Active ALLEVIN project";
 }
 
 function getMovementLabel(event?: WorkflowTimelineEvent) {
@@ -2019,50 +2021,50 @@ function getRecommendedThreadAction({
    prediction: BehavioralPrediction;
 }) {
    if (!latestEvent) {
-      return "Start one clear workflow thread by drafting in Canvas or creating a task.";
+      return "Start one clear project by opening Projects or drafting in Canvas.";
    }
 
    if (cognitiveLoad.state === "Critical") {
-      return "Pause expansion. Review the active thread and choose one small next step.";
+      return "Pause expansion. Review the active project and choose one small next step.";
    }
 
    if (prediction.predictedState === "Recovery Window") {
-      return "Keep this thread lightweight. Save key context to Notes or choose one low-pressure task.";
+      return "Keep this project lightweight. Save useful context as a material or choose one low-pressure task.";
    }
 
    if (prediction.predictedState === "Focused Execution") {
-      return "Continue the active thread in Canvas and avoid switching to unrelated work.";
+      return "Continue the active project in Canvas and avoid switching to unrelated work.";
    }
 
    if (latestEvent.title.toLowerCase().includes("internal notes") || latestEvent.summary.toLowerCase().includes("internal note")) {
-      return "Internal Notes save is complete. Review the saved note inside ALLEVIN.";
+      return "Project material saved. Review it inside Projects when needed.";
    }
 
    if (latestEvent.title.toLowerCase().includes("note") || latestEvent.summary.toLowerCase().includes("saved to notes")) {
-      return "The thread has been preserved in Notes. Review it later or complete the related board item.";
+      return "The project context has been preserved. Review it later in Projects or continue it in Canvas.";
    }
 
    if (latestEvent.summary.toLowerCase().includes("completed") || latestEvent.summary.toLowerCase().includes("moved from review to completed")) {
-      return "This thread appears complete. Review the final result, preserve the summary, or start a new thread.";
+      return "This project looks complete. Review the final result, keep the useful materials, or start a new project.";
    }
 
    if (latestEvent.destination === "canvas") {
-      return "Develop this in Canvas, then convert the next concrete step into a Task.";
+      return "Develop this in Canvas, then turn the next concrete step into a task if needed.";
    }
 
    if (latestEvent.destination === "task") {
-      return "Review the task and send it to the Project Board when it is ready to track.";
+      return "Review the task and keep it as a clear next action for the project.";
    }
 
    if (latestEvent.destination === "board") {
-      return "Open the Project Board and choose whether this should continue in Canvas, save to Notes, or complete.";
+      return "Open Projects and choose whether this should continue in Canvas, become a material, or be marked complete.";
    }
 
    if (signalCount >= 4) {
-      return "This thread is active. Review the latest movement before creating new branches.";
+      return "This project is active. Review the latest update before adding new branches.";
    }
 
-   return "Continue this thread through the next logical ALLEVIN layer.";
+   return "Continue this project through the next useful ALLEVIN step.";
 }
 
 // ========================================
@@ -2086,9 +2088,9 @@ export function getActiveThreadAwareness(): ActiveThreadState {
       return {
          hasActiveThread: false,
 
-         title: "No active thread detected",
+         title: "No active project detected",
 
-         summary: "ALLEVIN has not detected a workflow thread yet. Move work through Canvas, Tasks, Board, Notes, or Integrations to establish one.",
+         summary: "ALLEVIN has not detected an active project yet. Start with Projects or Canvas to give the workspace context.",
 
          signalCount: 0,
 
@@ -2096,7 +2098,7 @@ export function getActiveThreadAwareness(): ActiveThreadState {
 
          confidence: 40,
 
-         recommendedNextAction: "Start by drafting in Canvas or creating one Task so ALLEVIN can begin tracking a thread.",
+         recommendedNextAction: "Start by creating a project or drafting in Canvas so ALLEVIN can understand what you are working on.",
 
          suggestedDestination: "canvas",
 
@@ -2636,35 +2638,35 @@ function getThreadMemoryRecommendation({
    prediction: BehavioralPrediction;
 }) {
    if (status === "exported") {
-      return "Review the exported document, preserve the result in Notes if needed, or start a new thread.";
+      return "Review the exported document, save useful context as a project material if needed, or start a new project.";
    }
 
    if (status === "preserved") {
-      return "This thread is preserved in Notes. Review it later, continue it in Canvas, or complete the related board item.";
+      return "This project context is saved. Review it in Projects, continue it in Canvas, or mark the related work complete.";
    }
 
    if (status === "completed") {
-      return "This thread appears complete. Review the final result or begin a new focused thread.";
+      return "This project looks complete. Review the final result or begin a new focused project.";
    }
 
    if (stage === "exporting") {
-      return "Confirm the export or review the Integrations Hub before creating another branch.";
+      return "Review the project material or export before creating another branch.";
    }
 
    if (stage === "drafting") {
-      return "Continue developing the thread in Canvas, then convert the next concrete action into a Task.";
+      return "Continue developing the project in Canvas, then turn the next concrete action into a task if needed.";
    }
 
    if (stage === "tasking") {
-      return "Review the task and send it to the Project Board when it is ready to track.";
+      return "Review the task and keep it as a clear next action for the project.";
    }
 
    if (stage === "tracking") {
-      return "Open the Project Board and decide whether this should continue in Canvas, be saved to Notes, or be completed.";
+      return "Open Projects and decide whether this should continue in Canvas, become a material, or be completed.";
    }
 
    if (stage === "reviewing") {
-      return "Review the thread, preserve the useful result, or prepare it for export.";
+      return "Review the project, preserve useful context as a material, or prepare it for export.";
    }
 
    return getRecommendedThreadAction({
@@ -2897,6 +2899,120 @@ function getSourceAwareProjectLibraryCandidates(): SourceAwareActiveProject[] {
       });
 }
 
+function getProjectMaterialsForMemory() {
+   return readArrayStorage<{
+      id?: string;
+      projectId?: string;
+      projectTitle?: string;
+      title?: string;
+      type?: string;
+      source?: string;
+      notes?: string;
+      summary?: string;
+      createdAt?: number;
+      updatedAt?: number;
+   }>(PROJECT_MATERIALS_STORAGE_KEY)
+      .filter((material) => material && (material.title || material.notes || material.summary))
+      .map((material) => ({
+         id: sanitizeMemoryEngineId(material.id),
+         projectId: sanitizeMemoryEngineId(material.projectId),
+         projectTitle: sanitizeMemoryEngineTitle(material.projectTitle),
+         title: sanitizeMemoryEngineTitle(material.title),
+         type: sanitizeMemoryEngineText(material.type, MEMORY_ENGINE_SANITIZE_LIMITS.smallText),
+         source: sanitizeMemoryEngineText(material.source, MEMORY_ENGINE_SANITIZE_LIMITS.smallText),
+         notes: sanitizeMemoryEngineText(material.notes, MEMORY_ENGINE_SANITIZE_LIMITS.summary),
+         summary: sanitizeMemoryEngineSummary(material.summary),
+         createdAt: isValidMemoryEngineTimestamp(material.createdAt) ? Number(material.createdAt) : Date.now(),
+         updatedAt: isValidMemoryEngineTimestamp(material.updatedAt) ? Number(material.updatedAt) : isValidMemoryEngineTimestamp(material.createdAt) ? Number(material.createdAt) : Date.now(),
+      }));
+}
+
+function getSourceAwareMaterialCandidates(): SourceAwareActiveProject[] {
+   const materialGroups = new Map<
+      string,
+      {
+         title: string;
+         projectId?: string;
+         workflowId?: string;
+         materials: ReturnType<typeof getProjectMaterialsForMemory>;
+         updatedAt: number;
+      }
+   >();
+
+   getProjectMaterialsForMemory().forEach((material) => {
+      const projectTitle = sanitizeMemoryEngineTitle(material.projectTitle || material.title);
+
+      const projectKey = material.projectId || getCanonicalProjectKey(projectTitle);
+
+      if (!projectKey || !projectTitle) {
+         return;
+      }
+
+      const existing = materialGroups.get(projectKey);
+
+      const nextMaterials = [...(existing?.materials || []), material];
+
+      materialGroups.set(projectKey, {
+         title: existing?.title || projectTitle,
+         projectId: material.projectId,
+         workflowId: material.projectId || existing?.workflowId,
+         materials: nextMaterials,
+         updatedAt: Math.max(existing?.updatedAt || 0, material.updatedAt || 0),
+      });
+   });
+
+   return Array.from(materialGroups.values())
+      .map((group) => {
+         const visibleMaterials = group.materials.slice(0, 6);
+
+         const materialLines = visibleMaterials
+            .map((material, index) => {
+               const label = material.type ? `${material.type}: ` : "";
+
+               const usefulText = material.summary || material.notes || material.title;
+
+               return `${index + 1}. ${label}${material.title || "Project material"}${usefulText ? ` — ${truncateText(usefulText, 180)}` : ""}`;
+            })
+            .join("\n");
+
+         const body = sanitizeMemoryEngineText(`Project Materials\n\n${materialLines}`, MEMORY_ENGINE_SANITIZE_LIMITS.body);
+
+         return {
+            source: "materials" as const,
+            title: sanitizeMemoryEngineTitle(group.title),
+            body,
+            summary: sanitizeMemoryEngineSummary(`${group.materials.length} material${group.materials.length === 1 ? "" : "s"} attached to this project.`),
+            workflowId: sanitizeMemoryEngineId(group.workflowId),
+            originBoardItemId: sanitizeMemoryEngineId(group.projectId),
+            lastKnownLocation: "integrations" as const,
+            currentStage: "reviewing" as const,
+            status: "active" as const,
+            recommendedNextAction: "Use the attached materials as project references while continuing in Canvas.",
+            score: 780 + getSourceAwareTemporalBoost(group.updatedAt) + Math.min(group.materials.length, 8) * 18,
+            reason: "Project Materials provide reference context for the active project.",
+            updatedAt: group.updatedAt || Date.now(),
+         } satisfies SourceAwareActiveProject;
+      })
+      .filter((candidate) => {
+         if (!candidate.title && !candidate.body) {
+            return false;
+         }
+
+         if (
+            isDeletedProjectLike({
+               workflowId: candidate.workflowId,
+               originBoardItemId: candidate.originBoardItemId,
+               title: candidate.title,
+               summary: candidate.summary,
+            })
+         ) {
+            return false;
+         }
+
+         return isStrongTitle(candidate.title) || isUsefulThreadContent(candidate.body);
+      });
+}
+
 function getSourceAwareThreadCandidates(threads: ThreadMemoryObject[]): SourceAwareActiveProject[] {
    return threads
       .filter((thread) => !isDeletedProjectThread(thread))
@@ -2913,7 +3029,7 @@ function getSourceAwareThreadCandidates(threads: ThreadMemoryObject[]): SourceAw
          status: thread.status,
          recommendedNextAction: thread.recommendedNextAction,
          score: 650 + rankThreadMemory(thread),
-         reason: "Thread Memory is useful when Canvas or Projects does not have a stronger current signal.",
+         reason: "Legacy memory is useful when Canvas, Projects, or Materials do not have a stronger current signal.",
          updatedAt: thread.updatedAt,
       }));
 }
@@ -2955,7 +3071,9 @@ function getSourceAwareCalendarCandidates(): SourceAwareActiveProject[] {
 }
 
 function getSourceAwareActiveProjectFromThreads(threads: ThreadMemoryObject[] = []) {
-   const candidates = [getSourceAwareCanvasCandidate(), ...getSourceAwareProjectLibraryCandidates(), ...getSourceAwareThreadCandidates(threads), ...getSourceAwareCalendarCandidates()].filter(Boolean) as SourceAwareActiveProject[];
+   const candidates = [getSourceAwareCanvasCandidate(), ...getSourceAwareProjectLibraryCandidates(), ...getSourceAwareMaterialCandidates(), ...getSourceAwareThreadCandidates(threads), ...getSourceAwareCalendarCandidates()].filter(
+      Boolean,
+   ) as SourceAwareActiveProject[];
 
    return candidates.sort((a, b) => b.score - a.score)[0] || null;
 }
@@ -2988,12 +3106,13 @@ function buildThreadMemoryObjectFromSourceAwareCandidate(candidate: SourceAwareA
       lastKnownLocation: candidate.lastKnownLocation,
       signalCount: fallback?.signalCount || 1,
       movementHistory: fallback?.movementHistory || [],
-      latestMovement: candidate.source === "canvas" ? "Canvas is current" : candidate.source === "projects" ? "Saved in Projects" : fallback?.latestMovement || "Source-aware memory selected",
+      latestMovement:
+         candidate.source === "canvas" ? "Canvas is current" : candidate.source === "projects" ? "Saved in Projects" : candidate.source === "materials" ? "Project materials available" : fallback?.latestMovement || "Source-aware project selected",
       latestEvent: fallback?.latestEvent,
       confidence: Math.min(98, Math.max(72, Math.round(candidate.score / 12))),
       recommendedNextAction: candidate.recommendedNextAction,
-      suggestedDestination: candidate.source === "projects" ? "canvas" : candidate.source === "canvas" ? "task" : fallback?.suggestedDestination || "canvas",
-      operatingState: "Source-aware advisory",
+      suggestedDestination: candidate.source === "projects" || candidate.source === "materials" ? "canvas" : candidate.source === "canvas" ? "task" : fallback?.suggestedDestination || "canvas",
+      operatingState: "Project-aware guidance",
       cognitiveLoad: fallback?.cognitiveLoad || getCognitiveLoadState().state,
       createdAt: fallback?.createdAt || candidate.updatedAt,
       updatedAt: candidate.updatedAt,
@@ -3274,11 +3393,11 @@ export function getActiveThreadMemoryV2(): ThreadMemoryState {
 
          threads: [],
 
-         title: "No active thread detected",
+         title: "No active project detected",
 
          cleanSourceContent: "",
 
-         workingSummary: "ALLEVIN has not detected a persistent thread yet. Move work through Canvas, Tasks, Board, Notes, or Integrations to establish one.",
+         workingSummary: "ALLEVIN has not detected saved project context yet. Start with Projects or Canvas to establish one.",
 
          currentStage: "unknown",
 
@@ -3292,7 +3411,7 @@ export function getActiveThreadMemoryV2(): ThreadMemoryState {
 
          confidence: 40,
 
-         recommendedNextAction: "Start by drafting in Canvas or creating one Task so ALLEVIN can begin tracking a thread.",
+         recommendedNextAction: "Start by creating a project or drafting in Canvas so ALLEVIN can understand what you are working on.",
 
          suggestedDestination: "canvas",
 
@@ -3385,22 +3504,22 @@ function getSystemStatusLabelFromSummary({
    }
 
    if (cognitiveLoad.state === "Critical") {
-      return "Protective recovery";
+      return "Calm guidance ready";
    }
 
    if (cognitiveLoad.state === "Elevated") {
-      return "Recovery support active";
+      return "Calm support ready";
    }
 
    if (upcomingCalendarCount > 0) {
-      return "Schedule context active";
+      return "Schedule ready";
    }
 
    if (activeThread.hasActiveThread) {
-      return "Thread memory available";
+      return "Project context available";
    }
 
-   return "Workspace stable";
+   return "Workspace ready";
 }
 
 function getWelcomeLineFromSummary({
@@ -3419,14 +3538,14 @@ function getWelcomeLineFromSummary({
    }
 
    if (activeThread.hasActiveThread) {
-      return `I found your active thread: ${activeThread.title}.`;
+      return `I found your active project: ${activeThread.title}.`;
    }
 
    if (upcomingCalendarCount > 0) {
       return `I found ${upcomingCalendarCount} upcoming calendar item${upcomingCalendarCount === 1 ? "" : "s"} available for schedule context.`;
    }
 
-   return "Your workspace is ready. Start in Canvas, recover a thread, or ask AIDock for the next move.";
+   return "Your workspace is ready. Start with Projects, continue in Canvas, or ask AIDock for guidance.";
 }
 
 export function getAllevinSessionSummary(): AllevinSessionSummary {
@@ -3465,7 +3584,7 @@ export function getAllevinSessionSummary(): AllevinSessionSummary {
    return {
       hasActiveThread: activeThread.hasActiveThread,
 
-      activeThreadTitle: activeThread.hasActiveThread ? activeThread.title : "No active thread detected",
+      activeThreadTitle: activeThread.hasActiveThread ? activeThread.title : "No active project detected",
 
       activeThreadStage: activeThread.currentStage,
 
@@ -3497,7 +3616,7 @@ export function getAllevinSessionSummary(): AllevinSessionSummary {
 
       welcomeLine,
 
-      approvalReminder: "No action will be taken without your approval.",
+      approvalReminder: "I will ask before changing anything important.",
 
       updatedAt: Date.now(),
    };
@@ -3519,7 +3638,7 @@ export function getActiveThreadSummary() {
    const activeThread = getActiveThreadAwareness();
 
    if (!activeThread.hasActiveThread) {
-      return "No active thread detected yet.";
+      return "No active project detected yet.";
    }
 
    return `${activeThread.title} • ${activeThread.signalCount} signal${activeThread.signalCount === 1 ? "" : "s"} • ${activeThread.latestMovement}`;
@@ -3535,7 +3654,7 @@ export function getThreadMemorySummary() {
    const threadMemory = getActiveThreadMemoryV2();
 
    if (!threadMemory.hasActiveThread) {
-      return "No persistent thread detected yet.";
+      return "No saved project context detected yet.";
    }
 
    return `${threadMemory.title} • ${threadMemory.currentStage} • ${threadMemory.signalCount} signal${threadMemory.signalCount === 1 ? "" : "s"} • ${threadMemory.latestMovement}`;

@@ -1,10 +1,11 @@
 // ========================================
-// ALLEVIN MK V Project Memory Foundation
-// Build 2: Smarter Context Generator
+// ALLEVIN MK VI Project Memory Foundation
 // Purpose: shared utility for clean project identity,
-// persistence, dedupe, merge behavior, and smarter
-// Focus / Useful Context / Next Step handoffs
-// across ALLEVIN modules.
+// persistence, dedupe, merge behavior, and clearer
+// project/context handoffs across ALLEVIN modules.
+// Keeps legacy workflow values compatible while the
+// user-facing model stays focused on Projects, Canvas,
+// Materials, Project next actions, and Calendar.
 // ========================================
 
 import type { AllevinDestination, AllevinPriority, AllevinProject, AllevinProjectEvent, AllevinProjectStage, AllevinProjectStatus, AllevinSource } from "@/lib/allevinTypes";
@@ -12,7 +13,7 @@ import type { AllevinDestination, AllevinPriority, AllevinProject, AllevinProjec
 export const ALLEVIN_PROJECT_MEMORY_STORAGE_KEY = "allevin-mkii-project-memory";
 
 // ========================================
-// MK V Build 6 — Project Memory Sanitization
+// MK VI — Project Memory Sanitization
 // Memory is shared across modules, so this layer treats every stored field as untrusted.
 // ========================================
 
@@ -114,17 +115,17 @@ export interface ProjectContextSections {
 }
 
 interface ProjectSignalProfile {
-   projectType: "project" | "draft" | "task" | "research" | "calendar" | "export" | "planning" | "general";
+   projectType: "project" | "draft" | "task" | "research" | "calendar" | "material" | "planning" | "general";
    intent: string;
    confidence: number;
    hasLatestEdit: boolean;
-   hasBoardContext: boolean;
+   hasBoardContext: boolean; // Legacy/internal compatibility only. User-facing guidance should say project progress.
    hasTaskContext: boolean;
    hasCalendarContext: boolean;
-   hasExportContext: boolean;
+   hasMaterialContext: boolean;
    needsReview: boolean;
    needsAction: boolean;
-   needsExport: boolean;
+   needsMaterialReview: boolean;
 }
 
 export function compactText(value?: string) {
@@ -161,8 +162,8 @@ export function stripRepeatedProjectPrefixes(value?: string) {
       "make a task from",
       "task generated from canvas",
       "task created",
-      "task routed to board",
-      "task sent to board",
+      "task routed to projects",
+      "task saved to projects",
       "task from",
       "task",
       "project",
@@ -203,8 +204,8 @@ export function cleanProjectTitle(value?: string) {
    const lower = cleaned.toLowerCase();
    const weakTitles = [
       "task created",
-      "task sent to board",
-      "task routed to board",
+      "task saved to projects",
+      "task routed to projects",
       "task generated from canvas",
       "canvas task created",
       "project work item",
@@ -274,10 +275,8 @@ export function getStageForDestination(destination?: AllevinDestination): Allevi
       case "board":
          return "tracking";
       case "notes":
-         return "preserved";
       case "integrations":
-      case "google-docs":
-         return "exporting";
+         return "preserved";
       default:
          return "unknown";
    }
@@ -288,14 +287,13 @@ export function getSuggestedDestinationForStage(stage?: AllevinProjectStage): Al
       case "drafting":
          return "task";
       case "tasking":
-         return "board";
+         return "task";
       case "tracking":
          return "canvas";
       case "reviewing":
+         return "canvas";
+      case "preserved":
          return "integrations";
-      case "exporting":
-      case "exported":
-         return "google-docs";
       default:
          return "canvas";
    }
@@ -308,17 +306,15 @@ function getDestinationLabel(destination?: AllevinDestination) {
       case "task":
          return "Tasks";
       case "board":
-         return "Project Board";
+         return "Projects";
       case "thread-recovery":
-         return "Thread Recovery";
+         return "Projects";
       case "calendar":
          return "Calendar";
       case "notes":
-         return "Notes";
+         return "Project Materials";
       case "integrations":
-         return "Integrations";
-      case "google-docs":
-         return "Google Docs";
+         return "Projects";
       default:
          return "System";
    }
@@ -331,17 +327,13 @@ function getStageLabel(stage?: AllevinProjectStage) {
       case "drafting":
          return "Drafting";
       case "tasking":
-         return "Tasking";
+         return "Next Action";
       case "tracking":
-         return "Tracking";
+         return "Project Progress";
       case "reviewing":
          return "Reviewing";
       case "preserved":
-         return "Preserved";
-      case "exporting":
-         return "Exporting";
-      case "exported":
-         return "Exported";
+         return "Material Saved";
       case "completed":
          return "Completed";
       case "paused":
@@ -358,18 +350,17 @@ function getSourceLabel(source?: AllevinSource) {
       case "task":
          return "Tasks";
       case "board":
-         return "Project Board";
+         return "Projects";
       case "thread-recovery":
-         return "Thread Recovery";
+         return "Projects";
       case "calendar":
          return "Calendar";
       case "integration":
-      case "google-docs":
-         return "Integrations";
+         return "Projects";
       case "research":
          return "Research";
       case "notes":
-         return "Notes";
+         return "Project Materials";
       case "manual":
          return "Manual entry";
       default:
@@ -435,17 +426,17 @@ function buildSignalProfile(input: ProjectMemoryInput, content: string, stage: A
    const combined = `${input.title || ""} ${input.sourceTitle || ""} ${input.body || ""} ${input.sourceContent || ""} ${input.workingSummary || ""} ${input.latestMovement || ""}`.toLowerCase();
 
    const hasLatestEdit = combined.includes("updated") || combined.includes("edited") || combined.includes("latest") || combined.includes("changed") || combined.includes("revised");
-   const hasBoardContext = destination === "board" || stage === "tracking" || combined.includes("board") || combined.includes("in progress") || combined.includes("backlog") || combined.includes("review") || combined.includes("done");
+   const hasBoardContext = destination === "board" || stage === "tracking" || combined.includes("project progress") || combined.includes("in progress") || combined.includes("review") || combined.includes("done");
    const hasTaskContext = destination === "task" || stage === "tasking" || combined.includes("task") || combined.includes("action") || combined.includes("todo") || combined.includes("next step");
    const hasCalendarContext = input.source === "calendar" || destination === "calendar" || combined.includes("calendar") || combined.includes("meeting") || combined.includes("event");
-   const hasExportContext = destination === "integrations" || destination === "google-docs" || stage === "exporting" || combined.includes("export") || combined.includes("google docs");
-   const needsReview = combined.includes("review") || stage === "reviewing" || destination === "integrations" || destination === "google-docs";
+   const hasMaterialContext = destination === "integrations" || destination === "notes" || stage === "preserved" || combined.includes("material") || combined.includes("reference") || combined.includes("document");
+   const needsReview = combined.includes("review") || stage === "reviewing" || destination === "integrations";
    const needsAction = hasTaskContext || stage === "drafting";
-   const needsExport = hasExportContext || combined.includes("final") || combined.includes("ready to export");
+   const needsMaterialReview = hasMaterialContext || combined.includes("final") || combined.includes("ready to use");
 
    let projectType: ProjectSignalProfile["projectType"] = "general";
    if (hasCalendarContext) projectType = "calendar";
-   else if (hasExportContext) projectType = "export";
+   else if (hasMaterialContext) projectType = "material";
    else if (combined.includes("research") || combined.includes("study") || combined.includes("evidence")) projectType = "research";
    else if (combined.includes("plan") || combined.includes("roadmap") || combined.includes("schedule")) projectType = "planning";
    else if (hasTaskContext) projectType = "task";
@@ -457,7 +448,7 @@ function buildSignalProfile(input: ProjectMemoryInput, content: string, stage: A
    let confidence = 65;
    if (content.length > 120) confidence += 10;
    if (hasLatestEdit) confidence += 5;
-   if (hasBoardContext || hasTaskContext || hasExportContext || hasCalendarContext) confidence += 5;
+   if (hasBoardContext || hasTaskContext || hasMaterialContext || hasCalendarContext) confidence += 5;
    if (input.workflowId) confidence += 5;
 
    return {
@@ -468,19 +459,19 @@ function buildSignalProfile(input: ProjectMemoryInput, content: string, stage: A
       hasBoardContext,
       hasTaskContext,
       hasCalendarContext,
-      hasExportContext,
+      hasMaterialContext,
       needsReview,
       needsAction,
-      needsExport,
+      needsMaterialReview,
    };
 }
 
 export function getDefaultNextAction(stage?: AllevinProjectStage, destination?: AllevinDestination) {
-   if (destination === "canvas" || stage === "drafting") return "Review the latest content, make any needed edits, then send it to Tasks when it is ready for action.";
-   if (destination === "task" || stage === "tasking") return "Review the task and send it to the Board when it is ready to track.";
-   if (destination === "board" || stage === "tracking") return "Move the project forward on the Board, or send it back to Canvas if it needs more development.";
-   if (destination === "integrations" || destination === "google-docs" || stage === "exporting") return "Review the export preview, then create the final document when ready.";
-   return "Choose the next useful move: continue in Canvas, create a Task, track on Board, or prepare an Export.";
+   if (destination === "canvas" || stage === "drafting") return "Review the latest Canvas work, make any needed edits, then create one clear next action if the project needs it.";
+   if (destination === "task" || stage === "tasking") return "Review the task and keep it as a clear next action for the project.";
+   if (destination === "board" || stage === "tracking") return "Move the project forward from Projects, or continue in Canvas if it needs more development.";
+   if (destination === "integrations" || stage === "preserved") return "Review the project material before using it to support the current work.";
+   return "Choose the next useful move: continue in Canvas, create a task, add a material, or schedule focused time.";
 }
 
 function buildSmarterNextStep(input: ProjectMemoryInput, profile: ProjectSignalProfile, stage: AllevinProjectStage, destination: AllevinDestination) {
@@ -491,31 +482,31 @@ function buildSmarterNextStep(input: ProjectMemoryInput, profile: ProjectSignalP
    }
 
    if (profile.hasCalendarContext) {
-      return "Review the event context, save any important notes, then create a follow-up task or send the event into Canvas if it needs planning.";
+      return "Review the scheduled context, then continue the project in Canvas or create a clear follow-up task if needed.";
    }
 
-   if (profile.needsExport || destination === "integrations" || destination === "google-docs") {
-      return "Review the export preview, clean the final wording, then create the Google Doc when the output is ready.";
+   if (profile.needsMaterialReview || destination === "integrations") {
+      return "Review the material or document reference, clean the useful details, then use it to support the project work.";
    }
 
    if (stage === "tracking" || destination === "board") {
       if (profile.needsReview) {
-         return "Review the latest Board update, confirm what changed, then either move it to Done or send it back to Canvas for refinement.";
+         return "Review the latest project update, confirm what changed, then either mark the action complete or continue it in Canvas.";
       }
 
-      return "Use the Board to move this project forward. If the content needs development, send it back to Canvas; if the next action is clear, move it toward Review.";
+      return "Use Projects to keep this moving. If the content needs development, continue in Canvas; if the next action is clear, keep it as a task or schedule time for it.";
    }
 
    if (stage === "tasking" || destination === "task") {
-      return "Turn this into one clear next action, then send it to the Board when it is ready to track.";
+      return "Turn this into one clear next action and keep it connected to the project.";
    }
 
    if (stage === "drafting" || destination === "canvas") {
-      return "Refine the current draft in Canvas, then send it to Tasks when the next action is clear.";
+      return "Refine the current work in Canvas, then create one clear next action if needed.";
    }
 
    if (stage === "preserved" || destination === "notes") {
-      return "Keep this preserved as context. Reopen it in Canvas if it needs development or create a Task if it needs action.";
+      return "Keep this as project material. Reference it in Canvas if it needs development or create a task if it needs action.";
    }
 
    return getDefaultNextAction(stage, destination);
@@ -524,14 +515,14 @@ function buildSmarterNextStep(input: ProjectMemoryInput, profile: ProjectSignalP
 function buildSmarterUsefulContext(input: ProjectMemoryInput, profile: ProjectSignalProfile, stage: AllevinProjectStage, destination: AllevinDestination) {
    const identity = getProjectIdentity(input);
    const movement = input.latestMovement || `${getSourceLabel(input.source)} → ${getDestinationLabel(destination)}`;
-   const contextLines = [`Project: ${identity.title}`, `Current stage: ${getStageLabel(stage)}`, `Current location: ${getDestinationLabel(destination)}`, `Priority: ${input.priority || "medium"}`, `Latest movement: ${movement}`];
+   const contextLines = [`Project: ${identity.title}`, `Current stage: ${getStageLabel(stage)}`, `Current area: ${getDestinationLabel(destination)}`, `Priority: ${input.priority || "medium"}`, `Latest update: ${movement}`];
 
    if (profile.hasLatestEdit) {
       contextLines.push("Recent update: ALLEVIN detected newer edited content and is treating it as the latest project version.");
    }
 
    if (profile.hasBoardContext) {
-      contextLines.push("Board context: This work is being tracked as a project item, so lane/status matters for the next move.");
+      contextLines.push("Project progress: This work is being tracked as part of the project, so the next visible move should stay clear.");
    }
 
    if (profile.hasTaskContext) {
@@ -539,11 +530,11 @@ function buildSmarterUsefulContext(input: ProjectMemoryInput, profile: ProjectSi
    }
 
    if (profile.hasCalendarContext) {
-      contextLines.push("Calendar context: This came from schedule/event context and may need notes or a follow-up task.");
+      contextLines.push("Calendar context: This came from a scheduled block or event and may need a follow-up task.");
    }
 
-   if (profile.hasExportContext) {
-      contextLines.push("Export context: This work is close to an output stage and should be reviewed before creating a document.");
+   if (profile.hasMaterialContext) {
+      contextLines.push("Material context: This work can support the project as a reusable reference.");
    }
 
    contextLines.push(`Context confidence: ${profile.confidence}%`);
@@ -689,7 +680,7 @@ export function createProjectFromInput(input: ProjectMemoryInput): AllevinProjec
          createProjectEvent({
             type: "created",
             title: identity.title,
-            summary: `Project memory created from ${getSourceLabel(input.source)}.`,
+            summary: `Project context created from ${getSourceLabel(input.source)}.`,
             source: input.source || "system",
             destination,
             workflowId: identity.workflowId,
@@ -712,7 +703,7 @@ export function mergeProject(existing: AllevinProject, input: ProjectMemoryInput
    const event = createProjectEvent({
       type: "updated",
       title: identity.title,
-      summary: `Project memory updated from ${getSourceLabel(input.source)}. ${context.focus}`,
+      summary: `Project context updated from ${getSourceLabel(input.source)}. ${context.focus}`,
       source: input.source || "system",
       destination,
       workflowId: identity.workflowId,

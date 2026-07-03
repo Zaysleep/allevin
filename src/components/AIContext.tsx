@@ -31,7 +31,7 @@ interface AIContextType {
 
    assistantStatus: string;
 
-   assistantMode: "standby" | "focused" | "recovery" | "approval" | "calendar" | "guidance";
+   assistantMode: "standby" | "focused" | "recovery" | "calendar" | "projects" | "materials" | "guidance";
 }
 
 // ========================================
@@ -61,24 +61,20 @@ function getGreeting() {
 function getSystemStatusFromInput(input: string): WorkspaceSystemStatus {
    const lower = input.toLowerCase();
 
-   if (lower.includes("approve") || lower.includes("approval") || lower.includes("review action") || lower.includes("workflow control")) {
-      return "awaiting-approval";
+   if (lower.includes("calendar") || lower.includes("schedule") || lower.includes("meeting") || lower.includes("event") || lower.includes("deadline")) {
+      return "schedule-context-active";
+   }
+
+   if (lower.includes("project") || lower.includes("materials") || lower.includes("document") || lower.includes("reference") || lower.includes("feedback") || lower.includes("research")) {
+      return "integration-ready";
+   }
+
+   if (lower.includes("focus") || lower.includes("deep work") || lower.includes("canvas") || lower.includes("write") || lower.includes("draft") || lower.includes("update")) {
+      return "focused-work-active";
    }
 
    if (lower.includes("recover") || lower.includes("resume") || lower.includes("where i left off") || lower.includes("continue")) {
       return "recovery-available";
-   }
-
-   if (lower.includes("calendar") || lower.includes("schedule") || lower.includes("meeting") || lower.includes("event")) {
-      return "schedule-context-active";
-   }
-
-   if (lower.includes("export") || lower.includes("docs") || lower.includes("google doc") || lower.includes("integration")) {
-      return "integration-ready";
-   }
-
-   if (lower.includes("focus") || lower.includes("deep work") || lower.includes("canvas") || lower.includes("task") || lower.includes("board")) {
-      return "focused-work-active";
    }
 
    return "system-observing";
@@ -87,19 +83,23 @@ function getSystemStatusFromInput(input: string): WorkspaceSystemStatus {
 function getAssistantModeFromInput(input: string): AIContextType["assistantMode"] {
    const lower = input.toLowerCase();
 
-   if (lower.includes("approve") || lower.includes("approval") || lower.includes("workflow control")) {
-      return "approval";
+   if (lower.includes("calendar") || lower.includes("schedule") || lower.includes("meeting") || lower.includes("event") || lower.includes("deadline")) {
+      return "calendar";
+   }
+
+   if (lower.includes("material") || lower.includes("document") || lower.includes("reference") || lower.includes("feedback") || lower.includes("research") || lower.includes("image") || lower.includes("pdf")) {
+      return "materials";
+   }
+
+   if (lower.includes("project") || lower.includes("home base") || lower.includes("saved work")) {
+      return "projects";
    }
 
    if (lower.includes("recover") || lower.includes("resume") || lower.includes("where i left off") || lower.includes("continue")) {
       return "recovery";
    }
 
-   if (lower.includes("calendar") || lower.includes("schedule") || lower.includes("meeting") || lower.includes("event")) {
-      return "calendar";
-   }
-
-   if (lower.includes("focus") || lower.includes("deep work") || lower.includes("productivity") || lower.includes("canvas")) {
+   if (lower.includes("focus") || lower.includes("deep work") || lower.includes("productivity") || lower.includes("canvas") || lower.includes("draft") || lower.includes("write")) {
       return "focused";
    }
 
@@ -107,7 +107,7 @@ function getAssistantModeFromInput(input: string): AIContextType["assistantMode"
 }
 
 function getInitialAssistantMessage() {
-   return `${getGreeting()}, Isaiah. ALLEVIN is online. I can help you start work, recover context, prepare next actions, and keep everything review-based.`;
+   return `${getGreeting()}, Isaiah. ALLEVIN is ready. I can help you organize a project, continue in Canvas, use project materials as references, or choose the next useful move.`;
 }
 
 // ========================================
@@ -133,7 +133,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
    const [assistantMode, setAssistantMode] = useState<AIContextType["assistantMode"]>("standby");
 
-   const [assistantStatus, setAssistantStatus] = useState("Observing workspace");
+   const [assistantStatus, setAssistantStatus] = useState("Guidance ready");
 
    const [messages, setMessages] = useState<Message[]>([
       {
@@ -160,15 +160,13 @@ ${getGreeting()}, Isaiah.
 
 ALLEVIN is ready.
 
-Current system state:
+Current state:
 ${sessionState.systemStatusLabel}
 
 Workspace:
 ${activeView}
 
-I can help you start in Canvas, recover a previous thread, review actions, or prepare the next step.
-
-${sessionState.approvalReminder}
+Start with Projects when you want the full project home base. Use Canvas when you are ready to write, update, or continue the active project.
          `.trim();
       }
 
@@ -178,18 +176,51 @@ ${sessionState.approvalReminder}
 
       if (lower.includes("recommend") || lower.includes("next step") || lower.includes("what should i do") || lower.includes("best move")) {
          return `
-I can help with the next move.
+I can help choose the next useful move.
 
 Current read:
 ${sessionState.systemStatusLabel}
 
-Recommended path:
-Start in Canvas if the work still needs shaping.
-Use Tasks if the next action is clear.
-Use Board if the work is ready to track.
-Use Recovery if you are continuing from a previous thread.
+Best path:
+Open Projects to see the project home base. Continue in Canvas when you are ready to write or update the work. Use Project Materials when you need notes, documents, feedback, or references nearby.
 
-I will only prepare actions for review. Prepared actions stay in Workflow Control until reviewed.
+Tiny system note: less jumping around, more project staying put.
+         `.trim();
+      }
+
+      // ========================================
+      // Projects
+      // ========================================
+
+      if (lower.includes("project") || lower.includes("saved work") || lower.includes("home base")) {
+         return `
+Projects is the home base for each project.
+
+Use it to keep the project, scheduled work, and materials connected in one place. Canvas is where you actively work on the selected project.
+         `.trim();
+      }
+
+      // ========================================
+      // Materials / References
+      // ========================================
+
+      if (lower.includes("material") || lower.includes("document") || lower.includes("reference") || lower.includes("feedback") || lower.includes("research") || lower.includes("image") || lower.includes("pdf")) {
+         return `
+Project Materials are the reference layer.
+
+Use them for notes, documents, images, research, feedback, or anything you want available while working on a project. They should support the project without cluttering Canvas.
+         `.trim();
+      }
+
+      // ========================================
+      // Canvas
+      // ========================================
+
+      if (lower.includes("canvas") || lower.includes("write") || lower.includes("draft") || lower.includes("update")) {
+         return `
+Canvas is the active work area.
+
+Use it to write, update, or continue the selected project. Keep the main work there, and use the reference panel when you need notes or materials nearby.
          `.trim();
       }
 
@@ -199,14 +230,12 @@ I will only prepare actions for review. Prepared actions stay in Workflow Contro
 
       if (lower.includes("focus") || lower.includes("deep work") || lower.includes("productivity")) {
          return `
-Deep focus mode noted.
+Focus mode noted.
 
-I will keep the workspace calm, reduce extra guidance, and point you toward one clear action at a time.
+I will keep guidance shorter and point you toward one useful action at a time.
 
 Best next move:
-Open Canvas for active work, or ask ALLEVIN to recommend the next step.
-
-Routing and creation stay inside Workflow Control until reviewed.
+Open the active project in Canvas and work from one selected reference, not the whole pile. The pile can wait its turn.
          `.trim();
       }
 
@@ -214,31 +243,13 @@ Routing and creation stay inside Workflow Control until reviewed.
       // Calm / Recovery
       // ========================================
 
-      if (lower.includes("calm") || lower.includes("relax") || lower.includes("mindful") || lower.includes("overwhelmed") || lower.includes("stress")) {
+      if (lower.includes("calm") || lower.includes("relax") || lower.includes("mindful") || lower.includes("overwhelmed") || lower.includes("stress") || lower.includes("recover")) {
          return `
-Recovery tone activated.
+Calm guidance is active.
 
-We can slow this down.
+We can keep this small.
 
-Choose one small move:
-Open Recovery, resume the latest thread, or start fresh in Canvas.
-
-I will keep the system quiet and review-based.
-         `.trim();
-      }
-
-      // ========================================
-      // Approvals
-      // ========================================
-
-      if (lower.includes("approve") || lower.includes("approval") || lower.includes("workflow control") || lower.includes("review action")) {
-         return `
-Workflow Control is the review layer.
-
-Use it to review prepared actions before ALLEVIN moves work into Tasks, Board, Calendar, or Integrations.
-
-System rule:
-Prepared actions will appear in Workflow Control for review.
+Open Projects, pick one project, and continue only the next useful part in Canvas. Materials can stay nearby as references instead of crowding the workspace.
          `.trim();
       }
 
@@ -246,47 +257,32 @@ Prepared actions will appear in Workflow Control for review.
       // Calendar
       // ========================================
 
-      if (lower.includes("calendar") || lower.includes("schedule") || lower.includes("meeting") || lower.includes("event")) {
+      if (lower.includes("calendar") || lower.includes("schedule") || lower.includes("meeting") || lower.includes("event") || lower.includes("deadline")) {
          return `
-Calendar context is available.
+Calendar is the schedule reference.
 
-Use Calendar to create events, capture schedule notes, and prepare follow-up work.
-
-Recommended flow:
-Calendar note → Workflow Control → Canvas or Task Vault.
-
-Calendar actions stay in Workflow Control until reviewed.
+Use it to see project blocks, deadlines, and events. Project planning should stay with Projects and Canvas; Calendar just shows when things are happening.
          `.trim();
       }
 
       // ========================================
-      // Insights
+      // Cognition
       // ========================================
 
-      if (lower.includes("insights") || lower.includes("analytics") || lower.includes("signals") || lower.includes("history")) {
+      if (lower.includes("cognition") || lower.includes("style") || lower.includes("mode") || lower.includes("guidance")) {
          return `
-System insights are available in the Advanced System Core.
+Cognition adjusts how ALLEVIN guides the project.
 
-That area holds signals, notes, memory, workflow state, and orchestration details.
-
-Use it when you want to inspect how ALLEVIN is reading the workspace.
+Use it when you want responses to feel calmer, shorter, more structured, more creative, or more research-focused.
          `.trim();
       }
 
       // ========================================
-      // Canvas / Tasks / Board
+      // Tasks / Next Actions
       // ========================================
-
-      if (lower.includes("canvas")) {
-         return "Canvas is the best place to shape or continue work before turning it into action.";
-      }
 
       if (lower.includes("task") || lower.includes("todo") || lower.includes("action item")) {
-         return "Task Vault is best when the next action is clear and ready to execute.";
-      }
-
-      if (lower.includes("board") || lower.includes("track") || lower.includes("project")) {
-         return "Project Board is the tracking layer. Use it when work is ready to move through Backlog, In Progress, Review, and Complete.";
+         return "Tasks are best for simple next actions. Keep them short, connected to the project, and easy to finish.";
       }
 
       // ========================================
@@ -294,14 +290,12 @@ Use it when you want to inspect how ALLEVIN is reading the workspace.
       // ========================================
 
       return `
-I am observing the workspace.
+I am ready to help with the project.
 
 Current state:
 ${sessionState.systemStatusLabel}
 
-You can ask me to recommend the next move, open Canvas, recover a thread, review actions, or prepare work for Calendar or Integrations.
-
-${sessionState.approvalReminder}
+You can ask me to explain the project, choose the next move, continue in Canvas, reference project materials, or check the schedule.
       `.trim();
    }
 
@@ -323,7 +317,7 @@ ${sessionState.approvalReminder}
       const focusMode = inferFocusMode(cleanInput);
 
       // ========================================
-      // Update MK II Internal State
+      // Update MK VI Internal State
       // ========================================
 
       const nextSystemStatus = getSystemStatusFromInput(cleanInput);
@@ -337,17 +331,15 @@ ${sessionState.approvalReminder}
       setAssistantMode(nextAssistantMode);
 
       setAssistantStatus(
-         nextSystemStatus === "awaiting-approval"
-            ? "Review ready"
-            : nextSystemStatus === "recovery-available"
-              ? "Recovery available"
-              : nextSystemStatus === "schedule-context-active"
-                ? "Schedule context active"
-                : nextSystemStatus === "integration-ready"
-                  ? "Integration ready"
-                  : nextSystemStatus === "focused-work-active"
-                    ? "Focused work active"
-                    : "Observing workspace",
+         nextSystemStatus === "recovery-available"
+            ? "Project context available"
+            : nextSystemStatus === "schedule-context-active"
+              ? "Schedule ready"
+              : nextSystemStatus === "integration-ready"
+                ? "Projects ready"
+                : nextSystemStatus === "focused-work-active"
+                  ? "Canvas active"
+                  : "Guidance ready",
       );
 
       // ========================================
@@ -400,7 +392,7 @@ ${sessionState.approvalReminder}
    function clearMessages() {
       setAssistantMode("standby");
 
-      setAssistantStatus("Observing workspace");
+      setAssistantStatus("Guidance ready");
 
       setSystemStatus("workspace-stable");
 

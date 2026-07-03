@@ -10,17 +10,16 @@ import { useWorkspace } from "@/components/WorkspaceContext";
 
 import { upsertProjectMemory, deleteProjectMemory } from "@/lib/allevinProjectMemory";
 
-import { requestAllevinLLM } from "@/lib/allevinLLMClient";
+import { interpretMaterialWithLLM, requestAllevinLLM } from "@/lib/allevinLLMClient";
 
 import { rememberDeletedProjectMemorySignal } from "@/components/MemoryEngine";
 
 // ========================================
 // ALLEVIN Projects Workspace
 // Purpose:
-// Saved-work hub for ALLEVIN MK III.
-// No outside document routes.
-// Work stays inside ALLEVIN: Projects, Tasks,
-// Calendar, and Canvas.
+// MK VI project home base.
+// Projects keeps each project organized with schedule planning and materials.
+// Canvas remains the active workbench where project updates are written and shaped.
 // ========================================
 
 const STORAGE_KEY = "allevin-internal-output-hub";
@@ -43,10 +42,16 @@ const CANVAS_STORAGE_KEY = "allevin-adaptive-work-canvas";
 
 const PROJECT_TRACKING_STORAGE_KEY = "allevin-project-tracking-map";
 
+const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
+
+const CANVAS_SELECTED_REFERENCES_STORAGE_KEY = "allevin-canvas-selected-references-mkvi";
+
+const PROJECT_MATERIAL_STORAGE_SAFE_LIMIT = 4500000;
+
 const APPROVED_INTERNAL_INTEGRATION_HANDLED_KEY = "allevin-approved-internal-integration-handled";
 
 // ========================================
-// MK V Build 6 — Projects Sanitization Parameters
+// MK VI — Projects Sanitization Parameters
 // Projects should preserve saved work, but every stored/displayed field is untrusted.
 // ========================================
 
@@ -58,6 +63,16 @@ const PROJECT_SANITIZE_LIMITS = {
    notice: 220,
    nextStep: 1000,
    location: 300,
+   materialType: 80,
+   materialSource: 300,
+   imageDataUrl: 1600000,
+   imageFileName: 180,
+   imageMimeType: 80,
+   documentDataUrl: 2400000,
+   documentFileName: 180,
+   documentMimeType: 120,
+   documentText: 100000,
+   materialInterpretation: 2200,
 } as const;
 
 function limitProjectTextLength(value: string, maxLength: number) {
@@ -94,11 +109,15 @@ function sanitizeProjectPlainText(value?: string, maxLength: number = PROJECT_SA
 }
 
 function sanitizeLiveProjectTitle(value?: string) {
-   return sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.title, { preserveEdges: true }).replace(/\n+/g, " ");
+   return sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.title, {
+      preserveEdges: true,
+   }).replace(/\n+/g, " ");
 }
 
 function sanitizeLiveProjectBody(value?: string) {
-   return sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.body, { preserveEdges: true });
+   return sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.body, {
+      preserveEdges: true,
+   });
 }
 
 function sanitizeProjectTitle(value?: string) {
@@ -321,6 +340,56 @@ interface ProjectTrackingMeta {
    updatedAt: number;
 }
 
+type ProjectMaterialType = "Note" | "Document" | "Image" | "Research" | "Feedback" | "Reference";
+
+type ProjectMaterialFilter = "All" | ProjectMaterialType;
+
+const PROJECT_MATERIAL_FILTERS: ProjectMaterialFilter[] = ["All", "Note", "Document", "Image", "Research", "Feedback", "Reference"];
+
+interface ProjectMaterial {
+   id: string;
+
+   projectId: string;
+
+   projectTitle: string;
+
+   title: string;
+
+   type: ProjectMaterialType;
+
+   source: string;
+
+   notes: string;
+
+   summary: string;
+
+   imageDataUrl?: string;
+
+   imageFileName?: string;
+
+   imageMimeType?: string;
+
+   documentDataUrl?: string;
+
+   documentFileName?: string;
+
+   documentMimeType?: string;
+
+   documentText?: string;
+
+   interpretationSummary?: string;
+
+   interpretationUsefulContext?: string;
+
+   interpretationNextStep?: string;
+
+   interpretedAt?: number;
+
+   createdAt: number;
+
+   updatedAt: number;
+}
+
 function cleanText(value?: string) {
    return sanitizeProjectPlainText(value).replace(/\r/g, "").trim();
 }
@@ -374,6 +443,492 @@ function saveProjectTrackingMap(map: Record<string, ProjectTrackingMeta>) {
    }
 
    localStorage.setItem(PROJECT_TRACKING_STORAGE_KEY, JSON.stringify(map));
+}
+
+function isProjectMaterialType(value?: string): value is ProjectMaterialType {
+   return value === "Note" || value === "Document" || value === "Image" || value === "Research" || value === "Feedback" || value === "Reference";
+}
+
+function sanitizeProjectMaterialType(value?: string): ProjectMaterialType {
+   return isProjectMaterialType(value) ? value : "Note";
+}
+
+function sanitizeProjectMaterialSource(value?: string) {
+   return sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.materialSource);
+}
+
+function sanitizeProjectImageDataUrl(value?: string) {
+   const cleanValue = typeof value === "string" ? value.trim() : "";
+
+   if (!cleanValue.startsWith("data:image/")) {
+      return "";
+   }
+
+   return sanitizeProjectPlainText(cleanValue, PROJECT_SANITIZE_LIMITS.imageDataUrl);
+}
+
+function sanitizeProjectImageFileName(value?: string) {
+   return sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.imageFileName).replace(/\n+/g, " ").trim();
+}
+
+function sanitizeProjectImageMimeType(value?: string) {
+   const cleanValue = sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.imageMimeType).toLowerCase();
+
+   return ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"].includes(cleanValue) ? cleanValue : "";
+}
+
+function isSupportedProjectImageFile(file?: File | null) {
+   if (!file) {
+      return false;
+   }
+
+   return ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"].includes(file.type);
+}
+
+function sanitizeProjectDocumentDataUrl(value?: string) {
+   const cleanValue = typeof value === "string" ? value.trim() : "";
+
+   if (!cleanValue.startsWith("data:")) {
+      return "";
+   }
+
+   return sanitizeProjectPlainText(cleanValue, PROJECT_SANITIZE_LIMITS.documentDataUrl);
+}
+
+function sanitizeProjectDocumentFileName(value?: string) {
+   return sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.documentFileName).replace(/\n+/g, " ").trim();
+}
+
+function getProjectDocumentMimeType(file?: File | null) {
+   if (!file) {
+      return "";
+   }
+
+   const fileName = (file.name || "").toLowerCase();
+
+   if (file.type) {
+      return file.type.toLowerCase();
+   }
+
+   if (fileName.endsWith(".pdf")) return "application/pdf";
+   if (fileName.endsWith(".txt")) return "text/plain";
+   if (fileName.endsWith(".md") || fileName.endsWith(".markdown")) return "text/markdown";
+   if (fileName.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+   if (fileName.endsWith(".doc")) return "application/msword";
+
+   return "";
+}
+
+function sanitizeProjectDocumentMimeType(value?: string) {
+   const cleanValue = sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.documentMimeType).toLowerCase();
+
+   const allowedTypes = ["application/pdf", "text/plain", "text/markdown", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"];
+
+   return allowedTypes.includes(cleanValue) ? cleanValue : "";
+}
+
+function sanitizeProjectDocumentText(value?: string) {
+   return sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.documentText);
+}
+
+function sanitizeMaterialInterpretation(value?: string) {
+   return sanitizeProjectPlainText(value, PROJECT_SANITIZE_LIMITS.materialInterpretation);
+}
+
+function isSupportedProjectDocumentFile(file?: File | null) {
+   if (!file) {
+      return false;
+   }
+
+   const mimeType = getProjectDocumentMimeType(file);
+
+   return Boolean(sanitizeProjectDocumentMimeType(mimeType));
+}
+
+function isReadableProjectDocument(material: Pick<ProjectMaterial, "documentMimeType" | "documentDataUrl" | "documentText">) {
+   return Boolean(material.documentText || (material.documentMimeType === "application/pdf" && material.documentDataUrl));
+}
+
+function isDocxProjectDocumentMimeType(mimeType?: string) {
+   return mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+}
+
+function decodeProjectXmlEntities(value: string) {
+   return value
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+      .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+}
+
+function getProjectZipUint16(view: DataView, offset: number) {
+   return view.getUint16(offset, true);
+}
+
+function getProjectZipUint32(view: DataView, offset: number) {
+   return view.getUint32(offset, true);
+}
+
+async function inflateProjectZipEntry(data: Uint8Array, compressionMethod: number) {
+   if (compressionMethod === 0) {
+      return data;
+   }
+
+   if (compressionMethod !== 8) {
+      throw new Error("Unsupported DOCX compression method.");
+   }
+
+   const DecompressionStreamConstructor = (globalThis as any).DecompressionStream;
+
+   if (!DecompressionStreamConstructor) {
+      throw new Error("DOCX decompression is not available in this browser.");
+   }
+
+   const safeBuffer = new ArrayBuffer(data.byteLength);
+
+   new Uint8Array(safeBuffer).set(data);
+
+   const stream = new Blob([safeBuffer]).stream().pipeThrough(new DecompressionStreamConstructor("deflate-raw"));
+
+   const buffer = await new Response(stream).arrayBuffer();
+
+   return new Uint8Array(buffer);
+}
+
+function getProjectDocxPlainTextFromXml(xml: string) {
+   const withBreaks = xml
+      .replace(/<w:tab\s*\/?\s*>/gi, "\t")
+      .replace(/<w:br[^>]*\/?\s*>/gi, "\n")
+      .replace(/<w:cr\s*\/?\s*>/gi, "\n")
+      .replace(/<\/w:p>/gi, "\n")
+      .replace(/<\/w:tr>/gi, "\n")
+      .replace(/<\/w:tc>/gi, "\t");
+
+   return decodeProjectXmlEntities(withBreaks.replace(/<[^>]+>/g, ""))
+      .split("\n")
+      .map((line) => line.replace(/[ \t]+/g, " ").trim())
+      .filter(Boolean)
+      .join("\n");
+}
+
+async function extractProjectDocxText(file: File) {
+   const buffer = await file.arrayBuffer();
+
+   const bytes = new Uint8Array(buffer);
+
+   const view = new DataView(buffer);
+
+   let endOfCentralDirectoryOffset = -1;
+
+   for (let offset = bytes.length - 22; offset >= Math.max(0, bytes.length - 66000); offset--) {
+      if (getProjectZipUint32(view, offset) === 0x06054b50) {
+         endOfCentralDirectoryOffset = offset;
+
+         break;
+      }
+   }
+
+   if (endOfCentralDirectoryOffset < 0) {
+      throw new Error("DOCX could not be opened.");
+   }
+
+   const centralDirectorySize = getProjectZipUint32(view, endOfCentralDirectoryOffset + 12);
+
+   const centralDirectoryOffset = getProjectZipUint32(view, endOfCentralDirectoryOffset + 16);
+
+   const decoder = new TextDecoder("utf-8");
+
+   let pointer = centralDirectoryOffset;
+
+   const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
+
+   while (pointer < centralDirectoryEnd) {
+      if (getProjectZipUint32(view, pointer) !== 0x02014b50) {
+         break;
+      }
+
+      const compressionMethod = getProjectZipUint16(view, pointer + 10);
+
+      const compressedSize = getProjectZipUint32(view, pointer + 20);
+
+      const fileNameLength = getProjectZipUint16(view, pointer + 28);
+
+      const extraLength = getProjectZipUint16(view, pointer + 30);
+
+      const commentLength = getProjectZipUint16(view, pointer + 32);
+
+      const localHeaderOffset = getProjectZipUint32(view, pointer + 42);
+
+      const fileName = decoder.decode(bytes.slice(pointer + 46, pointer + 46 + fileNameLength));
+
+      if (fileName === "word/document.xml") {
+         if (getProjectZipUint32(view, localHeaderOffset) !== 0x04034b50) {
+            throw new Error("DOCX document part could not be opened.");
+         }
+
+         const localFileNameLength = getProjectZipUint16(view, localHeaderOffset + 26);
+
+         const localExtraLength = getProjectZipUint16(view, localHeaderOffset + 28);
+
+         const dataStart = localHeaderOffset + 30 + localFileNameLength + localExtraLength;
+
+         const compressedData = bytes.slice(dataStart, dataStart + compressedSize);
+
+         const documentXmlBytes = await inflateProjectZipEntry(compressedData, compressionMethod);
+
+         const documentXml = decoder.decode(documentXmlBytes);
+
+         return sanitizeProjectDocumentText(getProjectDocxPlainTextFromXml(documentXml));
+      }
+
+      pointer += 46 + fileNameLength + extraLength + commentLength;
+   }
+
+   throw new Error("DOCX text was not found.");
+}
+
+function buildMaterialSummary(material: Pick<ProjectMaterial, "title" | "type" | "source" | "notes" | "imageFileName" | "documentFileName">) {
+   const noteLines = sanitizeProjectBody(material.notes)
+      .split("\n")
+      .map((line) => compactText(line))
+      .filter(Boolean);
+
+   const firstUsefulLine = noteLines[0] || sanitizeProjectTitle(material.title) || (material.imageFileName ? `Image attached: ${material.imageFileName}` : material.documentFileName ? `Document attached: ${material.documentFileName}` : "");
+
+   const sourceLine = material.source ? ` Source: ${sanitizeProjectMaterialSource(material.source)}.` : "";
+
+   const imageLine = material.type === "Image" && material.imageFileName ? ` Image: ${sanitizeProjectImageFileName(material.imageFileName)}.` : "";
+
+   const documentLine = material.type === "Document" && material.documentFileName ? ` Document: ${sanitizeProjectDocumentFileName(material.documentFileName)}.` : "";
+
+   return sanitizeProjectSummary(`${material.type}: ${firstUsefulLine}${sourceLine}${imageLine}${documentLine}`);
+}
+
+function getMaterialTypeGuidance(type: ProjectMaterialType) {
+   switch (type) {
+      case "Document":
+         return {
+            titlePlaceholder: "Document title, brief, PDF, or file name",
+            sourcePlaceholder: "Where this document came from",
+            notesPlaceholder: "Add the important details, summary, or text from the document for now...",
+            helperText: "Use this for PDFs, DOCX, TXT, Markdown, briefs, assignments, or project documents. Supported files can be opened and read inside ALLEVIN.",
+            inputLabel: "Document details",
+         };
+
+      case "Image":
+         return {
+            titlePlaceholder: "Screenshot, sketch, mockup, or image title",
+            sourcePlaceholder: "Where the image came from",
+            notesPlaceholder: "Describe what is important in the image, screenshot, sketch, or visual reference...",
+            helperText: "Use this for screenshots, sketches, mockups, photos, or diagrams. Attach an image, then add a short note about what it should help with.",
+            inputLabel: "Image notes",
+         };
+
+      case "Research":
+         return {
+            titlePlaceholder: "Research topic, source, or article title",
+            sourcePlaceholder: "Link, author, class, website, or source",
+            notesPlaceholder: "Paste research notes, key findings, useful quotes, or evidence here...",
+            helperText: "Use this for sources, articles, comparisons, evidence, or study material connected to the project.",
+            inputLabel: "Research notes",
+         };
+
+      case "Feedback":
+         return {
+            titlePlaceholder: "Feedback title or tester name",
+            sourcePlaceholder: "Who gave the feedback",
+            notesPlaceholder: "Add user feedback, reviewer comments, testing notes, or suggestions here...",
+            helperText: "Use this for beta tester responses, review notes, user testing comments, or suggestions from someone else.",
+            inputLabel: "Feedback notes",
+         };
+
+      case "Reference":
+         return {
+            titlePlaceholder: "Reference title",
+            sourcePlaceholder: "Link, person, place, or origin",
+            notesPlaceholder: "Add any useful reference details that should stay connected to this project...",
+            helperText: "Use this as the flexible option for anything useful that does not need a more specific type.",
+            inputLabel: "Reference details",
+         };
+
+      case "Note":
+      default:
+         return {
+            titlePlaceholder: "Quick note title",
+            sourcePlaceholder: "Optional source or person",
+            notesPlaceholder: "Write a project note, update, reminder, or useful thought here...",
+            helperText: "Use this for quick thoughts, project updates, reminders, meeting notes, or rough context.",
+            inputLabel: "Note",
+         };
+   }
+}
+
+function readProjectMaterials() {
+   if (typeof window === "undefined") {
+      return [] as ProjectMaterial[];
+   }
+
+   const stored = localStorage.getItem(PROJECT_MATERIALS_STORAGE_KEY);
+
+   if (!stored) {
+      return [] as ProjectMaterial[];
+   }
+
+   try {
+      const parsed = JSON.parse(stored);
+
+      if (!Array.isArray(parsed)) {
+         return [] as ProjectMaterial[];
+      }
+
+      return parsed
+         .filter((material) => material && typeof material.id === "string" && typeof material.projectId === "string")
+         .map((material) => ({
+            id: material.id,
+            projectId: sanitizeProjectPlainText(material.projectId, 180),
+            projectTitle: sanitizeProjectTitle(material.projectTitle),
+            title: sanitizeProjectTitle(material.title) || "Untitled material",
+            type: sanitizeProjectMaterialType(material.type),
+            source: sanitizeProjectMaterialSource(material.source || ""),
+            notes: sanitizeProjectBody(material.notes || ""),
+            summary: sanitizeProjectSummary(material.summary || material.notes || material.title),
+            imageDataUrl: sanitizeProjectImageDataUrl(material.imageDataUrl),
+            imageFileName: sanitizeProjectImageFileName(material.imageFileName),
+            imageMimeType: sanitizeProjectImageMimeType(material.imageMimeType),
+            documentDataUrl: sanitizeProjectDocumentDataUrl(material.documentDataUrl),
+            documentFileName: sanitizeProjectDocumentFileName(material.documentFileName),
+            documentMimeType: sanitizeProjectDocumentMimeType(material.documentMimeType),
+            documentText: sanitizeProjectDocumentText(material.documentText),
+            interpretationSummary: sanitizeMaterialInterpretation(material.interpretationSummary),
+            interpretationUsefulContext: sanitizeMaterialInterpretation(material.interpretationUsefulContext),
+            interpretationNextStep: sanitizeProjectNextStep(material.interpretationNextStep),
+            interpretedAt: isValidProjectTimestamp(material.interpretedAt) ? material.interpretedAt : undefined,
+            createdAt: isValidProjectTimestamp(material.createdAt) ? material.createdAt : getNow(),
+            updatedAt: isValidProjectTimestamp(material.updatedAt) ? material.updatedAt : getNow(),
+         }))
+         .sort((a, b) => b.updatedAt - a.updatedAt);
+   } catch {
+      localStorage.removeItem(PROJECT_MATERIALS_STORAGE_KEY);
+
+      return [] as ProjectMaterial[];
+   }
+}
+
+function saveProjectMaterials(materials: ProjectMaterial[]) {
+   if (typeof window === "undefined") {
+      return false;
+   }
+
+   const safeMaterials = materials.slice(0, 200);
+
+   const payload = JSON.stringify(safeMaterials);
+
+   if (payload.length > PROJECT_MATERIAL_STORAGE_SAFE_LIMIT) {
+      window.dispatchEvent(
+         new CustomEvent("allevin-project-materials-storage-error", {
+            detail: {
+               reason: "size-limit",
+            },
+         }),
+      );
+
+      return false;
+   }
+
+   try {
+      localStorage.setItem(PROJECT_MATERIALS_STORAGE_KEY, payload);
+
+      window.dispatchEvent(new CustomEvent("allevin-project-materials-update"));
+
+      return true;
+   } catch {
+      window.dispatchEvent(
+         new CustomEvent("allevin-project-materials-storage-error", {
+            detail: {
+               reason: "browser-storage",
+            },
+         }),
+      );
+
+      return false;
+   }
+}
+
+function readCanvasSelectedReferenceIdsForProjects() {
+   if (typeof window === "undefined") {
+      return [] as string[];
+   }
+
+   try {
+      const stored = localStorage.getItem(CANVAS_SELECTED_REFERENCES_STORAGE_KEY);
+
+      const parsed = stored ? JSON.parse(stored) : [];
+
+      return Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : [];
+   } catch {
+      localStorage.removeItem(CANVAS_SELECTED_REFERENCES_STORAGE_KEY);
+
+      return [] as string[];
+   }
+}
+
+function saveCanvasSelectedReferenceIdsForProjects(ids: string[]) {
+   if (typeof window === "undefined") {
+      return;
+   }
+
+   localStorage.setItem(CANVAS_SELECTED_REFERENCES_STORAGE_KEY, JSON.stringify(Array.from(new Set(ids.filter(Boolean))).slice(0, 20)));
+}
+
+function removeMaterialsFromCanvasSelection(materialIds: string[]) {
+   if (!materialIds.length) {
+      return;
+   }
+
+   const materialReferenceIds = materialIds.map((materialId) => `material:${materialId}`);
+
+   const nextReferenceIds = readCanvasSelectedReferenceIdsForProjects().filter((referenceId) => !materialReferenceIds.includes(referenceId));
+
+   saveCanvasSelectedReferenceIdsForProjects(nextReferenceIds);
+
+   window.dispatchEvent(
+      new CustomEvent("allevin-canvas-references-pruned", {
+         detail: {
+            materialIds,
+         },
+      }),
+   );
+}
+
+function getProjectMaterialsForProject(projectId?: string) {
+   if (!projectId) {
+      return [] as ProjectMaterial[];
+   }
+
+   return readProjectMaterials().filter((material) => material.projectId === projectId);
+}
+
+function buildProjectMaterialsContext(materials: ProjectMaterial[]) {
+   const usefulMaterials = materials.slice(0, 6);
+
+   if (!usefulMaterials.length) {
+      return "";
+   }
+
+   return usefulMaterials.map((material, index) => `${index + 1}. ${material.title} (${material.type}) — ${material.summary || getShortProjectMaterialPreview(material.notes, 220)}`).join("\n");
+}
+
+function getShortProjectMaterialPreview(value?: string, limit = 180) {
+   const cleanValue = compactText(value);
+
+   if (cleanValue.length <= limit) {
+      return cleanValue;
+   }
+
+   return `${cleanValue.slice(0, limit).trim()}...`;
 }
 
 function inferProjectTrackingStatus(project: ProjectLibraryItem): ProjectTrackingStatus {
@@ -482,26 +1037,26 @@ function getTrackingGuidance(status: ProjectTrackingStatus) {
 
 function getGeneratedProjectsLine(action: "saved" | "opened" | "tasked" | "scheduled" | "deleted" | "polished" | "added") {
    const actionMap = {
-      saved: ["Saved to Projects", "Project saved", "Saved safely", "Filed in Projects", "Project tucked away"],
-      opened: ["Opened in Canvas", "Back in Canvas", "Project reopened", "Returned to Canvas", "Canvas has it now"],
-      tasked: ["Task created", "Sent to Tasks", "Next action created", "Task ready", "That thought has a job now"],
-      scheduled: ["Scheduled in Calendar", "Time added", "Calendar has it", "Time scheduled", "Time has entered the chat"],
-      deleted: ["Project deleted", "Project retired", "Removed from Projects", "Project cleared", "No resurrection scheduled"],
-      polished: ["Polished", "Cleaned up", "Refined", "Tuned up", "Made clearer"],
-      added: ["Project added", "Draft added", "Added to Projects", "Project draft ready", "Added to Projects"],
+      saved: ["Saved to Projects", "Project saved", "Saved safely", "Saved in Projects", "Project saved for later"],
+      opened: ["Opened in Canvas", "Back in Canvas", "Project reopened", "Returned to Canvas", "Canvas is ready"],
+      tasked: ["Task created", "Sent to Tasks", "Next action created", "Task ready", "Next step saved"],
+      scheduled: ["Scheduled in Calendar", "Time added", "Added to Calendar", "Time scheduled", "Calendar updated"],
+      deleted: ["Project deleted", "Project removed", "Removed from Projects", "Project cleared", "Project no longer appears here"],
+      polished: ["Polished", "Cleaned up", "Refined", "Updated", "Made clearer"],
+      added: ["Project added", "Draft added", "Added to Projects", "Project draft ready", "Saved in Projects"],
    } as const;
 
    const tails = [
-      "No chaos detected.",
+      "Saved clearly.",
       "Clean and simple.",
-      "Future you has been considered.",
-      "Very responsible of us.",
-      "The workspace approves.",
+      "This is ready when you need it.",
+      "Saved and ready to continue.",
+      "The workspace is updated.",
       "I’ll keep it ready.",
-      "Efficient. Almost suspicious.",
+      "Updated successfully.",
       "That should keep things moving.",
       "Neatly handled.",
-      "A tidy little win.",
+      "All set.",
    ];
 
    return `${pickRandomItem([...actionMap[action]])}. ${pickRandomItem(tails)}`;
@@ -607,7 +1162,7 @@ function getProjectTypeInsight(project: ProjectLibraryItem) {
    return {
       type: "project",
       canvasIdea: "add the goal, missing details, and success criteria to Canvas",
-      nextMove: "make one clear task from the strongest next step",
+      nextMove: "make one clear task from the next useful step",
    };
 }
 
@@ -623,14 +1178,14 @@ function getGeneratedProjectSuggestion(project: ProjectLibraryItem) {
    const openings = [
       `This looks like a ${insight.type}.`,
       `${project.title} has a clear ${insight.type} shape.`,
-      `I’d treat ${project.title} like a ${insight.type}.`,
-      `The useful pattern here is ${insight.type} work.`,
+      `I’d handle ${project.title} as a ${insight.type}.`,
+      `This fits best as ${insight.type} work.`,
       `${project.title} is ready for a little structure.`,
       `This one has enough direction to move forward cleanly.`,
       `I see a practical next move in ${project.title}.`,
-      `This project has enough signal to avoid wandering around dramatically.`,
-      `The project is behaving. Rare, but appreciated.`,
-      `There’s a clean path here, and no gremlin committee is required.`,
+      `This project has enough detail to move forward clearly.`,
+      `This project is ready for a clear next step.`,
+      `There is a clear path here.`,
    ];
 
    const canvasIdeas = [
@@ -647,7 +1202,7 @@ function getGeneratedProjectSuggestion(project: ProjectLibraryItem) {
       `After that, ${insight.nextMove}.`,
       `Once that is clear, ${insight.nextMove}.`,
       `The next practical move is to ${insight.nextMove}.`,
-      `Then give it momentum: ${insight.nextMove}.`,
+      `Then keep it moving: ${insight.nextMove}.`,
       `That should make the next step easier to track: ${insight.nextMove}.`,
    ];
 
@@ -655,8 +1210,8 @@ function getGeneratedProjectSuggestion(project: ProjectLibraryItem) {
       `Keep it in Canvas a little longer so the main idea stays clear.`,
       `Continue shaping the notes before turning it into too many tasks.`,
       `Add one missing detail first, then decide what deserves a task.`,
-      `The next move is not bigger; it is clearer.`,
-      `Give the project one clean pass before sending more work downstream.`,
+      `The next move should be small and clear.`,
+      `Review the project once before turning more of it into tasks.`,
       `A small structure pass should make this easier to continue.`,
    ];
 
@@ -1544,11 +2099,45 @@ export default function IntegrationAdapterLayer() {
 
    const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([]);
 
-   const [expandedNotePreviewIds, setExpandedNotePreviewIds] = useState<string[]>([]);
-
    const [projectSuggestions, setProjectSuggestions] = useState<Record<string, string>>({});
 
    const [projectTrackingMap, setProjectTrackingMap] = useState<Record<string, ProjectTrackingMeta>>({});
+
+   const [projectMaterials, setProjectMaterials] = useState<ProjectMaterial[]>([]);
+
+   const [materialBuilderOpen, setMaterialBuilderOpen] = useState(false);
+
+   const [materialTitle, setMaterialTitle] = useState("");
+
+   const [materialType, setMaterialType] = useState<ProjectMaterialType>("Note");
+
+   const [materialSource, setMaterialSource] = useState("");
+
+   const [materialNotes, setMaterialNotes] = useState("");
+
+   const [materialImageDataUrl, setMaterialImageDataUrl] = useState("");
+
+   const [materialImageFileName, setMaterialImageFileName] = useState("");
+
+   const [materialImageMimeType, setMaterialImageMimeType] = useState("");
+
+   const [materialDocumentDataUrl, setMaterialDocumentDataUrl] = useState("");
+
+   const [materialDocumentFileName, setMaterialDocumentFileName] = useState("");
+
+   const [materialDocumentMimeType, setMaterialDocumentMimeType] = useState("");
+
+   const [materialDocumentText, setMaterialDocumentText] = useState("");
+
+   const [expandedMaterialIds, setExpandedMaterialIds] = useState<string[]>([]);
+
+   const [materialTypeFilter, setMaterialTypeFilter] = useState<ProjectMaterialFilter>("All");
+
+   const [fullscreenImageMaterial, setFullscreenImageMaterial] = useState<ProjectMaterial | null>(null);
+
+   const [fullscreenDocumentMaterial, setFullscreenDocumentMaterial] = useState<ProjectMaterial | null>(null);
+
+   const [activeMaterialInterpretId, setActiveMaterialInterpretId] = useState<string | null>(null);
 
    function getShortPreview(value?: string, limit = 180) {
       const cleanValue = compactText(value);
@@ -1560,8 +2149,330 @@ export default function IntegrationAdapterLayer() {
       return `${cleanValue.slice(0, limit).trim()}...`;
    }
 
-   function toggleNotePreview(noteId: string) {
-      setExpandedNotePreviewIds((current) => (current.includes(noteId) ? current.filter((id) => id !== noteId) : [...current, noteId]));
+   const activeProject = useMemo(() => projectLibrary.find((project) => project.id === selectedProjectId) || projectLibrary[0] || null, [projectLibrary, selectedProjectId]);
+
+   const activeProjectMaterials = useMemo(() => (activeProject ? projectMaterials.filter((material) => material.projectId === activeProject.id) : []), [activeProject, projectMaterials]);
+
+   const visibleProjectMaterials = useMemo(() => {
+      if (materialTypeFilter === "All") {
+         return activeProjectMaterials;
+      }
+
+      return activeProjectMaterials.filter((material) => material.type === materialTypeFilter);
+   }, [activeProjectMaterials, materialTypeFilter]);
+
+   const materialFilterCounts = useMemo(() => {
+      return PROJECT_MATERIAL_FILTERS.reduce(
+         (counts, filter) => ({
+            ...counts,
+            [filter]: filter === "All" ? activeProjectMaterials.length : activeProjectMaterials.filter((material) => material.type === filter).length,
+         }),
+         {} as Record<ProjectMaterialFilter, number>,
+      );
+   }, [activeProjectMaterials]);
+
+   const activeProjectTracking = activeProject ? getProjectTracking(activeProject) : null;
+
+   const activeProjectScheduledCount = activeProjectTracking?.calendarTaskDate && activeProjectTracking?.calendarTaskTime ? 1 : 0;
+
+   const activeProjectScheduledTaskLabel = activeProjectTracking?.calendarTaskTitle ? sanitizeProjectTitle(activeProjectTracking.calendarTaskTitle) : "No scheduled task yet";
+
+   const materialGuidance = getMaterialTypeGuidance(materialType);
+
+   function toggleMaterialPreview(materialId: string) {
+      setExpandedMaterialIds((current) => (current.includes(materialId) ? current.filter((id) => id !== materialId) : [...current, materialId]));
+   }
+
+   function clearMaterialImageUpload() {
+      setMaterialImageDataUrl("");
+
+      setMaterialImageFileName("");
+
+      setMaterialImageMimeType("");
+   }
+
+   function clearMaterialDocumentUpload() {
+      setMaterialDocumentDataUrl("");
+
+      setMaterialDocumentFileName("");
+
+      setMaterialDocumentMimeType("");
+
+      setMaterialDocumentText("");
+   }
+
+   function handleMaterialTypeChange(nextType: string) {
+      const cleanType = sanitizeProjectMaterialType(nextType);
+
+      setMaterialType(cleanType);
+
+      if (cleanType !== "Image") {
+         clearMaterialImageUpload();
+      }
+
+      if (cleanType !== "Document") {
+         clearMaterialDocumentUpload();
+      }
+   }
+
+   function handleProjectMaterialImageFile(file?: File | null) {
+      if (!file) {
+         return;
+      }
+
+      if (!isSupportedProjectImageFile(file)) {
+         showNotice("Use PNG, JPG, WEBP, or GIF");
+
+         return;
+      }
+
+      if (file.size > 1200000) {
+         showNotice("Image is too large. Try one under 1.2 MB");
+
+         return;
+      }
+
+      const reader = new FileReader();
+
+      reader.onload = () => {
+         const dataUrl = sanitizeProjectImageDataUrl(typeof reader.result === "string" ? reader.result : "");
+
+         if (!dataUrl) {
+            showNotice("Image could not be added");
+
+            return;
+         }
+
+         setMaterialImageDataUrl(dataUrl);
+
+         setMaterialImageFileName(sanitizeProjectImageFileName(file.name || "Project image"));
+
+         setMaterialImageMimeType(sanitizeProjectImageMimeType(file.type));
+
+         showNotice("Image added");
+      };
+
+      reader.onerror = () => {
+         showNotice("Image could not be added");
+      };
+
+      reader.readAsDataURL(file);
+   }
+
+   async function handleProjectMaterialDocumentFile(file?: File | null) {
+      if (!file) {
+         return;
+      }
+
+      if (!isSupportedProjectDocumentFile(file)) {
+         showNotice("Use PDF, DOCX, TXT, MD, or DOC");
+
+         return;
+      }
+
+      if (file.size > 1800000) {
+         showNotice("Document is too large. Try one under 1.8 MB");
+
+         return;
+      }
+
+      const mimeType = sanitizeProjectDocumentMimeType(getProjectDocumentMimeType(file));
+
+      const fileName = sanitizeProjectDocumentFileName(file.name || "Project document");
+
+      const isTextDocument = mimeType === "text/plain" || mimeType === "text/markdown";
+
+      const isDocxDocument = isDocxProjectDocumentMimeType(mimeType);
+
+      if (isDocxDocument) {
+         try {
+            showNotice("Reading document");
+
+            const documentText = await extractProjectDocxText(file);
+
+            if (!documentText) {
+               showNotice("Document text could not be read");
+
+               return;
+            }
+
+            setMaterialDocumentText(documentText);
+
+            setMaterialDocumentDataUrl("");
+
+            setMaterialDocumentFileName(fileName);
+
+            setMaterialDocumentMimeType(mimeType);
+
+            showNotice("Document added");
+         } catch {
+            showNotice("Document could not be read");
+         }
+
+         return;
+      }
+
+      const reader = new FileReader();
+
+      reader.onload = () => {
+         if (isTextDocument) {
+            const documentText = sanitizeProjectDocumentText(typeof reader.result === "string" ? reader.result : "");
+
+            setMaterialDocumentText(documentText);
+
+            setMaterialDocumentDataUrl("");
+         } else {
+            const dataUrl = sanitizeProjectDocumentDataUrl(typeof reader.result === "string" ? reader.result : "");
+
+            if (!dataUrl) {
+               showNotice("Document could not be added");
+
+               return;
+            }
+
+            setMaterialDocumentDataUrl(dataUrl);
+
+            setMaterialDocumentText("");
+         }
+
+         setMaterialDocumentFileName(fileName);
+
+         setMaterialDocumentMimeType(mimeType);
+
+         showNotice(isTextDocument || mimeType === "application/pdf" ? "Readable document attached" : "Document attached");
+      };
+
+      reader.onerror = () => {
+         showNotice("Document could not be added");
+      };
+
+      if (isTextDocument) {
+         reader.readAsText(file);
+      } else {
+         reader.readAsDataURL(file);
+      }
+   }
+
+   function getMaterialKind(material: ProjectMaterial) {
+      if (material.type === "Image") {
+         return "image" as const;
+      }
+
+      if (material.type === "Document") {
+         return "document" as const;
+      }
+
+      return "text" as const;
+   }
+
+   function getMaterialInterpretationSourceText(material: ProjectMaterial) {
+      return sanitizeProjectBody(
+         [
+            material.notes ? `Notes:\n${material.notes}` : "",
+            material.summary ? `Summary:\n${material.summary}` : "",
+            material.documentText ? `Readable document text:\n${material.documentText}` : "",
+            material.documentFileName ? `Document file: ${material.documentFileName}` : "",
+            material.imageFileName ? `Image file: ${material.imageFileName}` : "",
+         ]
+            .filter(Boolean)
+            .join("\n\n"),
+      );
+   }
+
+   async function interpretProjectMaterial(project: ProjectLibraryItem, material: ProjectMaterial) {
+      try {
+         setActiveMaterialInterpretId(material.id);
+
+         showNotice("Reading material with ALLEVIN");
+
+         const response = await interpretMaterialWithLLM({
+            title: material.title,
+            focus: material.notes || material.summary || material.title,
+            usefulContext: `Project: ${project.title}`,
+            nextStep: "Explain how this material can help the active project.",
+            rawContent: getMaterialInterpretationSourceText(material),
+            userInstruction:
+               "Interpret this material for the current project. Make it useful to the user, natural, and specific. Explain what matters, how it helps, and one clear next move. Do not sound robotic. Do not pretend to read unavailable content.",
+            projectStage: "project-material",
+            currentLocation: "Projects",
+            priority: activeProjectTracking?.priority || "medium",
+            maxWords: 220,
+            selectedMaterial: {
+               materialTitle: material.title,
+               materialType: material.type,
+               materialKind: getMaterialKind(material),
+               materialSource: material.source,
+               materialNotes: material.notes,
+               materialSummary: material.summary,
+               documentFileName: material.documentFileName,
+               documentMimeType: material.documentMimeType,
+               documentText: material.documentText,
+               imageFileName: material.imageFileName,
+               imageMimeType: material.imageMimeType,
+               imageDataUrl: material.imageDataUrl,
+            },
+            contextPacket: {
+               version: "MK VI",
+               currentProject: {
+                  title: project.title,
+                  type: getProjectTypeInsight(project).type,
+                  location: "Projects",
+                  status: activeProjectTracking ? getProjectStatusLabel(activeProjectTracking.status) : "active",
+                  priority: activeProjectTracking?.priority || "medium",
+                  body: buildProjectWorkspaceBody(project),
+                  latestProjectNote: project.latestSummary,
+                  recommendedNextAction: activeProjectTracking?.nextStep || getProjectTypeInsight(project).nextMove,
+               },
+               projectMaterials: {
+                  count: activeProjectMaterials.length,
+                  selectedTitles: [material.title],
+                  titles: activeProjectMaterials.map((item) => item.title),
+                  summaries: activeProjectMaterials.map((item) => item.summary || item.notes),
+                  usefulSignals: [material.notes, material.summary, material.documentFileName, material.imageFileName].filter(Boolean) as string[],
+               },
+               responseRules: {
+                  tone: "Natural, helpful, conversational, lightly witty, and specific.",
+                  format: "Give a short response with one clear next step.",
+                  avoid: ["strongest signal", "detected", "analysis", "confidence", "generic advice", "robotic wording", "gremlin", "chaos", "suspicious"],
+               },
+            },
+         });
+
+         const interpretedMaterial: ProjectMaterial = {
+            ...material,
+            summary: sanitizeProjectSummary(response.summary || response.focus || material.summary),
+            interpretationSummary: sanitizeMaterialInterpretation(response.focus || response.summary),
+            interpretationUsefulContext: sanitizeMaterialInterpretation(response.usefulContext),
+            interpretationNextStep: sanitizeProjectNextStep(response.nextStep),
+            interpretedAt: getNow(),
+            updatedAt: getNow(),
+         };
+
+         const nextMaterials = projectMaterials.map((item) => (item.id === material.id ? interpretedMaterial : item));
+
+         if (!saveProjectMaterials(nextMaterials)) {
+            showNotice("Interpretation was too large to save");
+
+            return;
+         }
+
+         setProjectMaterials(nextMaterials);
+
+         setExpandedMaterialIds((current) => (current.includes(material.id) ? current : [...current, material.id]));
+
+         showNotice("Material interpreted");
+
+         notifyAllevin(`Interpreted "${material.title}" for ${project.title}.`, {
+            type: "project-material-interpreted",
+            projectTitle: project.title,
+            materialTitle: material.title,
+            materialId: material.id,
+         });
+      } catch {
+         showNotice("Interpretation failed");
+      } finally {
+         setActiveMaterialInterpretId(null);
+      }
    }
 
    function getProjectSuggestion(project: ProjectLibraryItem) {
@@ -1647,7 +2558,7 @@ export default function IntegrationAdapterLayer() {
 
       window.dispatchEvent(new CustomEvent("allevin-project-memory-update"));
 
-      showNotice("Project tracking updated");
+      showNotice("Project updated");
    }
 
    function notifyAllevin(message: string, detail?: Record<string, unknown>) {
@@ -1737,7 +2648,7 @@ export default function IntegrationAdapterLayer() {
    useEffect(() => {
       setMounted(true);
 
-      // MK III simplified Projects: no confirmation queue.
+      // MK VI simplified Projects: no confirmation queue.
       // Old queued drafts are cleared so saved work goes directly into Projects.
       localStorage.removeItem(STORAGE_KEY);
 
@@ -1747,6 +2658,8 @@ export default function IntegrationAdapterLayer() {
 
       setProjectTrackingMap(getProjectTrackingMap());
 
+      setProjectMaterials(readProjectMaterials());
+
       syncIntegrationStatus("workspace-stable");
    }, []);
 
@@ -1755,16 +2668,30 @@ export default function IntegrationAdapterLayer() {
          setProjectLibrary(readProjectLibrary());
 
          setProjectTrackingMap(getProjectTrackingMap());
+
+         setProjectMaterials(readProjectMaterials());
       }
 
       window.addEventListener("allevin-project-library-update", refreshProjectLibrary);
 
+      window.addEventListener("allevin-project-materials-update", refreshProjectLibrary);
+
       window.addEventListener("storage", refreshProjectLibrary);
+
+      function handleProjectMaterialStorageError() {
+         showNotice("Storage is full. Remove a large material first.");
+      }
+
+      window.addEventListener("allevin-project-materials-storage-error", handleProjectMaterialStorageError);
 
       return () => {
          window.removeEventListener("allevin-project-library-update", refreshProjectLibrary);
 
+         window.removeEventListener("allevin-project-materials-update", refreshProjectLibrary);
+
          window.removeEventListener("storage", refreshProjectLibrary);
+
+         window.removeEventListener("allevin-project-materials-storage-error", handleProjectMaterialStorageError);
       };
    }, []);
 
@@ -1881,8 +2808,8 @@ export default function IntegrationAdapterLayer() {
          showNotice("Polishing with ALLEVIN");
 
          const response = await requestAllevinLLM({
-            mode: "export-polish",
-            source: "export",
+            mode: "project-guidance",
+            source: "projects",
             title: item.title,
             focus: item.rawBody || item.body,
             usefulContext: `Keep this saved with the project.`,
@@ -1939,7 +2866,7 @@ export default function IntegrationAdapterLayer() {
 
          const cleanTitle = saveProjectDirectly(item);
 
-         // No confirmation queue in MK III Projects.
+         // No confirmation queue in MK VI Projects.
          // If the item came from an old queue, remove it safely.
          commitOutputs((current) => current.filter((output) => output.id !== item.id));
 
@@ -2117,18 +3044,43 @@ export default function IntegrationAdapterLayer() {
    function continueProjectInCanvas(project: ProjectLibraryItem) {
       const body = buildProjectWorkspaceBody(project);
 
+      const materials = projectMaterials.filter((material) => material.projectId === project.id);
+
+      const canvasBody = sanitizeProjectBody(body);
+
       window.dispatchEvent(
          new CustomEvent("allevin-send-to-canvas", {
             detail: {
                title: sanitizeProjectTitle(project.title),
-               body: sanitizeProjectBody(body),
+               body: canvasBody,
                source: "project",
                sourceTitle: sanitizeProjectTitle(project.title),
-               sourceContent: sanitizeProjectBody(body),
+               sourceContent: canvasBody,
                workingSummary: sanitizeProjectSummary(body),
-               cleanSourceContent: sanitizeProjectBody(body),
+               cleanSourceContent: canvasBody,
                workflowId: project.workflowId,
                originBoardItemId: project.originBoardItemId,
+               projectId: project.id,
+               projectMaterials: materials.map((material) => ({
+                  id: material.id,
+                  title: material.title,
+                  type: material.type,
+                  source: material.source,
+                  summary: material.summary,
+                  notes: material.notes,
+                  imageDataUrl: material.imageDataUrl,
+                  imageFileName: material.imageFileName,
+                  imageMimeType: material.imageMimeType,
+                  documentDataUrl: material.documentDataUrl,
+                  documentFileName: material.documentFileName,
+                  documentMimeType: material.documentMimeType,
+                  documentText: material.documentText,
+                  interpretationSummary: material.interpretationSummary,
+                  interpretationUsefulContext: material.interpretationUsefulContext,
+                  interpretationNextStep: material.interpretationNextStep,
+                  interpretedAt: material.interpretedAt,
+               })),
+               referenceMode: "available",
             },
          }),
       );
@@ -2272,6 +3224,221 @@ export default function IntegrationAdapterLayer() {
       setExpandedProjectIds((current) => (current.includes(id) ? current.filter((projectId) => projectId !== id) : [...current, id]));
    }
 
+   function createProjectMaterial(project: ProjectLibraryItem) {
+      const cleanTitle = sanitizeProjectTitle(materialTitle);
+
+      const cleanNotes = sanitizeProjectBody(materialNotes);
+
+      const cleanSource = sanitizeProjectMaterialSource(materialSource);
+
+      const cleanImageDataUrl = materialType === "Image" ? sanitizeProjectImageDataUrl(materialImageDataUrl) : "";
+
+      const cleanImageFileName = materialType === "Image" ? sanitizeProjectImageFileName(materialImageFileName) : "";
+
+      const cleanImageMimeType = materialType === "Image" ? sanitizeProjectImageMimeType(materialImageMimeType) : "";
+
+      const cleanDocumentDataUrl = materialType === "Document" ? sanitizeProjectDocumentDataUrl(materialDocumentDataUrl) : "";
+
+      const cleanDocumentFileName = materialType === "Document" ? sanitizeProjectDocumentFileName(materialDocumentFileName) : "";
+
+      const cleanDocumentMimeType = materialType === "Document" ? sanitizeProjectDocumentMimeType(materialDocumentMimeType) : "";
+
+      const cleanDocumentText = materialType === "Document" ? sanitizeProjectDocumentText(materialDocumentText) : "";
+
+      if (!cleanTitle && !cleanNotes && !cleanImageDataUrl && !cleanDocumentDataUrl && !cleanDocumentText) {
+         showNotice("Add a material title, note, image, or document");
+
+         return;
+      }
+
+      const materialDraft: ProjectMaterial = {
+         id: crypto.randomUUID(),
+         projectId: project.id,
+         projectTitle: sanitizeProjectTitle(project.title),
+         title: cleanTitle || "Untitled material",
+         type: sanitizeProjectMaterialType(materialType),
+         source: cleanSource,
+         notes: cleanNotes || cleanTitle || (cleanImageDataUrl ? `Image attached: ${cleanImageFileName || "Project image"}` : cleanDocumentDataUrl || cleanDocumentText ? `Document attached: ${cleanDocumentFileName || "Project document"}` : ""),
+         summary: "",
+         imageDataUrl: cleanImageDataUrl || undefined,
+         imageFileName: cleanImageFileName || undefined,
+         imageMimeType: cleanImageMimeType || undefined,
+         documentDataUrl: cleanDocumentDataUrl || undefined,
+         documentFileName: cleanDocumentFileName || undefined,
+         documentMimeType: cleanDocumentMimeType || undefined,
+         documentText: cleanDocumentText || undefined,
+         interpretationSummary: undefined,
+         interpretationUsefulContext: undefined,
+         interpretationNextStep: undefined,
+         interpretedAt: undefined,
+         createdAt: getNow(),
+         updatedAt: getNow(),
+      };
+
+      const nextMaterial = {
+         ...materialDraft,
+         summary: buildMaterialSummary(materialDraft),
+      };
+
+      const nextMaterials = [nextMaterial, ...projectMaterials.filter((material) => material.id !== nextMaterial.id)];
+
+      if (!saveProjectMaterials(nextMaterials)) {
+         showNotice("Material is too large for local storage");
+
+         return;
+      }
+
+      setProjectMaterials(nextMaterials);
+
+      setMaterialTitle("");
+
+      setMaterialType("Note");
+
+      setMaterialSource("");
+
+      setMaterialNotes("");
+
+      clearMaterialImageUpload();
+
+      clearMaterialDocumentUpload();
+
+      setMaterialBuilderOpen(false);
+
+      showNotice("Material attached to project");
+
+      notifyAllevin(`Attached "${nextMaterial.title}" to ${project.title}.`, {
+         type: "project-material-added",
+         title: nextMaterial.title,
+         projectTitle: project.title,
+         projectId: project.id,
+         materialId: nextMaterial.id,
+      });
+   }
+
+   function deleteProjectMaterial(materialId: string) {
+      const materialToDelete = projectMaterials.find((material) => material.id === materialId);
+
+      const nextMaterials = projectMaterials.filter((material) => material.id !== materialId);
+
+      if (!saveProjectMaterials(nextMaterials)) {
+         showNotice("Material could not be removed");
+
+         return;
+      }
+
+      setProjectMaterials(nextMaterials);
+
+      setExpandedMaterialIds((current) => current.filter((id) => id !== materialId));
+
+      if (fullscreenImageMaterial?.id === materialId) {
+         setFullscreenImageMaterial(null);
+      }
+
+      if (fullscreenDocumentMaterial?.id === materialId) {
+         setFullscreenDocumentMaterial(null);
+      }
+
+      removeMaterialsFromCanvasSelection([materialId]);
+
+      window.dispatchEvent(
+         new CustomEvent("allevin-project-material-deleted", {
+            detail: {
+               materialId,
+               projectId: materialToDelete?.projectId,
+               title: materialToDelete?.title,
+               deletedAt: getNow(),
+            },
+         }),
+      );
+
+      showNotice("Material removed");
+   }
+
+   function sendMaterialToCanvas(project: ProjectLibraryItem, material: ProjectMaterial) {
+      const body = buildProjectWorkspaceBody(project);
+
+      window.dispatchEvent(
+         new CustomEvent("allevin-send-to-canvas", {
+            detail: {
+               title: sanitizeProjectTitle(project.title),
+               body: sanitizeProjectBody(body),
+               source: "project",
+               sourceTitle: sanitizeProjectTitle(project.title),
+               sourceContent: sanitizeProjectBody(body),
+               workingSummary: sanitizeProjectSummary(body),
+               cleanSourceContent: sanitizeProjectBody(body),
+               workflowId: project.workflowId,
+               originBoardItemId: project.originBoardItemId,
+               materialId: material.id,
+               projectId: project.id,
+               selectedMaterial: {
+                  id: material.id,
+                  title: material.title,
+                  type: material.type,
+                  source: material.source,
+                  summary: material.summary,
+                  notes: material.notes,
+                  imageDataUrl: material.imageDataUrl,
+                  imageFileName: material.imageFileName,
+                  imageMimeType: material.imageMimeType,
+                  documentDataUrl: material.documentDataUrl,
+                  documentFileName: material.documentFileName,
+                  documentMimeType: material.documentMimeType,
+                  documentText: material.documentText,
+                  interpretationSummary: material.interpretationSummary,
+                  interpretationUsefulContext: material.interpretationUsefulContext,
+                  interpretationNextStep: material.interpretationNextStep,
+                  interpretedAt: material.interpretedAt,
+               },
+               referenceMode: "selected-material",
+            },
+         }),
+      );
+
+      workspace.setActiveView("focus");
+
+      workspace.setSystemStatus("focused-work-active");
+
+      workspace.registerWorkspaceActivity("focused-work-active");
+
+      window.dispatchEvent(
+         new CustomEvent("allevin-open-product-module", {
+            detail: {
+               moduleId: "canvas",
+            },
+         }),
+      );
+
+      showNotice("Reference ready in Canvas");
+   }
+
+   function queueMaterialForAIDock(project: ProjectLibraryItem, material: ProjectMaterial) {
+      window.dispatchEvent(
+         new CustomEvent("allevin-project-material-selected", {
+            detail: {
+               projectId: project.id,
+               projectTitle: project.title,
+               materialId: material.id,
+               title: material.title,
+               type: material.type,
+               source: material.source,
+               notes: material.notes,
+               summary: material.summary,
+               createdAt: getNow(),
+            },
+         }),
+      );
+
+      notifyAllevin(`Use "${material.title}" as project context when helping with ${project.title}.`, {
+         type: "project-material-context",
+         projectTitle: project.title,
+         materialTitle: material.title,
+         materialId: material.id,
+      });
+
+      showNotice("Material context ready for AIDock");
+   }
+
    function deleteProject(project: ProjectLibraryItem) {
       const confirmed = window.confirm(`Delete "${project.title}" from Projects?`);
 
@@ -2290,6 +3457,30 @@ export default function IntegrationAdapterLayer() {
       });
 
       const nextProjects = projectLibrary.filter((item) => item.id !== project.id);
+
+      const projectMaterialIds = projectMaterials.filter((material) => material.projectId === project.id).map((material) => material.id);
+
+      const nextMaterials = projectMaterials.filter((material) => material.projectId !== project.id);
+
+      if (!saveProjectMaterials(nextMaterials)) {
+         showNotice("Project materials could not be cleaned up");
+
+         return;
+      }
+
+      setProjectMaterials(nextMaterials);
+
+      removeMaterialsFromCanvasSelection(projectMaterialIds);
+
+      setExpandedMaterialIds((current) => current.filter((materialId) => !projectMaterialIds.includes(materialId)));
+
+      if (fullscreenImageMaterial && projectMaterialIds.includes(fullscreenImageMaterial.id)) {
+         setFullscreenImageMaterial(null);
+      }
+
+      if (fullscreenDocumentMaterial && projectMaterialIds.includes(fullscreenDocumentMaterial.id)) {
+         setFullscreenDocumentMaterial(null);
+      }
 
       saveProjectLibrary(nextProjects);
 
@@ -2314,8 +3505,6 @@ export default function IntegrationAdapterLayer() {
       });
 
       setExpandedProjectIds((current) => current.filter((projectId) => projectId !== project.id));
-
-      setExpandedNotePreviewIds((current) => current.filter((noteId) => !project.notes.some((note) => note.id === noteId)));
 
       setSelectedProjectId(nextProjects[0]?.id || null);
 
@@ -2396,7 +3585,7 @@ export default function IntegrationAdapterLayer() {
             <div>
                <h2 className="text-2xl sm:text-3xl">Projects</h2>
 
-               <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">Projects is ALLEVIN’s saved-work hub. Saved Canvas work appears here automatically.</p>
+               <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">Projects is the home base for each project. Canvas is where the work is written and updated; Projects keeps the schedule and materials easy to find.</p>
             </div>
 
             <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:flex xl:w-auto xl:flex-wrap xl:items-center xl:gap-3">
@@ -2452,7 +3641,7 @@ export default function IntegrationAdapterLayer() {
                   <div className="rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
                      <p className="font-medium">Add Project</p>
 
-                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Create a project note or draft inside ALLEVIN.</p>
+                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Create the home base for a project. Add the goal here, then continue in Canvas when you are ready to work.</p>
 
                      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
                         <input
@@ -2471,7 +3660,7 @@ export default function IntegrationAdapterLayer() {
                      <textarea
                         value={manualBody}
                         onChange={(event) => setManualBody(sanitizeLiveProjectBody(event.target.value))}
-                        placeholder="Write the project note or draft..."
+                        placeholder="Write the project goal or first update..."
                         className="mt-3 min-h-[120px] w-full resize-none rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
                      />
                   </div>
@@ -2487,8 +3676,9 @@ export default function IntegrationAdapterLayer() {
                         <div>
                            <p className="text-sm font-medium">Saved Projects</p>
 
-                           <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
-                              {projectLibrary.length} project{projectLibrary.length === 1 ? "" : "s"} ready
+                           <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">
+                              {projectLibrary.length} project
+                              {projectLibrary.length === 1 ? "" : "s"} ready
                            </p>
                         </div>
                      </div>
@@ -2520,8 +3710,8 @@ export default function IntegrationAdapterLayer() {
                                  {selected && <div className="absolute left-0 top-0 h-full w-1 bg-[var(--color-primary)]" />}
 
                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                    <div className="min-w-0">
-                                       <div className="flex flex-wrap items-center gap-2">
+                                    <div className="min-w-0 flex-1">
+                                       <div className="flex min-w-0 flex-wrap items-start gap-2">
                                           <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${selected ? "bg-[var(--color-primary)] text-[var(--color-cream)]" : "bg-[var(--color-bg)] text-[var(--color-text-secondary)]"}`}>
                                              {selected ? "Current" : `Project ${index + 1}`}
                                           </span>
@@ -2548,8 +3738,6 @@ export default function IntegrationAdapterLayer() {
 
                   <div className="lg:col-span-8">
                      {(() => {
-                        const activeProject = projectLibrary.find((project) => project.id === selectedProjectId) || projectLibrary[0];
-
                         if (!activeProject) {
                            return null;
                         }
@@ -2559,39 +3747,18 @@ export default function IntegrationAdapterLayer() {
                         const projectTracking = getProjectTracking(activeProject);
 
                         return (
-                           <div className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4 sm:p-5 xl:rounded-[28px] xl:p-6">
+                           <div className="min-w-0 rounded-[24px] border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4 sm:p-5 xl:rounded-[28px] xl:p-6">
                               <div className="mb-5 flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-5 xl:flex-row xl:items-start xl:justify-between">
-                                 <div className="min-w-0">
+                                 <div className="min-w-0 flex-1">
                                     <div className="mb-3 flex flex-wrap items-center gap-2">
                                        <span className="rounded-full bg-[var(--color-primary)] px-3 py-1 text-xs font-medium text-[var(--color-cream)]">Current Project</span>
 
                                        <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)]">Updated {getReadableProjectDate(activeProject.updatedAt)}</span>
-
-                                       <label className="flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)]">
-                                          <span>Status</span>
-
-                                          <select
-                                             value={projectTracking.status}
-                                             onChange={(event) =>
-                                                updateProjectTracking(activeProject, {
-                                                   status: event.target.value as ProjectTrackingStatus,
-                                                })
-                                             }
-                                             className="bg-transparent text-xs font-semibold outline-none"
-                                          >
-                                             <option value="idea">Drafting</option>
-                                             <option value="active">In Progress</option>
-                                             <option value="check">Check</option>
-                                             <option value="done">Done</option>
-                                          </select>
-                                       </label>
-
-                                       <span className="rounded-full bg-white px-3 py-1 text-xs font-medium capitalize text-[var(--color-text-secondary)]">{projectTracking.priority} priority</span>
                                     </div>
 
-                                    <h3 className="text-xl leading-tight sm:text-2xl">{activeProject.title}</h3>
+                                    <h3 className="break-words text-xl leading-tight sm:text-2xl">{activeProject.title}</h3>
 
-                                    <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--color-text-secondary)]">{expanded ? activeProject.latestSummary : getShortPreview(activeProject.latestSummary, 260)}</p>
+                                    <p className="mt-3 max-w-3xl break-words text-sm leading-7 text-[var(--color-text-secondary)]">{expanded ? activeProject.latestSummary : getShortPreview(activeProject.latestSummary, 260)}</p>
 
                                     {compactText(activeProject.latestSummary).length > 260 && (
                                        <button onClick={() => toggleProjectExpanded(activeProject.id)} className="mt-3 rounded-xl bg-white px-3 py-2 text-sm font-medium text-[var(--color-primary)] transition-colors hover:bg-[var(--color-surface)]">
@@ -2600,7 +3767,7 @@ export default function IntegrationAdapterLayer() {
                                     )}
                                  </div>
 
-                                 <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:min-w-[220px] xl:grid-cols-1">
+                                 <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:w-[240px] xl:min-w-[240px] xl:shrink-0 xl:grid-cols-1">
                                     <button onClick={() => continueProjectInCanvas(activeProject)} className="rounded-2xl bg-[var(--color-primary)] px-4 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
                                        Continue in Canvas
                                     </button>
@@ -2614,201 +3781,513 @@ export default function IntegrationAdapterLayer() {
                                  </div>
                               </div>
 
+                              <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                                 <div className="rounded-2xl bg-white p-4">
+                                    <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Schedule</p>
+                                    <p className="mt-2 text-2xl font-semibold">{activeProjectScheduledCount}</p>
+                                    <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">{activeProjectScheduledTaskLabel}</p>
+                                 </div>
+
+                                 <div className="rounded-2xl bg-white p-4">
+                                    <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Materials</p>
+                                    <p className="mt-2 text-2xl font-semibold">{activeProjectMaterials.length}</p>
+                                    <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">Project references</p>
+                                 </div>
+                              </div>
+
                               <div className="mb-4 rounded-2xl bg-white p-4">
-                                 <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                                 <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                     <div>
                                        <div className="flex items-center gap-2">
-                                          <FolderKanban size={18} />
+                                          <CalendarDays size={18} />
 
-                                          <p className="font-medium">Project Tracking</p>
+                                          <p className="font-medium">Schedule a task</p>
                                        </div>
 
-                                       <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Keep priority and calendar task scheduling with the project itself.</p>
-                                    </div>
-                                 </div>
-
-                                 <div className="grid grid-cols-1 gap-3">
-                                    <div className="rounded-2xl bg-[var(--color-bg)] p-4">
-                                       <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
-                                          <Flag size={14} />
-                                          Priority
-                                       </div>
-
-                                       <select
-                                          value={projectTracking.priority}
-                                          onChange={(event) =>
-                                             updateProjectTracking(activeProject, {
-                                                priority: event.target.value as ProjectTrackingMeta["priority"],
-                                             })
-                                          }
-                                          className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm capitalize outline-none focus:border-[var(--color-primary)]"
-                                       >
-                                          <option value="low">Low</option>
-                                          <option value="medium">Medium</option>
-                                          <option value="high">High</option>
-                                       </select>
-                                    </div>
-                                 </div>
-
-                                 <div className="mt-3 rounded-2xl bg-[var(--color-bg)] p-4">
-                                    <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                       <div>
-                                          <p className="text-sm font-medium">Schedule a task</p>
-
-                                          <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">Create one calendar task from this project.</p>
-                                       </div>
-
-                                       <button onClick={() => scheduleProjectTime(activeProject)} className="w-full rounded-xl bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-surface)] md:w-auto">
-                                          Add to Calendar
-                                       </button>
+                                       <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Add a work block that stays tied to this project.</p>
                                     </div>
 
-                                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_150px_130px_140px]">
-                                       <input
-                                          value={projectTracking.calendarTaskTitle}
-                                          onChange={(event) =>
-                                             updateProjectTracking(activeProject, {
-                                                calendarTaskTitle: event.target.value,
-                                             })
-                                          }
-                                          placeholder="Create a calendar task..."
-                                          className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                       />
-
-                                       <input
-                                          type="date"
-                                          value={projectTracking.calendarTaskDate}
-                                          onChange={(event) =>
-                                             updateProjectTracking(activeProject, {
-                                                calendarTaskDate: event.target.value,
-                                             })
-                                          }
-                                          className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                       />
-
-                                       <input
-                                          type="time"
-                                          value={projectTracking.calendarTaskTime}
-                                          onChange={(event) =>
-                                             updateProjectTracking(activeProject, {
-                                                calendarTaskTime: event.target.value,
-                                             })
-                                          }
-                                          className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                       />
-
-                                       <select
-                                          value={projectTracking.calendarTaskDurationMinutes}
-                                          onChange={(event) =>
-                                             updateProjectTracking(activeProject, {
-                                                calendarTaskDurationMinutes: Number(event.target.value),
-                                             })
-                                          }
-                                          className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                       >
-                                          <option value={15}>15 min</option>
-                                          <option value={30}>30 min</option>
-                                          <option value={45}>45 min</option>
-                                          <option value={60}>1 hour</option>
-                                          <option value={90}>1.5 hours</option>
-                                          <option value={120}>2 hours</option>
-                                       </select>
-                                    </div>
-                                 </div>
-                              </div>
-
-                              <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-                                 <div className="rounded-2xl bg-white p-4 xl:col-span-3">
-                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                       <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN Suggestion</p>
-
-                                       <button
-                                          onClick={() => refreshProjectSuggestion(activeProject)}
-                                          className="rounded-xl bg-[var(--color-bg)] px-3 py-2 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)]"
-                                       >
-                                          New idea
-                                       </button>
-                                    </div>
-
-                                    <p className="mt-3 text-sm leading-7 text-[var(--color-text-secondary)]">{getProjectSuggestion(activeProject)}</p>
-                                 </div>
-
-                                 <div className="rounded-2xl bg-white p-4 xl:col-span-2">
-                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                       <div>
-                                          <p className="font-medium">Latest saved note</p>
-
-                                          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Projects keeps the latest useful update here.</p>
-                                       </div>
-
-                                       <button onClick={() => toggleProjectExpanded(activeProject.id)} className="rounded-xl bg-[var(--color-bg)] px-3 py-2 text-sm font-medium">
-                                          {expanded ? "Hide" : "Show"}
-                                       </button>
-                                    </div>
-
-                                    {activeProject.notes[0] && (
-                                       <div className="mt-4 rounded-xl bg-[var(--color-bg)] p-4">
-                                          <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Latest Note</p>
-
-                                          <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{getShortPreview(activeProject.notes[0].summary || activeProject.notes[0].body, 160)}</p>
-                                       </div>
-                                    )}
-                                 </div>
-                              </div>
-
-                              <AnimatePresence initial={false}>
-                                 {expanded && (
-                                    <motion.div
-                                       initial={{
-                                          opacity: 0,
-                                          height: 0,
-                                       }}
-                                       animate={{
-                                          opacity: 1,
-                                          height: "auto",
-                                       }}
-                                       exit={{
-                                          opacity: 0,
-                                          height: 0,
-                                       }}
-                                       transition={{
-                                          duration: 0.2,
-                                       }}
-                                       className="overflow-hidden"
+                                    <button
+                                       onClick={() => scheduleProjectTime(activeProject)}
+                                       className="w-full rounded-xl bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)] md:w-auto"
                                     >
-                                       <div className="mt-4 space-y-3">
-                                          {activeProject.notes.map((note) => (
-                                             <div key={note.id} className="rounded-2xl border border-[var(--border-subtle)] bg-white p-4">
-                                                <div className="flex items-start justify-between gap-3">
-                                                   <div className="min-w-0">
-                                                      <p className="text-sm font-medium">{note.title}</p>
+                                       Add to Calendar
+                                    </button>
+                                 </div>
 
-                                                      <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{expandedNotePreviewIds.includes(note.id) ? note.body || note.summary : getShortPreview(note.summary || note.body, 180)}</p>
+                                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_150px_130px_140px]">
+                                    <input
+                                       value={projectTracking.calendarTaskTitle}
+                                       onChange={(event) =>
+                                          updateProjectTracking(activeProject, {
+                                             calendarTaskTitle: event.target.value,
+                                          })
+                                       }
+                                       placeholder="What task should this project schedule?"
+                                       className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                    />
+
+                                    <input
+                                       type="date"
+                                       value={projectTracking.calendarTaskDate}
+                                       onChange={(event) =>
+                                          updateProjectTracking(activeProject, {
+                                             calendarTaskDate: event.target.value,
+                                          })
+                                       }
+                                       className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                    />
+
+                                    <input
+                                       type="time"
+                                       value={projectTracking.calendarTaskTime}
+                                       onChange={(event) =>
+                                          updateProjectTracking(activeProject, {
+                                             calendarTaskTime: event.target.value,
+                                          })
+                                       }
+                                       className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                    />
+
+                                    <select
+                                       value={projectTracking.calendarTaskDurationMinutes}
+                                       onChange={(event) =>
+                                          updateProjectTracking(activeProject, {
+                                             calendarTaskDurationMinutes: Number(event.target.value),
+                                          })
+                                       }
+                                       className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                    >
+                                       <option value={15}>15 min</option>
+                                       <option value={30}>30 min</option>
+                                       <option value={45}>45 min</option>
+                                       <option value={60}>1 hour</option>
+                                       <option value={90}>1.5 hours</option>
+                                       <option value={120}>2 hours</option>
+                                    </select>
+                                 </div>
+                              </div>
+
+                              <div className="mb-4 rounded-2xl bg-white p-4">
+                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                       <div className="flex items-center gap-2">
+                                          <FileText size={18} />
+
+                                          <p className="font-medium">Project Materials</p>
+                                       </div>
+
+                                       <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Keep references, feedback, notes, and documents connected to this project.</p>
+                                    </div>
+
+                                    <button
+                                       onClick={() => setMaterialBuilderOpen((current) => !current)}
+                                       className="rounded-xl bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)]"
+                                    >
+                                       {materialBuilderOpen ? "Close" : "Add Material"}
+                                    </button>
+                                 </div>
+
+                                 <AnimatePresence initial={false}>
+                                    {materialBuilderOpen && (
+                                       <motion.div
+                                          initial={{
+                                             opacity: 0,
+                                             height: 0,
+                                          }}
+                                          animate={{
+                                             opacity: 1,
+                                             height: "auto",
+                                          }}
+                                          exit={{
+                                             opacity: 0,
+                                             height: 0,
+                                          }}
+                                          transition={{
+                                             duration: 0.2,
+                                          }}
+                                          className="overflow-hidden"
+                                       >
+                                          <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4">
+                                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                                <input
+                                                   value={materialTitle}
+                                                   onChange={(event) => setMaterialTitle(sanitizeLiveProjectTitle(event.target.value))}
+                                                   placeholder={materialGuidance.titlePlaceholder}
+                                                   className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                                />
+
+                                                <select
+                                                   value={materialType}
+                                                   onChange={(event) => handleMaterialTypeChange(event.target.value)}
+                                                   className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                                >
+                                                   <option value="Note">Note</option>
+                                                   <option value="Document">Document</option>
+                                                   <option value="Image">Image</option>
+                                                   <option value="Research">Research</option>
+                                                   <option value="Feedback">Feedback</option>
+                                                   <option value="Reference">Reference</option>
+                                                </select>
+                                             </div>
+
+                                             <div className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-3">
+                                                <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">{materialGuidance.inputLabel}</p>
+                                                <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">{materialGuidance.helperText}</p>
+                                             </div>
+
+                                             {materialType === "Image" && (
+                                                <div className="mt-3 rounded-xl border border-dashed border-[var(--border-subtle)] bg-white px-4 py-4 text-sm text-[var(--color-text-secondary)]">
+                                                   <div className="flex flex-col gap-3">
+                                                      <div>
+                                                         <p className="font-medium text-[var(--color-text-primary)]">Attach image</p>
+                                                         <p className="mt-1 leading-6">PNG, JPG, WEBP, or GIF up to about 1.2 MB. Local preview only for now — no dramatic cloud adventure.</p>
+                                                      </div>
+
+                                                      <input
+                                                         type="file"
+                                                         accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
+                                                         onChange={(event) => handleProjectMaterialImageFile(event.target.files?.[0])}
+                                                         className="w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm"
+                                                      />
+
+                                                      {materialImageDataUrl && (
+                                                         <div className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)]">
+                                                            <img src={materialImageDataUrl} alt={materialImageFileName || "Project material preview"} className="max-h-64 w-full object-contain" />
+
+                                                            <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                                               <p className="break-words text-xs text-[var(--color-text-secondary)]">{materialImageFileName || "Image attached"}</p>
+
+                                                               <button onClick={clearMaterialImageUpload} type="button" className="rounded-xl bg-white px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-surface)]">
+                                                                  Remove image
+                                                               </button>
+                                                            </div>
+                                                         </div>
+                                                      )}
+                                                   </div>
+                                                </div>
+                                             )}
+
+                                             {materialType === "Document" && (
+                                                <div className="mt-3 rounded-xl border border-dashed border-[var(--border-subtle)] bg-white px-4 py-4 text-sm text-[var(--color-text-secondary)]">
+                                                   <div className="flex flex-col gap-3">
+                                                      <div>
+                                                         <p className="font-medium text-[var(--color-text-primary)]">Attach document</p>
+                                                         <p className="mt-1 leading-6">
+                                                            PDF, TXT, Markdown, DOC, or DOCX up to about 1.8 MB. PDFs, text files, Markdown, and readable DOCX files open in ALLEVIN so users can click, scroll, and read. Older DOC files still attach as
+                                                            project files.
+                                                         </p>
+                                                      </div>
+
+                                                      <input
+                                                         type="file"
+                                                         accept="application/pdf,text/plain,text/markdown,.txt,.md,.markdown,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                                         onChange={(event) => handleProjectMaterialDocumentFile(event.target.files?.[0])}
+                                                         className="w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm"
+                                                      />
+
+                                                      {(materialDocumentFileName || materialDocumentText || materialDocumentDataUrl) && (
+                                                         <div className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)]">
+                                                            <div className="px-3 py-3">
+                                                               <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{materialDocumentFileName || "Document attached"}</p>
+                                                               <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{materialDocumentMimeType || "document"}</p>
+                                                            </div>
+
+                                                            {materialDocumentText && (
+                                                               <pre className="max-h-52 overflow-y-auto whitespace-pre-wrap break-words border-t border-[var(--border-subtle)] bg-white px-3 py-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+                                                                  {materialDocumentText}
+                                                               </pre>
+                                                            )}
+
+                                                            <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                                               <p className="text-xs text-[var(--color-text-secondary)]">{materialDocumentMimeType === "application/pdf" || materialDocumentText ? "Readable preview ready" : "Attached file saved"}</p>
+
+                                                               <button onClick={clearMaterialDocumentUpload} type="button" className="rounded-xl bg-white px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-surface)]">
+                                                                  Remove document
+                                                               </button>
+                                                            </div>
+                                                         </div>
+                                                      )}
+                                                   </div>
+                                                </div>
+                                             )}
+
+                                             <input
+                                                value={materialSource}
+                                                onChange={(event) => setMaterialSource(sanitizeProjectPlainText(event.target.value, PROJECT_SANITIZE_LIMITS.materialSource, { preserveEdges: true }))}
+                                                placeholder={materialGuidance.sourcePlaceholder}
+                                                className="mt-3 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                             />
+
+                                             <textarea
+                                                value={materialNotes}
+                                                onChange={(event) => setMaterialNotes(sanitizeLiveProjectBody(event.target.value))}
+                                                placeholder={materialGuidance.notesPlaceholder}
+                                                className="mt-3 min-h-[110px] w-full resize-none rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                                             />
+
+                                             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                <p className="text-xs leading-5 text-[var(--color-text-secondary)]">Materials stay with this project and can be selected as references in Canvas.</p>
+
+                                                <button onClick={() => createProjectMaterial(activeProject)} className="rounded-xl bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
+                                                   Attach Material
+                                                </button>
+                                             </div>
+                                          </div>
+                                       </motion.div>
+                                    )}
+                                 </AnimatePresence>
+
+                                 {activeProjectMaterials.length > 0 && (
+                                    <div className="mt-4 rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
+                                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                          <p className="text-sm font-medium">Material view</p>
+
+                                          <select
+                                             value={materialTypeFilter}
+                                             onChange={(event) => setMaterialTypeFilter(event.target.value as ProjectMaterialFilter)}
+                                             className="w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)] sm:w-[240px]"
+                                          >
+                                             {PROJECT_MATERIAL_FILTERS.map((filter) => (
+                                                <option key={filter} value={filter}>
+                                                   {filter} ({materialFilterCounts[filter] || 0})
+                                                </option>
+                                             ))}
+                                          </select>
+                                       </div>
+                                    </div>
+                                 )}
+
+                                 {activeProjectMaterials.length > 0 ? (
+                                    visibleProjectMaterials.length > 0 ? (
+                                       <div className="mt-4 grid grid-cols-1 gap-4">
+                                          {visibleProjectMaterials.map((material) => (
+                                             <div key={material.id} className="min-w-0 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
+                                                <div className="flex min-w-0 flex-col gap-4">
+                                                   <div className="min-w-0 flex-1">
+                                                      <div className="flex min-w-0 flex-wrap items-start gap-2">
+                                                         <span className="max-w-full break-words rounded-full bg-white px-3 py-1 text-xs font-medium leading-5 text-[var(--color-text-secondary)]">{material.type}</span>
+
+                                                         {material.source && <span className="max-w-full break-words rounded-full bg-white px-3 py-1 text-xs font-medium leading-5 text-[var(--color-text-secondary)]">{material.source}</span>}
+                                                      </div>
+
+                                                      <p className="mt-3 break-words font-medium leading-6">{material.title}</p>
+
+                                                      <p className="mt-2 break-words text-sm leading-6 text-[var(--color-text-secondary)]">{material.summary || getShortPreview(material.notes, 180)}</p>
+
+                                                      {material.interpretationSummary && (
+                                                         <div className="mt-3 rounded-2xl border border-[var(--border-subtle)] bg-white p-3">
+                                                            <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN read</p>
+                                                            <p className="mt-2 break-words text-sm leading-6 text-[var(--color-text-primary)]">{getShortPreview(material.interpretationSummary, 260)}</p>
+                                                            {material.interpretationNextStep && <p className="mt-2 break-words text-xs leading-5 text-[var(--color-text-secondary)]">Next: {getShortPreview(material.interpretationNextStep, 180)}</p>}
+                                                         </div>
+                                                      )}
+
+                                                      {material.type === "Image" && material.imageDataUrl && (
+                                                         <button
+                                                            type="button"
+                                                            onClick={() => setFullscreenImageMaterial(material)}
+                                                            className="mt-3 w-full overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-white text-left transition-opacity hover:opacity-90"
+                                                            aria-label={`Open ${material.title} full screen`}
+                                                         >
+                                                            <img src={material.imageDataUrl} alt={material.imageFileName || material.title || "Project image material"} className="max-h-48 w-full object-contain" />
+                                                         </button>
+                                                      )}
+
+                                                      {material.type === "Document" && (material.documentFileName || material.documentText || material.documentDataUrl) && (
+                                                         <button
+                                                            type="button"
+                                                            onClick={() => setFullscreenDocumentMaterial(material)}
+                                                            className="mt-3 w-full rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface)]"
+                                                            aria-label={`Open ${material.title} document reader`}
+                                                         >
+                                                            <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{material.documentFileName || material.title || "Project document"}</p>
+                                                            <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{isReadableProjectDocument(material) ? "Click to read" : "Attached document"}</p>
+                                                         </button>
+                                                      )}
                                                    </div>
 
-                                                   {compactText(note.body || note.summary).length > 180 && (
-                                                      <button onClick={() => toggleNotePreview(note.id)} className="w-full shrink-0 rounded-xl bg-[var(--color-bg)] px-3 py-2 text-xs font-medium sm:w-auto">
-                                                         {expandedNotePreviewIds.includes(note.id) ? "Less" : "Read more"}
+                                                   <div className="grid w-full min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
+                                                      <button
+                                                         onClick={() => toggleMaterialPreview(material.id)}
+                                                         className="min-h-10 rounded-xl bg-white px-3 py-2 text-center text-xs font-medium leading-5 transition-colors hover:bg-[var(--color-surface)]"
+                                                      >
+                                                         {expandedMaterialIds.includes(material.id) ? "Hide" : "View"}
                                                       </button>
-                                                   )}
+
+                                                      <button
+                                                         onClick={() => interpretProjectMaterial(activeProject, material)}
+                                                         disabled={activeMaterialInterpretId === material.id}
+                                                         className="min-h-10 rounded-xl bg-white px-3 py-2 text-center text-xs font-medium leading-5 transition-colors hover:bg-[var(--color-surface)] disabled:cursor-not-allowed disabled:opacity-60"
+                                                      >
+                                                         {activeMaterialInterpretId === material.id ? "Reading..." : material.interpretedAt ? "Re-read" : "Interpret"}
+                                                      </button>
+
+                                                      <button
+                                                         onClick={() => sendMaterialToCanvas(activeProject, material)}
+                                                         className="min-h-10 rounded-xl bg-white px-3 py-2 text-center text-xs font-medium leading-5 transition-colors hover:bg-[var(--color-surface)]"
+                                                      >
+                                                         Reference in Canvas
+                                                      </button>
+                                                      <button
+                                                         onClick={() => deleteProjectMaterial(material.id)}
+                                                         className="min-h-10 rounded-xl bg-white px-3 py-2 text-center text-xs font-medium leading-5 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)]"
+                                                      >
+                                                         Delete
+                                                      </button>
+                                                   </div>
                                                 </div>
+
+                                                {expandedMaterialIds.includes(material.id) && (
+                                                   <div className="mt-4 rounded-2xl bg-white p-4">
+                                                      <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Material Details</p>
+
+                                                      {material.type === "Image" && material.imageDataUrl && (
+                                                         <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)]">
+                                                            <button type="button" onClick={() => setFullscreenImageMaterial(material)} className="block w-full transition-opacity hover:opacity-90" aria-label={`Open ${material.title} full screen`}>
+                                                               <img src={material.imageDataUrl} alt={material.imageFileName || material.title || "Project image material"} className="max-h-[420px] w-full object-contain" />
+                                                            </button>
+                                                            {material.imageFileName && <p className="border-t border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">{material.imageFileName}</p>}
+                                                         </div>
+                                                      )}
+
+                                                      {material.type === "Document" && (material.documentFileName || material.documentText || material.documentDataUrl) && (
+                                                         <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)]">
+                                                            <button
+                                                               type="button"
+                                                               onClick={() => setFullscreenDocumentMaterial(material)}
+                                                               className="block w-full px-4 py-3 text-left transition-colors hover:bg-white"
+                                                               aria-label={`Open ${material.title} document reader`}
+                                                            >
+                                                               <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{material.documentFileName || material.title || "Project document"}</p>
+                                                               <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{isReadableProjectDocument(material) ? "Open reader" : "Attached document"}</p>
+                                                            </button>
+                                                         </div>
+                                                      )}
+
+                                                      {material.interpretationSummary && (
+                                                         <div className="mt-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
+                                                            <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN Interpretation</p>
+                                                            <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-primary)]">{material.interpretationSummary}</p>
+                                                            {material.interpretationUsefulContext && <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-secondary)]">{material.interpretationUsefulContext}</p>}
+                                                            {material.interpretationNextStep && (
+                                                               <p className="mt-3 whitespace-pre-wrap break-words text-sm font-medium leading-6 text-[var(--color-text-primary)]">Next move: {material.interpretationNextStep}</p>
+                                                            )}
+                                                         </div>
+                                                      )}
+
+                                                      <p className="mt-3 max-h-[320px] overflow-y-auto whitespace-pre-wrap break-words pr-2 text-sm leading-6 text-[var(--color-text-secondary)]">
+                                                         {material.notes || material.summary || "No extra details saved for this material yet."}
+                                                      </p>
+                                                   </div>
+                                                )}
                                              </div>
                                           ))}
                                        </div>
-                                    </motion.div>
+                                    ) : (
+                                       <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">No {materialTypeFilter.toLowerCase()} materials in this project yet.</div>
+                                    )
+                                 ) : (
+                                    <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">
+                                       No materials attached yet. Add notes, feedback, references, documents, or planning details so this project has context to work from.
+                                    </div>
                                  )}
-                              </AnimatePresence>
+                              </div>
                            </div>
                         );
                      })()}
                   </div>
                </div>
             ) : (
-               <div className="rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)] sm:p-5">No projects yet. Save work from Canvas and it will appear here.</div>
+               <div className="rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)] sm:p-5">No projects yet. Add a project here or save work from Canvas. Each project becomes its own home base.</div>
             )}
          </div>
 
-         {/* MK III simplified Projects: no confirmation queue. */}
+         <AnimatePresence>
+            {fullscreenImageMaterial?.imageDataUrl && (
+               <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Full screen project image"
+                  onClick={() => setFullscreenImageMaterial(null)}
+               >
+                  <div className="flex max-h-full w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                     <div className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:px-5">
+                        <div className="min-w-0">
+                           <p className="break-words text-sm font-semibold text-[var(--color-text-primary)]">{fullscreenImageMaterial.title}</p>
+                           {fullscreenImageMaterial.imageFileName && <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">{fullscreenImageMaterial.imageFileName}</p>}
+                        </div>
+
+                        <button
+                           type="button"
+                           onClick={() => setFullscreenImageMaterial(null)}
+                           className="shrink-0 rounded-xl bg-[var(--color-bg)] px-3 py-2 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)]"
+                        >
+                           Close
+                        </button>
+                     </div>
+
+                     <div className="flex max-h-[82vh] items-center justify-center overflow-auto bg-[var(--color-bg)] p-3 sm:p-5">
+                        <img src={fullscreenImageMaterial.imageDataUrl} alt={fullscreenImageMaterial.imageFileName || fullscreenImageMaterial.title || "Project image material"} className="max-h-[78vh] max-w-full object-contain" />
+                     </div>
+                  </div>
+               </motion.div>
+            )}
+         </AnimatePresence>
+
+         <AnimatePresence>
+            {fullscreenDocumentMaterial && (
+               <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Project document reader"
+                  onClick={() => setFullscreenDocumentMaterial(null)}
+               >
+                  <div className="flex max-h-full w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                     <div className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:px-5">
+                        <div className="min-w-0">
+                           <p className="break-words text-sm font-semibold text-[var(--color-text-primary)]">{fullscreenDocumentMaterial.title}</p>
+                           {fullscreenDocumentMaterial.documentFileName && <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">{fullscreenDocumentMaterial.documentFileName}</p>}
+                        </div>
+
+                        <button
+                           type="button"
+                           onClick={() => setFullscreenDocumentMaterial(null)}
+                           className="shrink-0 rounded-xl bg-[var(--color-bg)] px-3 py-2 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)]"
+                        >
+                           Close
+                        </button>
+                     </div>
+
+                     <div className="max-h-[82vh] overflow-auto bg-[var(--color-bg)] p-3 sm:p-5">
+                        {fullscreenDocumentMaterial.documentMimeType === "application/pdf" && fullscreenDocumentMaterial.documentDataUrl ? (
+                           <iframe
+                              title={fullscreenDocumentMaterial.documentFileName || fullscreenDocumentMaterial.title || "Project document"}
+                              src={fullscreenDocumentMaterial.documentDataUrl}
+                              className="h-[78vh] w-full rounded-2xl border border-[var(--border-subtle)] bg-white"
+                           />
+                        ) : fullscreenDocumentMaterial.documentText ? (
+                           <pre className="min-h-[70vh] whitespace-pre-wrap break-words rounded-2xl border border-[var(--border-subtle)] bg-white p-4 text-sm leading-7 text-[var(--color-text-secondary)]">{fullscreenDocumentMaterial.documentText}</pre>
+                        ) : (
+                           <div className="rounded-2xl border border-[var(--border-subtle)] bg-white p-5 text-sm leading-6 text-[var(--color-text-secondary)]">
+                              This document is attached to the project, but this file type does not have an in-app reader yet. PDF, TXT, and Markdown are the readable options for this build.
+                           </div>
+                        )}
+                     </div>
+                  </div>
+               </motion.div>
+            )}
+         </AnimatePresence>
       </motion.section>
    );
 }

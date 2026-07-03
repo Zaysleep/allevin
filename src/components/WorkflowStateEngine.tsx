@@ -7,7 +7,7 @@ import { Brain, Sparkles, Layers3, PenTool, Search, ArrowRightLeft, Activity, Ch
 import { useEffect, useState } from "react";
 
 // ========================================
-// Cognition Response Mode
+// Insight Guidance Style
 // ========================================
 
 type WorkflowState = "research" | "deep-work" | "planning" | "creative" | "calm" | "context-switching" | "balanced";
@@ -33,7 +33,7 @@ const COGNITION_RESET_STORAGE_KEY = "allevin-cognition-manual-reset";
 const COGNITION_ACTIVE_MODE_STORAGE_KEY = "allevin-cognition-active-response-mode";
 
 // ========================================
-// Mode Config
+// Style Options
 // ========================================
 
 const cognitionModes: CognitionModeConfig[] = [
@@ -41,7 +41,7 @@ const cognitionModes: CognitionModeConfig[] = [
       state: "balanced",
       label: "Balanced",
       shortLabel: "Steady replies",
-      description: "Best for normal project work. ALLEVIN gives steady, useful replies with one clear next move.",
+      description: "Best for everyday project work. ALLEVIN gives steady guidance, keeps the context clear, and suggests one useful next move.",
       example: "Next: choose the clearest move and keep going.",
       Icon: Activity,
    },
@@ -49,7 +49,7 @@ const cognitionModes: CognitionModeConfig[] = [
       state: "calm",
       label: "Calm",
       shortLabel: "Softer replies",
-      description: "Best when you want less pressure. ALLEVIN keeps replies softer, simpler, and easier to start.",
+      description: "Best when the project feels heavy or scattered. ALLEVIN keeps guidance softer, simpler, and easier to start.",
       example: "Small next move: pick one thing and keep it light.",
       Icon: Sparkles,
    },
@@ -57,7 +57,7 @@ const cognitionModes: CognitionModeConfig[] = [
       state: "deep-work",
       label: "Deep Work",
       shortLabel: "Short replies",
-      description: "Best when you need to lock in. ALLEVIN keeps replies short, direct, and limited to one move.",
+      description: "Best when you need to focus. ALLEVIN keeps guidance short, direct, and centered on one move.",
       example: "Focus move: do one clear action.",
       Icon: Brain,
    },
@@ -65,7 +65,7 @@ const cognitionModes: CognitionModeConfig[] = [
       state: "planning",
       label: "Planning",
       shortLabel: "Structured replies",
-      description: "Best when you need structure. ALLEVIN helps order the work before it expands.",
+      description: "Best when your project needs order. ALLEVIN helps turn notes, materials, and ideas into a clearer structure.",
       example: "Planning move: define the order, then act.",
       Icon: Layers3,
    },
@@ -73,7 +73,7 @@ const cognitionModes: CognitionModeConfig[] = [
       state: "creative",
       label: "Creative",
       shortLabel: "Idea-shaping replies",
-      description: "Best for writing, design, and early ideas. ALLEVIN helps shape the idea without over-organizing it.",
+      description: "Best for writing, design, and early ideas. ALLEVIN helps shape the work without over-organizing it too soon.",
       example: "Creative move: shape the idea without over-organizing it.",
       Icon: PenTool,
    },
@@ -81,7 +81,7 @@ const cognitionModes: CognitionModeConfig[] = [
       state: "research",
       label: "Research",
       shortLabel: "Source-aware replies",
-      description: "Best for studying, comparing, and gathering information. ALLEVIN keeps the question, source, and decision visible.",
+      description: "Best for research, references, and project materials. ALLEVIN keeps the question, source, and decision visible.",
       example: "Research move: clarify the question and next source.",
       Icon: Search,
    },
@@ -89,8 +89,8 @@ const cognitionModes: CognitionModeConfig[] = [
       state: "context-switching",
       label: "Context Switching",
       shortLabel: "Anchored replies",
-      description: "Best when you are jumping between things. ALLEVIN anchors the reply to one project and one move.",
-      example: "Anchor move: stay with one thread.",
+      description: "Best when you are moving between projects or tasks. ALLEVIN anchors guidance to one project, one reference point, and one next move.",
+      example: "Anchor move: stay with one project.",
       Icon: ArrowRightLeft,
    },
 ];
@@ -124,7 +124,7 @@ function buildStoredCognitionState(mode: CognitionModeConfig) {
       state: mode.state,
       label: mode.label,
       mood: mode.shortLabel,
-      momentum: "response-only",
+      momentum: "guidance-style",
       suggestion: mode.example.replace(/^(Next|Small next move|Focus move|Planning move|Creative move|Research move|Anchor move):\s*/i, ""),
       adapts: mode.description,
       responseOnly: true,
@@ -212,15 +212,15 @@ export default function WorkflowStateEngine() {
       >
          <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
-               <p className="text-sm text-[var(--color-text-secondary)]">ALLEVIN MK V</p>
+               <p className="text-sm text-[var(--color-text-secondary)]">Workspace guidance</p>
 
-               <h2 className="mt-1 text-3xl">Cognition</h2>
+               <h2 className="mt-1 text-3xl">Insights</h2>
 
-               <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">Choose the reply style that fits your current work.</p>
+               <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">Choose the style ALLEVIN should use when helping with your project.</p>
             </div>
 
             <div className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3">
-               <p className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Current style</p>
+               <p className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Selected style</p>
 
                <div className="mt-2 flex items-center gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-[var(--color-primary)]">
@@ -239,7 +239,7 @@ export default function WorkflowStateEngine() {
          <div className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-5">
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                <div>
-                  <p className="text-sm font-semibold">What ALLEVIN will do</p>
+                  <p className="text-sm font-semibold">How this style helps</p>
 
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">{activeMode.description}</p>
                </div>
@@ -315,9 +315,9 @@ export default function WorkflowStateEngine() {
          </div>
 
          <div className="mt-5 rounded-3xl border border-[var(--border-subtle)] bg-white p-5">
-            <p className="text-sm font-semibold">Try it in AIDock</p>
+            <p className="text-sm font-semibold">Use this with ALLEVIN</p>
 
-            <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Ask “what should I do next?” after choosing a style. ALLEVIN will keep the same project context and adjust the way it answers.</p>
+            <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Choose a style, then ask ALLEVIN for help with your project. Your project context stays the same; only the tone and structure of the guidance changes.</p>
          </div>
       </motion.section>
    );

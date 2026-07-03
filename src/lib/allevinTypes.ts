@@ -1,43 +1,75 @@
 // ========================================
-// ALLEVIN MK V Shared Types
+// ALLEVIN MK VI Shared Types
 // Purpose: central type definitions for ALLEVIN's
-// project memory, workflow movement, tasks, board,
-// calendar context, approvals, and exports.
+// internal project workspace: Projects, Canvas,
+// Project Materials, Calendar, Cognition, and AIDock.
+//
+// Note:
+// A few legacy values remain for local-storage compatibility
+// so older saved MK V/MK VI project records do not break.
+// User-facing language should stay focused on Projects,
+// Canvas, Materials, and Calendar.
 // ========================================
 
-export type AllevinSource = "manual" | "canvas" | "task" | "board" | "thread-recovery" | "calendar" | "integration" | "google-docs" | "system" | "research" | "notes";
+export type AllevinSource =
+   | "manual"
+   | "canvas"
+   | "task"
+   | "board" // Legacy compatibility: older saved project-progress records.
+   | "thread-recovery" // Legacy compatibility: older saved recovery records.
+   | "calendar"
+   | "integration" // Legacy compatibility: older internal project-save records.
+   | "projects"
+   | "materials"
+   | "aidock"
+   | "system"
+   | "research"
+   | "notes";
 
-export type AllevinDestination = "canvas" | "task" | "board" | "thread-recovery" | "calendar" | "notes" | "integrations" | "google-docs" | "system";
+export type AllevinDestination =
+   | "canvas"
+   | "task"
+   | "board" // Legacy compatibility: route to Projects in user-facing logic.
+   | "thread-recovery" // Legacy compatibility: route to Projects in user-facing logic.
+   | "calendar"
+   | "notes"
+   | "integrations" // Legacy compatibility: current user-facing label is Projects.
+   | "projects"
+   | "materials"
+   | "cognition"
+   | "system";
 
-export type AllevinProjectStage = "idea" | "drafting" | "tasking" | "tracking" | "reviewing" | "preserved" | "exporting" | "exported" | "completed" | "paused" | "unknown";
+export type AllevinProjectStage = "idea" | "drafting" | "tasking" | "tracking" | "reviewing" | "preserved" | "material" | "completed" | "paused" | "unknown";
 
-export type AllevinProjectStatus = "active" | "ready" | "paused" | "completed" | "exported" | "archived" | "deleted" | "unknown";
+export type AllevinProjectStatus = "active" | "ready" | "paused" | "completed" | "archived" | "deleted" | "unknown";
 
 export type AllevinPriority = "low" | "medium" | "high";
 
+// Legacy compatibility only. Board UI was removed in MK VI, but older stored
+// records may still contain lane values.
 export type AllevinBoardLane = "backlog" | "active" | "review" | "complete";
 
-export type AllevinWorkflowActionType = "send-to-canvas" | "send-to-task" | "send-to-board" | "prepare-integration" | "create-google-doc" | "custom";
+export type AllevinWorkflowActionType = "send-to-canvas" | "send-to-task" | "send-to-calendar" | "save-to-projects" | "save-material" | "custom";
 
-export type AllevinCalendarEventSource = "local" | "google-calendar" | "demo" | "aidock-direct-schedule";
+export type AllevinCalendarEventSource = "local" | "demo" | "aidock-direct-schedule";
 
 export type AllevinCalendarRepeat = "none" | "daily" | "weekly" | "monthly" | "yearly";
 
 export type AllevinCalendarEventStatus = "upcoming" | "active" | "past";
 
-export const ALLEVIN_SOURCES: AllevinSource[] = ["manual", "canvas", "task", "board", "thread-recovery", "calendar", "integration", "google-docs", "system", "research", "notes"];
+export const ALLEVIN_SOURCES: AllevinSource[] = ["manual", "canvas", "task", "board", "thread-recovery", "calendar", "integration", "projects", "materials", "aidock", "system", "research", "notes"];
 
-export const ALLEVIN_DESTINATIONS: AllevinDestination[] = ["canvas", "task", "board", "thread-recovery", "calendar", "notes", "integrations", "google-docs", "system"];
+export const ALLEVIN_DESTINATIONS: AllevinDestination[] = ["canvas", "task", "board", "thread-recovery", "calendar", "notes", "integrations", "projects", "materials", "cognition", "system"];
 
-export const ALLEVIN_PROJECT_STAGES: AllevinProjectStage[] = ["idea", "drafting", "tasking", "tracking", "reviewing", "preserved", "exporting", "exported", "completed", "paused", "unknown"];
+export const ALLEVIN_PROJECT_STAGES: AllevinProjectStage[] = ["idea", "drafting", "tasking", "tracking", "reviewing", "preserved", "material", "completed", "paused", "unknown"];
 
-export const ALLEVIN_PROJECT_STATUSES: AllevinProjectStatus[] = ["active", "ready", "paused", "completed", "exported", "archived", "deleted", "unknown"];
+export const ALLEVIN_PROJECT_STATUSES: AllevinProjectStatus[] = ["active", "ready", "paused", "completed", "archived", "deleted", "unknown"];
 
 export const ALLEVIN_PRIORITIES: AllevinPriority[] = ["low", "medium", "high"];
 
 export const ALLEVIN_BOARD_LANES: AllevinBoardLane[] = ["backlog", "active", "review", "complete"];
 
-export const ALLEVIN_CALENDAR_EVENT_SOURCES: AllevinCalendarEventSource[] = ["local", "google-calendar", "demo", "aidock-direct-schedule"];
+export const ALLEVIN_CALENDAR_EVENT_SOURCES: AllevinCalendarEventSource[] = ["local", "demo", "aidock-direct-schedule"];
 
 export const ALLEVIN_CALENDAR_REPEATS: AllevinCalendarRepeat[] = ["none", "daily", "weekly", "monthly", "yearly"];
 
@@ -85,7 +117,7 @@ export interface AllevinMemoryMeta {
 
 export interface AllevinProjectEvent {
    id: string;
-   type: "created" | "updated" | "moved" | "approved" | "canceled" | "exported" | "recovered" | "paused" | "deleted" | "note" | "calendar" | "system";
+   type: "created" | "updated" | "moved" | "approved" | "canceled" | "recovered" | "paused" | "deleted" | "note" | "calendar" | "material" | "system";
    title: string;
    summary: string;
    source: AllevinSource;
@@ -154,6 +186,7 @@ export interface AllevinTask {
    completedAt?: number;
 }
 
+// Legacy compatibility only. The user-facing Board was removed in MK VI.
 export interface AllevinBoardItem {
    id: string;
    workflowId: string;
@@ -224,11 +257,11 @@ export interface AllevinWorkflowAction {
    updatedAt?: number;
 }
 
-export interface AllevinExportObject {
+export interface AllevinProjectMaterialObject {
    id: string;
    title: string;
    body: string;
-   templateType: "project-summary" | "meeting-notes" | "task-plan" | "research-brief" | "ux-case-study" | "accessibility-report" | "school-draft" | "general";
+   materialType: "project-summary" | "meeting-notes" | "task-plan" | "research-brief" | "ux-case-study" | "accessibility-report" | "school-draft" | "general";
    workflowId?: string;
    sourceTitle?: string;
    sourceContent?: string;

@@ -6,21 +6,19 @@ import { useEffect, useState } from "react";
 
 import type { ElementType } from "react";
 
-import { House, NotebookPen, FolderKanban, CalendarDays, BrainCircuit } from "lucide-react";
+import { House, NotebookPen, FolderKanban, CalendarDays, Sparkles } from "lucide-react";
 
 import { useWorkspace, type WorkspaceSystemStatus } from "@/components/WorkspaceContext";
 
 // ========================================
-// ALLEVIN MK V Sidebar
+// ALLEVIN MK VI Sidebar
 // Purpose:
-// Product-shell navigation for the simplified
-// one-stop-shop workspace.
-// Keeps Sidebar active state synced when
-// navigation happens from Sticky Nav, Cmd+K,
-// AIDock, Projects, or product events.
+// Main navigation for the project workspace.
+// Projects hold the work, Canvas is for active writing,
+// Calendar shows time blocks, and Insights keeps support available.
 // ========================================
 
-type ProductModuleId = "home" | "canvas" | "tasks" | "board" | "recovery" | "control" | "calendar" | "integrations" | "advanced";
+type ProductModuleId = "home" | "canvas" | "calendar" | "integrations" | "advanced";
 
 type WorkspaceView = "home" | "focus" | "workspace" | "insights" | "integrations";
 
@@ -47,7 +45,7 @@ interface NavItem {
 const ACTIVE_PRODUCT_MODULE_STORAGE_KEY = "allevin-active-product-module";
 
 // ========================================
-// MK V Build 6 — Sidebar Route Sanitization
+// MK VI — Sidebar Route Sanitization
 // ========================================
 
 const SIDEBAR_SANITIZE_LIMITS = {
@@ -107,16 +105,7 @@ const PRODUCT_NAV_EVENT_NAMES = [
    "allevin-nav-module-change",
 ];
 
-const WORKFLOW_EVENT_NAMES = [
-   "allevin-send-to-canvas",
-   "allevin-send-to-task",
-   "allevin-send-to-board",
-   "allevin-prepare-integration",
-   "allevin-request-workflow-action",
-   "allevin-open-workflow-control",
-   "allevin-calendar-readback",
-   "allevin-internal-integration-suggestion",
-];
+const WORKFLOW_EVENT_NAMES = ["allevin-send-to-canvas", "allevin-send-to-calendar", "allevin-calendar-readback", "allevin-internal-integration-suggestion"];
 
 // ========================================
 // Navigation
@@ -140,22 +129,6 @@ const navItems: NavItem[] = [
    },
 
    {
-      label: "Canvas",
-
-      icon: NotebookPen,
-
-      moduleId: "canvas",
-
-      targetId: "work-area",
-
-      workspaceView: "focus",
-
-      systemStatus: "focused-work-active",
-
-      assistantCue: "Canvas",
-   },
-
-   {
       label: "Projects",
 
       icon: FolderKanban,
@@ -168,7 +141,23 @@ const navItems: NavItem[] = [
 
       systemStatus: "integration-ready",
 
-      assistantCue: "Projects",
+      assistantCue: "Project home base",
+   },
+
+   {
+      label: "Canvas",
+
+      icon: NotebookPen,
+
+      moduleId: "canvas",
+
+      targetId: "work-area",
+
+      workspaceView: "focus",
+
+      systemStatus: "focused-work-active",
+
+      assistantCue: "Active project work",
    },
 
    {
@@ -184,13 +173,13 @@ const navItems: NavItem[] = [
 
       systemStatus: "schedule-context-active",
 
-      assistantCue: "Calendar",
+      assistantCue: "Schedule reference",
    },
 
    {
-      label: "Cognition",
+      label: "Insights",
 
-      icon: BrainCircuit,
+      icon: Sparkles,
 
       moduleId: "advanced",
 
@@ -200,7 +189,7 @@ const navItems: NavItem[] = [
 
       systemStatus: "system-observing",
 
-      assistantCue: "Cognition",
+      assistantCue: "Workspace insights",
    },
 ];
 
@@ -211,9 +200,7 @@ const navItems: NavItem[] = [
 function isProductModuleId(value?: string): value is ProductModuleId {
    const cleanValue = sanitizeSidebarRouteValue(value);
 
-   return (
-      cleanValue === "home" || cleanValue === "canvas" || cleanValue === "tasks" || cleanValue === "board" || cleanValue === "recovery" || cleanValue === "control" || cleanValue === "calendar" || cleanValue === "integrations" || cleanValue === "advanced"
-   );
+   return cleanValue === "home" || cleanValue === "canvas" || cleanValue === "calendar" || cleanValue === "integrations" || cleanValue === "advanced";
 }
 
 function getNavItemByModule(moduleId?: string) {
@@ -231,18 +218,11 @@ function getModuleFromWorkflowEvent(eventName: string): ProductModuleId | null {
       case "allevin-send-to-canvas":
          return "canvas";
 
-      case "allevin-send-to-task":
-      case "allevin-send-to-board":
-         return "integrations";
-
-      case "allevin-prepare-integration":
-         return "integrations";
-
+      case "allevin-send-to-calendar":
       case "allevin-calendar-readback":
          return "calendar";
 
-      case "allevin-request-workflow-action":
-      case "allevin-open-workflow-control":
+      case "allevin-internal-integration-suggestion":
          return "integrations";
 
       default:
@@ -262,24 +242,14 @@ function getModuleFromEventDetail(detail: unknown): ProductModuleId | null {
    for (const rawValue of possibleValues) {
       const value = typeof rawValue === "string" ? sanitizeSidebarRouteValue(rawValue) : rawValue;
 
-      if (typeof value === "string" && (value === "recovery" || value === "control")) {
-         return "integrations";
-      }
-
-      if (typeof value === "string" && (value === "tasks" || value === "board" || value === "recovery" || value === "control")) {
+      // Legacy aliases from older builds should land in Projects instead of
+      // reopening removed Task, Board, Recovery, or Workflow Control layers.
+      if (typeof value === "string" && ["task", "tasks", "board", "recovery", "control", "notes", "integration"].includes(value)) {
          return "integrations";
       }
 
       if (typeof value === "string" && isProductModuleId(value)) {
          return value;
-      }
-
-      if (value === "task") {
-         return "integrations";
-      }
-
-      if (value === "notes" || value === "integration") {
-         return "integrations";
       }
 
       if (value === "cognition" || value === "advanced") {
@@ -309,27 +279,15 @@ function getModuleFromButtonText(value?: string | null): ProductModuleId | null 
    if (cleanValue.includes("home")) return "home";
    if (cleanValue.includes("canvas")) return "canvas";
 
-   // Projects command descriptions mention Notes, Tasks, and Calendar.
-   // Detect internal/output language before task/calendar so Sidebar stays synced.
-   if (
-      cleanValue.includes("projects") ||
-      cleanValue.includes("project hub") ||
-      cleanValue.includes("project workspace") ||
-      cleanValue.includes("internal output") ||
-      cleanValue.includes("internal hub") ||
-      cleanValue.includes("internal") ||
-      cleanValue.includes("output") ||
-      cleanValue.includes("integration") ||
-      cleanValue.includes("export")
-   )
-      return "integrations";
+   // Project-related language should route back to Projects.
+   if (cleanValue.includes("projects") || cleanValue.includes("project hub") || cleanValue.includes("project workspace") || cleanValue.includes("materials") || cleanValue.includes("reference") || cleanValue.includes("integration")) return "integrations";
 
-   if (cleanValue.includes("task")) return "integrations";
+   if (cleanValue.includes("task") || cleanValue.includes("next action")) return "integrations";
    if (cleanValue.includes("board")) return "integrations";
    if (cleanValue.includes("recover")) return "integrations";
    if (cleanValue.includes("control") || cleanValue.includes("action") || cleanValue.includes("review")) return "integrations";
    if (cleanValue.includes("calendar") || cleanValue.includes("schedule")) return "calendar";
-   if (cleanValue.includes("cognition") || cleanValue.includes("advanced") || cleanValue.includes("workflow history") || cleanValue.includes("intel") || cleanValue.includes("insight")) return "advanced";
+   if (cleanValue.includes("insights") || cleanValue.includes("advanced") || cleanValue.includes("workflow history") || cleanValue.includes("overview")) return "advanced";
 
    return null;
 }
@@ -348,10 +306,6 @@ function getStoredActiveProductModule(): ProductModuleId | null {
    }
 
    const stored = sanitizeSidebarRouteValue(localStorage.getItem(ACTIVE_PRODUCT_MODULE_STORAGE_KEY));
-
-   if (stored === "recovery" || stored === "control") {
-      return "integrations";
-   }
 
    switch (stored) {
       case "home":
@@ -503,7 +457,7 @@ export default function Sidebar() {
    // ========================================
    // Listen for product-module navigation
    // from Sticky Nav, AIDock, Cmd+K,
-   // workflow events, and storage sync.
+   // project events, and storage sync.
    // ========================================
 
    useEffect(() => {
@@ -718,7 +672,7 @@ export default function Sidebar() {
          {/* Navigation */}
 
          <nav
-            aria-label="Primary Navigation"
+            aria-label="Main navigation"
             className="
                grid
                w-full
@@ -847,7 +801,7 @@ export default function Sidebar() {
 
                lg:flex
             "
-            title={activeItem?.assistantCue || "Workspace ready"}
+            title={activeItem?.assistantCue || "Workspace"}
          >
             <span
                className="
@@ -869,7 +823,7 @@ export default function Sidebar() {
                   text-[var(--color-text-secondary)]
                "
             >
-               MK V
+               MK VI
             </span>
          </div>
       </aside>

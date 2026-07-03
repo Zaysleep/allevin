@@ -16,7 +16,7 @@ export type AdaptationStage = "passive" | "supportive" | "active" | "protective"
 
 // ========================================
 // Environment Profile
-// MK II Finale Personality Layer
+// MK VI Adaptive Guidance Layer
 // ========================================
 
 export interface EnvironmentProfile {
@@ -95,7 +95,7 @@ function getEnvironmentProfile({
 
    stage: AdaptationStage;
 }): EnvironmentProfile {
-   const approvalReminder = "Prepared actions will appear in Workflow Control for review.";
+   const approvalReminder = "ALLEVIN will keep guidance review-based and will not make changes without the user choosing the action.";
 
    if (environment === "deep-focus") {
       return {
@@ -121,13 +121,13 @@ function getEnvironmentProfile({
 
          stage,
 
-         label: stage === "protective" ? "Protective Recovery" : "Recovery",
+         label: stage === "protective" ? "Protective Calm" : "Calm Support",
 
          systemTone: "Calm",
 
-         assistantCue: "We can slow this down. I’ll reduce pressure and keep the next step small.",
+         assistantCue: "We can slow this down. I’ll keep the project grounded and the next step small.",
 
-         uiGuidance: "Simplify choices, reduce visual density, and support resume/recovery behavior.",
+         uiGuidance: "Simplify choices, reduce visual density, and help the user return to the active project without extra clutter.",
 
          approvalReminder,
       };
@@ -145,7 +145,7 @@ function getEnvironmentProfile({
 
          assistantCue: "I’ll keep the workspace quiet and help you move one step at a time.",
 
-         uiGuidance: "Use gentle prompts, fewer choices, and recovery-friendly language.",
+         uiGuidance: "Use gentle prompts, fewer choices, and low-pressure project guidance.",
 
          approvalReminder,
       };
@@ -160,9 +160,9 @@ function getEnvironmentProfile({
 
       systemTone: "Balanced",
 
-      assistantCue: "Workspace stable. I’m observing signals and ready to help when needed.",
+      assistantCue: "Workspace ready. I’m watching for useful project signals and ready to guide when needed.",
 
-      uiGuidance: "Maintain normal layout, keep system feedback subtle, and keep the workspace easy to continue.",
+      uiGuidance: "Maintain the normal layout, keep system feedback subtle, and keep Projects, Canvas, Materials, and Calendar easy to continue.",
 
       approvalReminder,
    };
@@ -257,7 +257,7 @@ export function EnvironmentProvider({ children }: { children: ReactNode }) {
             environment: "standard",
             intensity: 0,
             message: null,
-            summary: "Cognition reset is active. ALLEVIN is staying in Balanced workspace mode.",
+            summary: "Cognition reset is active. ALLEVIN is staying in Balanced guidance mode.",
          });
       }
 
@@ -364,7 +364,7 @@ export function EnvironmentProvider({ children }: { children: ReactNode }) {
 
    function buildSignalSummary(counts: Record<string, number>, activeCategories: string[]) {
       if (!activeCategories.length) {
-         return "No strong workspace pattern detected. ALLEVIN is staying in standard observation mode.";
+         return "No strong workspace pattern detected. ALLEVIN is staying in balanced guidance mode.";
       }
 
       const readable = activeCategories.map((category) => `${category}: ${counts[category] || 0}`).join(" · ");
@@ -382,7 +382,7 @@ export function EnvironmentProvider({ children }: { children: ReactNode }) {
             environment: "standard",
             intensity: 0,
             message: null,
-            summary: "Cognition reset is active. ALLEVIN is staying in Balanced workspace mode.",
+            summary: "Cognition reset is active. ALLEVIN is staying in Balanced guidance mode.",
          });
 
          return;
@@ -474,7 +474,7 @@ export function EnvironmentProvider({ children }: { children: ReactNode }) {
       }
 
       // ========================================
-      // Protective Recovery
+      // Protective Calm
       // True overload / fragmentation only.
       // ========================================
 
@@ -484,7 +484,7 @@ export function EnvironmentProvider({ children }: { children: ReactNode }) {
 
             intensity: Math.max(calculatedIntensity, 82),
 
-            message: "Protective Recovery is active. ALLEVIN is reducing cognitive pressure, simplifying choices, and keeping the next move small.",
+            message: "Protective Calm is active. ALLEVIN is reducing pressure, simplifying choices, and keeping the next project move small.",
 
             summary: nextSignalSummary,
 
@@ -495,7 +495,7 @@ export function EnvironmentProvider({ children }: { children: ReactNode }) {
       }
 
       // ========================================
-      // Active Recovery
+      // Active Calm Support
       // ========================================
 
       if (load?.state === "Elevated" || recoveryDominant || counts.overload >= 2) {
@@ -504,7 +504,7 @@ export function EnvironmentProvider({ children }: { children: ReactNode }) {
 
             intensity: Math.max(calculatedIntensity, 62),
 
-            message: "Recovery support is active. ALLEVIN will lower pressure and help you continue without rebuilding context.",
+            message: "Calm support is active. ALLEVIN will lower pressure and help you continue the project without rebuilding context.",
 
             summary: nextSignalSummary,
          });
@@ -522,7 +522,7 @@ export function EnvironmentProvider({ children }: { children: ReactNode }) {
 
             intensity: Math.max(calculatedIntensity, 40),
 
-            message: "Calm environment enabled. ALLEVIN will keep the workspace quiet and guide one step at a time.",
+            message: "Calm guidance is enabled. ALLEVIN will keep the workspace quiet and guide one project step at a time.",
 
             summary: nextSignalSummary,
          });
@@ -540,7 +540,7 @@ export function EnvironmentProvider({ children }: { children: ReactNode }) {
 
             intensity: Math.max(calculatedIntensity, 34),
 
-            message: "Supportive adaptation enabled. ALLEVIN is monitoring workflow signals and preparing subtle workspace adjustments.",
+            message: "Supportive guidance is active. ALLEVIN is watching project signals and keeping adjustments subtle.",
 
             summary: nextSignalSummary,
          });

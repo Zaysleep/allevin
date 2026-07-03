@@ -8,14 +8,14 @@ import { upsertProjectMemory } from "@/lib/allevinProjectMemory";
 
 import { useWorkspace } from "@/components/WorkspaceContext";
 
-import { CalendarDays, Clock3, MapPin, NotebookPen, RefreshCcw, Sparkles, ChevronDown, Plus, Trash2, CheckCircle2 } from "lucide-react";
+import { CalendarDays, Clock3, MapPin, ChevronDown, Plus, Trash2 } from "lucide-react";
 
 // ========================================
 // ALLEVIN Calendar
 // Purpose:
-// Simple schedule layer for events and event notes.
-// Calendar stays inside ALLEVIN and does not push work
-// into Canvas or tasks by default.
+// Simple schedule layer for project time blocks and events.
+// Calendar stays inside ALLEVIN as a clean schedule view,
+// while project notes and materials stay with Projects/Canvas.
 // ========================================
 
 type CalendarEventStatus = "upcoming" | "active" | "completed";
@@ -39,7 +39,7 @@ interface AllevinCalendarEvent {
 
    createdAt: number;
 
-   // MK III calendar context metadata
+   // Calendar connection details
    sourceTitle?: string;
 
    sourceContent?: string;
@@ -170,9 +170,8 @@ const CALENDAR_EVENTS_UPDATED_EVENT = "allevin-calendar-events-updated";
 const APPROVED_INTERNAL_INTEGRATION_HANDLED_KEY = "allevin-calendar-approved-internal-integration-handled";
 
 // ========================================
-// MK V Build 6 — Calendar Sanitization Parameters
-// Calendar data can come from manual input, AIDock, Projects, or storage.
-// Treat every field as untrusted before rendering or saving.
+// Calendar text limits
+// Calendar data can come from manual input, ALLEVIN, Projects, or saved browser data.
 // ========================================
 
 const CALENDAR_SANITIZE_LIMITS = {
@@ -1027,7 +1026,7 @@ function saveStoredNotes(notes: CalendarEventNote[]) {
 
 function buildEventContext(event: AllevinCalendarEvent, note?: string) {
    return `
-Calendar Event
+Event Details
 
 Title:
 ${event.title}
@@ -1039,31 +1038,28 @@ Duration: ${event.allDay ? "All day" : getDurationLabel(event.startTime, event.e
 Repeat: ${getRepeatLabel(event.repeat)}
 
 Location:
-${event.location || "No location provided."}
+${event.location || "No location added."}
 
 Description:
-${event.description || "No description provided."}
+${event.description || "No description added."}
 
-Project Context:
-${event.sourceContent || event.workingSummary || event.description || "No linked project context provided."}
+Project notes:
+${event.sourceContent || event.workingSummary || event.description || "No project notes added yet."}
 
 Priority:
 ${event.priority || "medium"}
 
-Latest Movement:
-${event.latestMovement || "Calendar event created or selected"}
+Event note:
+${note || "No note saved yet."}
 
-ALLEVIN Note:
-${note || "No note captured yet."}
-
-Suggested Next Step:
+Suggested next step:
 ${event.recommendedNextAction || "Check this event, capture useful notes, and keep the schedule clear."}
    `.trim();
 }
 
 function buildCalendarCheckNoteMemoryBody(event: AllevinCalendarEvent, note: string) {
    return `
-Calendar Event Note
+Calendar Note
 
 Event:
 ${event.title}
@@ -1073,19 +1069,16 @@ ${getDateLabel(event.startTime)}
 ${getShortTimeLabel(event.startTime)} - ${getShortTimeLabel(event.endTime)}
 
 Location:
-${event.location || "No location provided."}
+${event.location || "No location added."}
 
-Project Context:
-${event.sourceContent || event.workingSummary || event.description || "No linked project context provided."}
+Project notes:
+${event.sourceContent || event.workingSummary || event.description || "No project notes added yet."}
 
 Saved Note:
 ${note}
 
-Latest Movement:
-Calendar → Event Notes
-
-Recommended Next Step:
-Keep this note attached to the event, then continue from Projects or Canvas when the next action is clear.
+Suggested next step:
+Keep this note with the event, then continue in Projects or Canvas when you are ready.
    `.trim();
 }
 
@@ -1188,7 +1181,7 @@ function buildCalendarImportFromApprovedIntegration(payload: ApprovedInternalInt
       originProjectsItemId: payload.originProjectsItemId || payload.originBoardItemId || payload.id,
       priority: "medium",
       projectStage: "scheduled",
-      recommendedNextAction: action || "Use this block for the project action.",
+      recommendedNextAction: action || "Use this block for the project work.",
       repeat: "none",
    };
 }
@@ -1231,6 +1224,8 @@ export default function CalendarIntegrationPanel() {
    const [notesOpen, setNotesOpen] = useState(false);
 
    const [manualOpen, setManualOpen] = useState(false);
+
+   const [expandedEventIds, setExpandedEventIds] = useState<string[]>([]);
 
    const [notice, setNotice] = useState("");
 
@@ -1390,11 +1385,11 @@ export default function CalendarIntegrationPanel() {
 
          syncCalendarStatus("schedule-context-active");
 
-         showNotice("Live calendar loaded");
+         showNotice("Connected calendar loaded");
       } catch {
          refreshCalendar();
 
-         showNotice("Using local calendar");
+         showNotice("Showing saved calendar");
       }
    }
 
@@ -1469,7 +1464,7 @@ export default function CalendarIntegrationPanel() {
 
       syncCalendarStatus("schedule-context-active");
 
-      showNotice("Event selected");
+      showNotice("Event opened");
    }
 
    function createStableCalendarWorkflowId(title: string, fallbackId?: string) {
@@ -1522,7 +1517,7 @@ export default function CalendarIntegrationPanel() {
 
          syncCalendarStatus("schedule-context-active");
 
-         showNotice("Calendar event created");
+         showNotice("Event created");
 
          return;
       }
@@ -1530,7 +1525,7 @@ export default function CalendarIntegrationPanel() {
       const cleanTitle = sanitizeCalendarTitle(payload.title);
 
       if (!cleanTitle) {
-         showNotice("Calendar title missing");
+         showNotice("Add a calendar title");
          return;
       }
 
@@ -1539,7 +1534,7 @@ export default function CalendarIntegrationPanel() {
       const endTime = getSafeEndTime(startTime, typeof payload.endTime === "number" && isValidCalendarTimestamp(payload.endTime) ? payload.endTime : null);
 
       if (!isValidCalendarTimestamp(startTime) || !isValidCalendarTimestamp(endTime) || endTime <= startTime || endTime - startTime > 24 * 60 * 60000) {
-         showNotice("Check event time");
+         showNotice("Check the start and end time");
 
          return;
       }
@@ -1564,7 +1559,7 @@ export default function CalendarIntegrationPanel() {
          priority: payload.priority || "medium",
          projectStage: payload.projectStage || "scheduled",
          latestMovement: "ALLEVIN → Calendar",
-         recommendedNextAction: sanitizeCalendarPlainText(payload.recommendedNextAction, 1000) || "Use this scheduled block for the calendar task.",
+         recommendedNextAction: sanitizeCalendarPlainText(payload.recommendedNextAction, 1000) || "Use this scheduled block for the planned work.",
          allDay: payload.allDay === true,
          repeat: payload.repeat || "none",
 
@@ -1584,9 +1579,9 @@ export default function CalendarIntegrationPanel() {
       setSelectedDayDate(getStartOfDay(calendarEvent.startTime));
       setVisibleMonthDate(new Date(new Date(calendarEvent.startTime).getFullYear(), new Date(calendarEvent.startTime).getMonth(), 1).getTime());
       setNoteDraft("");
-      logCalendarWorkflowEvent(calendarEvent, `Calendar event created from ALLEVIN context: ${calendarEvent.title}`);
+      logCalendarWorkflowEvent(calendarEvent, `Event created from ALLEVIN context: ${calendarEvent.title}`);
       syncCalendarStatus("schedule-context-active");
-      showNotice("Calendar event created");
+      showNotice("Event created");
    }
 
    function addManualEvent() {
@@ -1613,7 +1608,7 @@ export default function CalendarIntegrationPanel() {
       const endTime = getSafeEndTime(startTime, parsedEndTime);
 
       if (!isValidCalendarTimestamp(startTime) || !isValidCalendarTimestamp(endTime) || endTime <= startTime || endTime - startTime > 24 * 60 * 60000) {
-         showNotice("Check event time");
+         showNotice("Check the start and end time");
 
          return;
       }
@@ -1667,7 +1662,7 @@ export default function CalendarIntegrationPanel() {
 
          latestMovement: "Manual → Calendar",
 
-         recommendedNextAction: "Add notes to this event as needed.",
+         recommendedNextAction: "Add notes to this event if needed.",
 
          allDay: newEventAllDay,
 
@@ -1716,11 +1711,11 @@ export default function CalendarIntegrationPanel() {
 
       setManualOpen(false);
 
-      logCalendarWorkflowEvent(newEvent, `Manual calendar event created: ${newEvent.title}`);
+      logCalendarWorkflowEvent(newEvent, `Calendar event created: ${newEvent.title}`);
 
       syncCalendarStatus("schedule-context-active");
 
-      showNotice(newEventRepeat && newEventRepeat !== "none" ? "Recurring event created" : "Event created");
+      showNotice(newEventRepeat && newEventRepeat !== "none" ? "Repeating event created" : "Event created");
    }
 
    function getRecurringDeleteChoice(event: AllevinCalendarEvent) {
@@ -1730,7 +1725,7 @@ export default function CalendarIntegrationPanel() {
 
       const intervalLabel = getRepeatIntervalLabel(event.repeat);
 
-      const choice = window.prompt(`Delete recurring event "${event.title}"?\n\nType one option:\n1 = This event only\n2 = This and future ${intervalLabel ? `${intervalLabel}s` : "events"}\n3 = Entire series`, "1");
+      const choice = window.prompt(`Delete repeating event "${event.title}"?\n\nType one option:\n1 = Only this event\n2 = This and future ${intervalLabel ? `${intervalLabel}s` : "events"}\n3 = The full series`, "1");
 
       if (choice === "2") {
          return "future";
@@ -1763,14 +1758,14 @@ export default function CalendarIntegrationPanel() {
       const eventToDelete = events.find((event) => event.id === eventId);
 
       if (!eventToDelete) {
-         showNotice("Event not found");
+         showNotice("Event was not found");
 
          return;
       }
 
       const deleteMode = getRecurringDeleteChoice(eventToDelete);
 
-      const confirmed = window.confirm(deleteMode === "single" ? `Delete "${eventToDelete.title}"?` : deleteMode === "future" ? `Delete "${eventToDelete.title}" and future events in this series?` : `Delete the entire "${eventToDelete.title}" series?`);
+      const confirmed = window.confirm(deleteMode === "single" ? `Delete "${eventToDelete.title}"?` : deleteMode === "future" ? `Delete "${eventToDelete.title}" and future events in this series?` : `Delete the full "${eventToDelete.title}" series?`);
 
       if (!confirmed) {
          return;
@@ -1822,12 +1817,12 @@ export default function CalendarIntegrationPanel() {
 
       syncCalendarStatus("schedule-context-active");
 
-      showNotice("Note removed");
+      showNotice("Note deleted");
    }
 
    function clearNotesForSelectedEvent() {
       if (!selectedEvent) {
-         showNotice("No event");
+         showNotice("Choose an event first");
 
          return;
       }
@@ -1947,7 +1942,7 @@ export default function CalendarIntegrationPanel() {
 
    function saveNoteForSelectedEvent() {
       if (!selectedEvent) {
-         showNotice("No event");
+         showNotice("Choose an event first");
 
          return;
       }
@@ -2038,7 +2033,7 @@ export default function CalendarIntegrationPanel() {
    function clearNoteDraft() {
       setNoteDraft("");
 
-      showNotice("Draft cleared");
+      showNotice("Note draft cleared");
    }
 
    function getLatestNoteForEvent(event?: AllevinCalendarEvent) {
@@ -2067,7 +2062,7 @@ export default function CalendarIntegrationPanel() {
       const intelligence = getCalendarIntelligenceSummary(hydratedEvents);
 
       if (!intelligence.today.length && !intelligence.upcoming.length) {
-         return "No calendar events are currently loaded.";
+         return "No events are saved right now.";
       }
 
       return intelligence.today.length
@@ -2083,16 +2078,16 @@ export default function CalendarIntegrationPanel() {
 
       const readback = sanitizeCalendarPlainText(
          `
-Calendar Readout
+Calendar Summary
 
-${intelligence.today.length ? "Today's Events:" : "Upcoming Events:"}
+${intelligence.today.length ? "Today's events:" : "Upcoming events:"}
 ${getReadableSchedule()}
 
 Tomorrow:
 ${intelligence.tomorrowReadback || "No events scheduled tomorrow."}
 
 Recurring:
-${intelligence.recurringReadback || "No recurring events found."}
+${intelligence.recurringReadback || "No recurring events scheduled."}
 
 Next:
 Ask what is on your calendar, what you have tomorrow, or what you should schedule next.
@@ -2103,7 +2098,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
       window.dispatchEvent(
          new CustomEvent("allevin-calendar-readback", {
             detail: {
-               title: "Calendar Readout",
+               title: "Calendar Summary",
 
                body: readback,
 
@@ -2131,7 +2126,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
 
                destination: "system",
 
-               title: "Calendar readout prepared",
+               title: "Calendar summary prepared",
 
                summary: readback,
 
@@ -2154,11 +2149,11 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
 
       syncCalendarStatus("schedule-context-active");
 
-      showNotice("Calendar readout ready");
+      showNotice("Calendar summary ready");
    }
 
    // ========================================
-   // Native Calendar View Helpers
+   // Native Month View Helpers
    // ========================================
 
    function moveVisibleMonth(offset: number) {
@@ -2201,8 +2196,16 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
    // Render Helpers
    // ========================================
 
+   function toggleEventDetails(eventId: string) {
+      setExpandedEventIds((current) => (current.includes(eventId) ? current.filter((id) => id !== eventId) : [eventId, ...current].slice(0, 12)));
+   }
+
    function renderEventCard(event: AllevinCalendarEvent) {
       const selected = event.id === selectedEvent?.id;
+
+      const expanded = expandedEventIds.includes(event.id);
+
+      const hasDetails = Boolean(event.description || event.location || event.sourceContent || event.workingSummary);
 
       return (
          <div
@@ -2254,12 +2257,36 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                )}
             </div>
 
-            {event.description && <p className="mt-3 line-clamp-2 text-xs leading-5 text-[var(--color-text-secondary)]">{event.description}</p>}
+            {event.description && <p className={`mt-3 text-xs leading-5 text-[var(--color-text-secondary)] ${expanded ? "whitespace-pre-wrap" : "line-clamp-2"}`}>{event.description}</p>}
+
+            <AnimatePresence initial={false}>
+               {expanded && hasDetails && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
+                     <div className="mt-3 space-y-3 rounded-2xl bg-white/80 p-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+                        {event.sourceContent && event.sourceContent !== event.description && (
+                           <div>
+                              <p className="font-medium text-[var(--color-text-primary)]">Project notes</p>
+
+                              <p className="mt-1 whitespace-pre-wrap">{event.sourceContent}</p>
+                           </div>
+                        )}
+
+                        {event.workingSummary && event.workingSummary !== event.description && event.workingSummary !== event.sourceContent && (
+                           <div>
+                              <p className="font-medium text-[var(--color-text-primary)]">Summary</p>
+
+                              <p className="mt-1 whitespace-pre-wrap">{event.workingSummary}</p>
+                           </div>
+                        )}
+                     </div>
+                  </motion.div>
+               )}
+            </AnimatePresence>
 
             <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-               <button onClick={() => selectEvent(event)} className="flex items-center justify-center gap-1 rounded-xl bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-bg)]">
-                  <CheckCircle2 size={13} />
-                  Select
+               <button onClick={() => toggleEventDetails(event.id)} className="flex items-center justify-center gap-1 rounded-xl bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-bg)]" disabled={!hasDetails}>
+                  <ChevronDown size={13} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
+                  {expanded ? "Hide details" : "Show details"}
                </button>
 
                <button onClick={() => deleteEvent(event.id)} className="flex items-center justify-center gap-1 rounded-xl bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-bg)]">
@@ -2309,29 +2336,16 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                <div>
                   <h2 className="text-2xl sm:text-3xl">Calendar</h2>
 
-                  <p className="mt-2 max-w-2xl text-sm text-[var(--color-text-secondary)]">Create events, browse the month, and keep notes attached to the right event.</p>
+                  <p className="mt-2 max-w-2xl text-sm text-[var(--color-text-secondary)]">Create events, browse the month, and keep project time blocks easy to find.</p>
                </div>
             </div>
 
             <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:flex xl:w-auto xl:flex-wrap xl:items-center xl:gap-3">
                {notice && <div className="w-full rounded-2xl bg-[var(--color-bg)] px-4 py-3 text-center text-sm font-medium text-[var(--color-text-secondary)] xl:w-auto">{notice}</div>}
-
-               <button onClick={tryLiveRefresh} className="flex w-full items-center justify-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-white px-5 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)] xl:w-auto">
-                  <RefreshCcw size={16} />
-                  Refresh
-               </button>
-
-               <button
-                  onClick={sendScheduleReadbackToAIDock}
-                  className="flex w-full items-center justify-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-white px-5 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)] xl:w-auto"
-               >
-                  <Sparkles size={16} />
-                  Ask ALLEVIN
-               </button>
             </div>
          </div>
 
-         {/* Create Event */}
+         {/* Add Event */}
 
          <div className="mb-5 rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
             <button onClick={() => setManualOpen((current) => !current)} className="flex w-full items-start justify-between gap-3 text-left sm:items-center">
@@ -2339,9 +2353,9 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                   <Plus size={18} />
 
                   <div>
-                     <p className="font-medium">Create Event</p>
+                     <p className="font-medium">Add Event</p>
 
-                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Add the event first, then attach notes when needed.</p>
+                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Add a time block, deadline, or event.</p>
                   </div>
                </div>
 
@@ -2475,7 +2489,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                         <div className="grid grid-cols-1 gap-3">
                            <button onClick={addManualEvent} className="flex items-center justify-center gap-2 rounded-2xl bg-[var(--color-primary)] px-4 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
                               <Plus size={16} />
-                              Create Event
+                              Add Event
                            </button>
                         </div>
                      </div>
@@ -2484,9 +2498,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
             </AnimatePresence>
          </div>
 
-         {/* Schedule Workspace */}
-
-         {/* Calendar View */}
+         {/* Month View */}
 
          <div className="mb-5 rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
             <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -2494,15 +2506,15 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                   <CalendarDays size={18} />
 
                   <div>
-                     <p className="font-medium">Calendar View</p>
+                     <p className="font-medium">Month View</p>
 
-                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Browse the month and choose an event when you need notes.</p>
+                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Browse the month and review your scheduled work.</p>
                   </div>
                </div>
 
                <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:items-center">
                   <button onClick={() => moveVisibleMonth(-1)} className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]">
-                     Last Month
+                     Previous
                   </button>
 
                   <button onClick={jumpToToday} className="rounded-xl bg-[var(--color-bg)] px-3 py-2 text-sm font-medium transition-colors hover:bg-white">
@@ -2510,7 +2522,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                   </button>
 
                   <button onClick={() => moveVisibleMonth(1)} className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]">
-                     Next Month
+                     Next
                   </button>
                </div>
             </div>
@@ -2523,7 +2535,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                </div>
 
                <div className="text-left sm:text-right">
-                  <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Selected</p>
+                  <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Selected day</p>
 
                   <p className="mt-1 text-sm font-medium">{getDateLabel(selectedDayDate)}</p>
                </div>
@@ -2611,144 +2623,11 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                   </div>
 
                   <div className="space-y-3">
-                     {selectedDayEvents.length === 0 ? (
-                        <div className="rounded-2xl bg-white p-4 text-sm leading-6 text-[var(--color-text-secondary)]">No events scheduled for this day.</div>
-                     ) : (
-                        selectedDayEvents.map((event) => (
-                           <div key={event.id} className="rounded-2xl bg-white p-4">
-                              <div className="mb-2 flex items-start justify-between gap-3">
-                                 <div className="min-w-0">
-                                    <p className="truncate text-sm font-medium">{event.title}</p>
-
-                                    <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
-                                       {getEventTimeRangeLabel(event)} • {event.allDay ? getRepeatLabel(event.repeat) : getDurationLabel(event.startTime, event.endTime)}
-                                    </p>
-                                 </div>
-
-                                 <span className="rounded-xl bg-[var(--color-bg)] px-2 py-1 text-[10px] font-medium capitalize text-[var(--color-text-secondary)]">
-                                    {event.repeat && event.repeat !== "none" ? getRepeatLabel(event.repeat) : getEventStatus(event)}
-                                 </span>
-                              </div>
-
-                              <p className="line-clamp-2 text-xs leading-5 text-[var(--color-text-secondary)]">{event.description || event.workingSummary || "No event context provided."}</p>
-
-                              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                 <button onClick={() => selectEvent(event)} className="rounded-xl bg-[var(--color-bg)] px-3 py-2 text-xs font-medium transition-colors hover:bg-white">
-                                    Select
-                                 </button>
-
-                                 <button onClick={() => deleteEvent(event.id)} className="rounded-xl bg-[var(--color-bg)] px-3 py-2 text-xs font-medium transition-colors hover:bg-white">
-                                    Delete
-                                 </button>
-                              </div>
-                           </div>
-                        ))
-                     )}
+                     {selectedDayEvents.length === 0 ? <div className="rounded-2xl bg-white p-4 text-sm leading-6 text-[var(--color-text-secondary)]">No events scheduled for this day.</div> : selectedDayEvents.map((event) => renderEventCard(event))}
                   </div>
                </div>
             </div>
          </div>
-
-         {/* Event Workspace */}
-
-         {selectedEvent && (
-            <div className="mb-5 rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
-               <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                  <div>
-                     <p className="text-sm text-[var(--color-text-secondary)]">Event Workspace</p>
-
-                     <h3 className="mt-1 text-2xl">{selectedEvent.title}</h3>
-
-                     <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-                        {getDateLabel(selectedEvent.startTime)} • {getEventTimeRangeLabel(selectedEvent)} • {getRepeatLabel(selectedEvent.repeat)}
-                     </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                     <span className="rounded-2xl bg-[var(--color-bg)] px-4 py-3 text-xs font-medium capitalize text-[var(--color-text-secondary)]">{getEventStatus(selectedEvent)}</span>
-
-                     <span className="rounded-2xl bg-[var(--color-bg)] px-4 py-3 text-xs font-medium text-[var(--color-text-secondary)]">{selectedEvent.allDay ? "All day" : getDurationLabel(selectedEvent.startTime, selectedEvent.endTime)}</span>
-
-                     {selectedEvent.repeat && selectedEvent.repeat !== "none" && <span className="rounded-2xl bg-[var(--color-bg)] px-4 py-3 text-xs font-medium text-[var(--color-text-secondary)]">{getRepeatLabel(selectedEvent.repeat)}</span>}
-                  </div>
-               </div>
-
-               <p className="mb-4 text-sm leading-7 text-[var(--color-text-secondary)]">{selectedEvent.description || "No event description provided."}</p>
-
-               <textarea
-                  value={noteDraft}
-                  onChange={(event) => setNoteDraft(sanitizeLiveCalendarNote(event.target.value))}
-                  placeholder="Add a note for this event..."
-                  className="
-                     min-h-[160px]
-                     w-full
-                     resize-none
-                     rounded-2xl
-                     border
-                     border-[var(--border-subtle)]
-                     bg-[var(--color-bg)]
-                     p-4
-                     text-sm
-                     leading-7
-                     outline-none
-                  "
-               />
-
-               <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-4">
-                  <button onClick={saveNoteForSelectedEvent} className="flex items-center justify-center gap-2 rounded-2xl bg-[var(--color-primary)] px-4 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
-                     <NotebookPen size={16} />
-                     Save Note
-                  </button>
-
-                  <button onClick={clearNoteDraft} className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]">
-                     <Trash2 size={16} />
-                     Clear Draft
-                  </button>
-
-                  <button onClick={clearNotesForSelectedEvent} className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]">
-                     <Trash2 size={16} />
-                     Clear Notes
-                  </button>
-
-                  <button
-                     onClick={() => deleteEvent(selectedEvent.id)}
-                     className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]"
-                  >
-                     <Trash2 size={16} />
-                     Delete Event
-                  </button>
-               </div>
-               <div className="mt-5 rounded-2xl bg-[var(--color-bg)] p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                     <div>
-                        <p className="font-medium">Event Notes</p>
-
-                        <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Latest notes stay attached to this event.</p>
-                     </div>
-                  </div>
-
-                  <div className="space-y-3">
-                     {getNotesForEvent(selectedEvent).length === 0 ? (
-                        <div className="rounded-xl bg-white p-3 text-sm text-[var(--color-text-secondary)]">No notes yet.</div>
-                     ) : (
-                        getNotesForEvent(selectedEvent).map((note) => (
-                           <div key={note.id} className="rounded-xl bg-white p-3">
-                              <div className="flex items-start justify-between gap-3">
-                                 <p className="text-sm leading-6 text-[var(--color-text-secondary)]">{note.note}</p>
-
-                                 <button onClick={() => deleteNote(note.id)} className="shrink-0 rounded-xl bg-[var(--color-bg)] px-3 py-2 text-xs font-medium transition-colors hover:bg-white">
-                                    Remove
-                                 </button>
-                              </div>
-
-                              <p className="mt-2 text-xs text-[var(--color-text-secondary)]">{getTimeLabel(note.createdAt)}</p>
-                           </div>
-                        ))
-                     )}
-                  </div>
-               </div>
-            </div>
-         )}
       </motion.section>
    );
 }

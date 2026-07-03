@@ -27,15 +27,15 @@ import { EnvironmentProvider } from "@/components/EnvironmentEngine";
 import { getAllevinDisplayName, hasAllevinUserProfile, saveAllevinUserProfile, resetAllevinTesterWorkspace } from "@/lib/allevinUserProfile";
 
 // ========================================
-// ALLEVIN MK V Product Shell
+// ALLEVIN MK VI Product Shell
 // Purpose:
-// Simple beginner-friendly workspace layout.
-// Keep the app focused on what users can do:
-// write, organize projects, schedule,
-// and understand cognition.
+// Beginner-friendly project workspace layout.
+// MK VI keeps the first-use path clear:
+// Projects hold the work, Canvas shapes it,
+// Materials support it, and Calendar shows time blocks.
 // ========================================
 
-type ProductModuleId = "home" | "canvas" | "tasks" | "board" | "recovery" | "control" | "calendar" | "integrations" | "advanced";
+type ProductModuleId = "home" | "canvas" | "calendar" | "integrations" | "advanced";
 
 interface ProductModule {
    id: ProductModuleId;
@@ -55,15 +55,15 @@ const productModules: ProductModule[] = [
    },
 
    {
-      id: "canvas",
-
-      label: "Canvas",
-   },
-
-   {
       id: "integrations",
 
       label: "Projects",
+   },
+
+   {
+      id: "canvas",
+
+      label: "Canvas",
    },
 
    {
@@ -75,7 +75,7 @@ const productModules: ProductModule[] = [
    {
       id: "advanced",
 
-      label: "Cognition",
+      label: "Insights",
    },
 ];
 
@@ -84,7 +84,7 @@ const productModules: ProductModule[] = [
 // ========================================
 
 function isProductModuleId(value?: string): value is ProductModuleId {
-   return value === "home" || value === "canvas" || value === "tasks" || value === "board" || value === "recovery" || value === "control" || value === "calendar" || value === "integrations" || value === "advanced";
+   return value === "home" || value === "canvas" || value === "calendar" || value === "integrations" || value === "advanced";
 }
 
 function getScrollTargetForModule(moduleId: ProductModuleId) {
@@ -104,11 +104,8 @@ function getModuleFromWorkflowEvent(eventName: string): ProductModuleId | null {
       case "allevin-send-to-canvas":
          return "canvas";
 
-      case "allevin-send-to-task":
-      case "allevin-send-to-board":
       case "allevin-prepare-integration":
-      case "allevin-request-workflow-action":
-      case "allevin-open-workflow-control":
+      case "allevin-internal-integration-suggestion":
          return "integrations";
 
       case "allevin-send-to-calendar":
@@ -135,7 +132,7 @@ const LEGACY_PROJECT_MEMORY_STORAGE_KEY = "allevin-project-memory";
 const CALENDAR_EVENTS_STORAGE_KEY = "allevin-calendar-events-mki";
 
 // ========================================
-// MK V Build 6 — Page Shell Sanitization
+// MK VI — Page Shell Sanitization
 // Home reads stored Canvas, Projects, and Calendar data.
 // Treat stored text as untrusted before displaying it.
 // ========================================
@@ -146,6 +143,7 @@ const PAGE_SANITIZE_LIMITS = {
    suggestion: 900,
    calendarGlance: 500,
    eventName: 120,
+   projectBody: 100000,
 } as const;
 
 function limitPageTextLength(value: string, maxLength: number) {
@@ -185,6 +183,10 @@ function sanitizePageText(value?: string, maxLength: number = PAGE_SANITIZE_LIMI
 
 function sanitizePageTitle(value?: string) {
    return sanitizePageText(value, PAGE_SANITIZE_LIMITS.title).replace(/\n+/g, " ").trim();
+}
+
+function sanitizePageBody(value?: string) {
+   return sanitizePageText(value, PAGE_SANITIZE_LIMITS.projectBody);
 }
 
 function sanitizeCalendarGlanceText(value?: string) {
@@ -246,7 +248,7 @@ function getHomeDateLabel(timestamp?: number) {
 
 function getHomeCalendarGlance() {
    if (typeof window === "undefined") {
-      return "Ask ALLEVIN what is on your calendar when you want a quick read.";
+      return "Calendar shows events, deadlines, and focused work blocks after you add them.";
    }
 
    const events = safeParseStorage<
@@ -270,7 +272,7 @@ function getHomeCalendarGlance() {
       .sort((a, b) => Number(a.startTime || 0) - Number(b.startTime || 0));
 
    if (!cleanEvents.length) {
-      return "Nothing is on the local calendar yet. Add an event when something needs protected time.";
+      return "No events scheduled yet. Add one in Calendar when work needs protected time.";
    }
 
    const todayStart = getStartOfTodayForHome();
@@ -300,16 +302,15 @@ function getHomeCalendarGlance() {
 
 function getGeneratedHomeGreeting() {
    const greetings = [
-      "I’ve got your workspace ready. We can keep this simple: pick up the active project, save what matters, or put time on the calendar when you need focus.",
-      "Everything is in one place. I’ll help you keep the work moving without turning it into a bigger project than it needs to be.",
-      "Your workspace is ready when you are. We can continue what you were working on, organize what is worth keeping, or schedule a focused block.",
-      "I’ll keep the workspace clear and help you choose the next useful move. No need to solve the whole day at once.",
-      "You can start small here. Write the rough version, save the useful parts, and schedule time only when the work actually needs it.",
+      "ALLEVIN keeps your projects, active work, references, and schedule in one place.",
+      "Start with a project, continue the work in Canvas, and save useful notes or files as materials.",
+      "Choose a project, update it in Canvas, add materials, or schedule the next block of time.",
+      "Each project has one home. Projects stores the work, Canvas helps you shape it, and Calendar shows scheduled time.",
+      "Keep it simple: choose a project, write in Canvas, save helpful materials, and schedule what needs time.",
    ];
 
    return sanitizePageText(pickRandomItem(greetings), PAGE_SANITIZE_LIMITS.suggestion);
 }
-
 function safeParseStorage<T>(key: string, fallback: T): T {
    if (typeof window === "undefined") {
       return fallback;
@@ -342,6 +343,7 @@ function normalizeHomeProjectTitle(value?: string) {
 function getLatestProjectLibraryItemForHome() {
    const projectLibrary = safeParseStorage<
       Array<{
+         id?: string;
          title?: string;
          latestSummary?: string;
          workflowId?: string;
@@ -478,15 +480,98 @@ function getLastWorkedOnProject() {
    };
 }
 
+function getLatestProjectCanvasPayloadForHome() {
+   if (typeof window === "undefined") {
+      return null;
+   }
+
+   const latestLibraryProject = getLatestProjectLibraryItemForHome();
+
+   if (latestLibraryProject?.title) {
+      const title = sanitizePageTitle(latestLibraryProject.title);
+
+      const body = sanitizePageBody(latestLibraryProject.notes?.[0]?.body || latestLibraryProject.latestSummary || latestLibraryProject.notes?.[0]?.summary || title);
+
+      const workflowId = sanitizePageTitle(latestLibraryProject.workflowId || latestLibraryProject.id || latestLibraryProject.originBoardItemId || "");
+
+      const originBoardItemId = sanitizePageTitle(latestLibraryProject.originBoardItemId || latestLibraryProject.id || latestLibraryProject.workflowId || "");
+
+      return {
+         title,
+         body: body || title,
+         source: "project" as const,
+         sourceTitle: title,
+         sourceContent: body || title,
+         workingSummary: body || title,
+         cleanSourceContent: body || title,
+         workflowId: workflowId || undefined,
+         originBoardItemId: originBoardItemId || workflowId || undefined,
+         projectId: sanitizePageTitle(latestLibraryProject.id || "") || undefined,
+      };
+   }
+
+   const latestMemoryProject = getLatestProjectMemoryItemForHome();
+
+   if (latestMemoryProject?.title || latestMemoryProject?.cleanTitle) {
+      const title = sanitizePageTitle(latestMemoryProject.cleanTitle || latestMemoryProject.title);
+
+      const body = sanitizePageBody(latestMemoryProject.body || latestMemoryProject.sourceContent || latestMemoryProject.workingSummary || latestMemoryProject.latestSummary || title);
+
+      return {
+         title,
+         body: body || title,
+         source: "project" as const,
+         sourceTitle: title,
+         sourceContent: body || title,
+         workingSummary: body || title,
+         cleanSourceContent: body || title,
+         workflowId: undefined,
+         originBoardItemId: undefined,
+         projectId: undefined,
+      };
+   }
+
+   const canvas = safeParseStorage<{
+      title?: string;
+      sourceTitle?: string;
+      content?: string;
+      sourceContent?: string;
+      workingSummary?: string;
+      workflowId?: string;
+      originBoardItemId?: string;
+   } | null>(CANVAS_STORAGE_KEY, null);
+
+   const title = sanitizePageTitle(canvas?.sourceTitle || canvas?.title);
+
+   if (!title) {
+      return null;
+   }
+
+   const body = sanitizePageBody(canvas?.content || canvas?.sourceContent || canvas?.workingSummary || title);
+
+   return {
+      title,
+      body: body || title,
+      source: "project" as const,
+      sourceTitle: title,
+      sourceContent: body || title,
+      workingSummary: body || title,
+      cleanSourceContent: body || title,
+      workflowId: sanitizePageTitle(canvas?.workflowId || "") || undefined,
+      originBoardItemId: sanitizePageTitle(canvas?.originBoardItemId || canvas?.workflowId || "") || undefined,
+      projectId: undefined,
+   };
+}
+
 function getGeneratedSuggestionTail() {
    const tails = [
-      "That keeps the work moving without adding extra noise.",
-      "It is small enough to finish and useful enough to matter.",
-      "That gives the project a cleaner next point to continue from.",
-      "It keeps the next move clear without overbuilding the plan.",
+      "That keeps the work moving without adding more steps.",
+      "It is small enough to finish and useful enough to keep.",
+      "That gives the project a clear place to continue from.",
+      "It keeps the next move clear without making the plan bigger than it needs to be.",
       "That is a practical place to start.",
-      "It should make the rest of the work easier to continue.",
-      "That keeps the project grounded and manageable.",
+      "It should make the next pass easier to continue.",
+      "That keeps the project manageable.",
       "It gives you momentum without asking for too much at once.",
    ];
 
@@ -502,11 +587,11 @@ function getHomeProjectKey(project: { title: string; body: string; source: strin
 function getHomeSuggestion(project: { title: string; body: string; source: string }) {
    if (!project.title) {
       const starts = [
-         "A good place to start is Canvas. Write the rough idea first, even if it is only a few lines.",
-         "Start in Canvas and give the idea somewhere to land. We can shape it once there is a little context.",
-         "Open Canvas and write the first version. It does not need to be polished to be useful.",
-         "Begin with one clear note in Canvas. That gives ALLEVIN enough context to help you move it forward.",
-         "Canvas is the easiest starting point. Capture the thought first, then decide whether it belongs in Projects or Calendar.",
+         "Start in Projects by creating one project. Then open Canvas when you are ready to write or update the work.",
+         "Create or open a project first. ALLEVIN works best when notes, materials, schedule blocks, and Canvas updates stay connected.",
+         "Open Projects and choose what you are working on. Use Canvas for the active draft and Materials for references you want nearby.",
+         "Begin with one project. Add the goal, then use Canvas to shape the next update.",
+         "Projects is the starting point. Once the project exists, Canvas, Materials, and Calendar can stay connected to it.",
       ];
 
       return sanitizePageText(pickRandomItem(starts), PAGE_SANITIZE_LIMITS.suggestion);
@@ -518,10 +603,10 @@ function getHomeSuggestion(project: { title: string; body: string; source: strin
 
    if (project.source === "Projects") {
       const openings = [
-         `I’d bring ${project.title} back into Canvas and continue from the latest saved note.`,
-         `${project.title} is saved in Projects, so the easiest move is to open it in Canvas and keep building from there.`,
-         `You can resume ${project.title} in Canvas and keep the next update connected to the saved project.`,
-         `The saved version of ${project.title} is ready to continue. I’d open it in Canvas and make the next edit there.`,
+         `Open ${project.title} in Canvas and continue from the saved project.`,
+         `${project.title} is saved in Projects. Use Canvas for the next update so the project page stays clean.`,
+         `You can resume ${project.title} in Canvas, then keep supporting notes or files in Materials.`,
+         `The saved version of ${project.title} is ready. Open it in Canvas, update the work, and schedule time only if needed.`,
       ];
 
       return sanitizePageText(`${pickRandomItem(openings)} ${getGeneratedSuggestionTail()}`, PAGE_SANITIZE_LIMITS.suggestion);
@@ -529,25 +614,24 @@ function getHomeSuggestion(project: { title: string; body: string; source: strin
 
    if (hasActionLanguage) {
       const openings = [
-         `I see a possible next action in ${project.title}. I’d pull out the clearest piece and turn it into one concrete move.`,
-         `${project.title} already has enough direction to act on. I’d choose the most obvious next move and schedule it if it needs protected time.`,
-         `The useful move is to take one action from ${project.title} and make it specific enough to finish.`,
-         `I’d keep ${project.title} simple right now: choose one next action and avoid turning it into a bigger plan than it needs to be.`,
+         `${project.title} has a possible next action. Make that action specific, then schedule it if it needs protected time.`,
+         `${project.title} has enough direction to act on. Choose one next action and keep the rest as context.`,
+         `Choose one action from ${project.title} and make it clear enough to finish.`,
+         `Keep ${project.title} simple right now: choose one next action instead of making a bigger plan.`,
       ];
 
       return sanitizePageText(`${pickRandomItem(openings)} ${getGeneratedSuggestionTail()}`, PAGE_SANITIZE_LIMITS.suggestion);
    }
 
    const openings = [
-      `I’d keep shaping ${project.title} in Canvas until the next action becomes obvious.`,
-      `${project.title} has a place to continue. I’d stay in Canvas and tighten the main idea before scheduling or organizing it.`,
-      `For ${project.title}, the best move is to keep the work close to Canvas and add a little more structure.`,
-      `I’d give ${project.title} one more focused pass in Canvas before turning it into a scheduled block or saved project update.`,
+      `Keep shaping ${project.title} in Canvas until the next action is clear.`,
+      `${project.title} has a place to continue. Use Canvas for the active update and Materials for helpful references.`,
+      `For ${project.title}, keep the active work in Canvas and add only the references that help.`,
+      `Give ${project.title} one focused Canvas pass before scheduling it or saving the next update.`,
    ];
 
    return sanitizePageText(`${pickRandomItem(openings)} ${getGeneratedSuggestionTail()}`, PAGE_SANITIZE_LIMITS.suggestion);
 }
-
 // ========================================
 // Home
 // ========================================
@@ -724,7 +808,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
    }
 
    function handleTesterWorkspaceReset() {
-      const confirmed = window.confirm("Reset this tester workspace? This clears Canvas, Projects, Calendar, memory, and cognition data in this browser only.");
+      const confirmed = window.confirm("Reset this test workspace? This clears saved Canvas, Projects, Calendar, and Insights data in this browser only.");
 
       if (!confirmed) {
          return;
@@ -742,11 +826,29 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
 
       setHomeSuggestion(getHomeSuggestion({ title: "", body: "", source: "" }));
 
-      setResetNotice("Workspace reset for this browser. Your tester name was kept.");
+      setResetNotice("Workspace reset in this browser. Your name was kept.");
 
       window.setTimeout(() => {
          setResetNotice("");
       }, 2400);
+   }
+
+   function handleContinueLatestProjectInCanvas() {
+      const latestProjectPayload = getLatestProjectCanvasPayloadForHome();
+
+      setActiveModule("canvas");
+
+      if (!latestProjectPayload) {
+         return;
+      }
+
+      window.setTimeout(() => {
+         window.dispatchEvent(
+            new CustomEvent("allevin-send-to-canvas", {
+               detail: latestProjectPayload,
+            }),
+         );
+      }, 120);
    }
 
    if (!profileReady) {
@@ -774,9 +876,9 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
             >
                <p className="text-sm font-medium uppercase tracking-[0.18em] text-[var(--color-text-secondary)]">Welcome to ALLEVIN</p>
 
-               <h1 className="mt-3 max-w-2xl text-3xl sm:text-4xl">Set up your test workspace.</h1>
+               <h1 className="mt-3 max-w-2xl text-3xl sm:text-4xl">Set up your workspace.</h1>
 
-               <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--color-text-secondary)]">ALLEVIN will use your name in greetings and assistant responses. Your test projects stay in this browser during this testing phase.</p>
+               <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--color-text-secondary)]">ALLEVIN uses your name for greetings. In this test version, your projects, materials, and schedule are saved in this browser.</p>
 
                <form onSubmit={handleTesterProfileSubmit} className="mt-6 max-w-xl space-y-4">
                   <label className="block">
@@ -805,9 +907,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                      />
                   </label>
 
-                  <div className="rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-                     Testing note: Please avoid entering highly sensitive information. This test version stores your workspace locally in this browser.
-                  </div>
+                  <div className="rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">Testing note: avoid highly sensitive information. This version saves your workspace in this browser.</div>
 
                   <button
                      type="submit"
@@ -823,7 +923,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                         hover:opacity-90
                      "
                   >
-                     Start testing ALLEVIN
+                     Start Workspace
                   </button>
                </form>
             </div>
@@ -835,34 +935,34 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
       {
          number: "1",
 
-         label: "Start in Canvas",
+         label: "Open Projects",
 
-         description: "Capture the rough idea first. It can be messy here.",
-         module: "canvas" as ProductModuleId,
+         description: "Projects is where the work, schedule, and materials stay organized.",
+         module: "integrations" as ProductModuleId,
       },
       {
          number: "2",
 
-         label: "Save to Projects",
+         label: "Continue in Canvas",
 
-         description: "Save the work you want to keep and return to later.",
-         module: "integrations" as ProductModuleId,
+         description: "Use Canvas to write, update, or shape the current project.",
+         module: "canvas" as ProductModuleId,
       },
       {
          number: "3",
 
-         label: "Schedule if needed",
+         label: "Add Materials",
 
-         description: "Give important work a real block of time.",
-         module: "calendar" as ProductModuleId,
+         description: "Save notes, documents, images, feedback, or references with a project.",
+         module: "integrations" as ProductModuleId,
       },
       {
          number: "4",
 
-         label: "Check Cognition",
+         label: "Schedule Time",
 
-         description: "Adjust how ALLEVIN responds when you need a different pace.",
-         module: "advanced" as ProductModuleId,
+         description: "Use Calendar to see events, deadlines, and focused work blocks.",
+         module: "calendar" as ProductModuleId,
       },
    ];
 
@@ -901,21 +1001,21 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
 
                   <div className="mt-5 grid w-full max-w-5xl grid-cols-1 gap-3 lg:grid-cols-[1.35fr_1fr]">
                      <div className="rounded-2xl bg-[var(--color-bg)] p-4">
-                        <p className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Current Project</p>
+                        <p className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Latest Project</p>
 
-                        <p className="mt-2 text-lg font-medium">{lastProject.title || "No project selected yet"}</p>
+                        <p className="mt-2 text-lg font-medium">{lastProject.title || "No project open yet"}</p>
 
-                        <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{lastProject.source ? `Ready in ${lastProject.source}` : "Start in Canvas when you are ready to give ALLEVIN context."}</p>
+                        <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{lastProject.source ? `Last opened in ${lastProject.source}` : "Start in Projects, then use Canvas when you are ready to work."}</p>
 
                         <div className="mt-3 rounded-xl bg-white/70 p-3">
-                           <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Useful tip</p>
+                           <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Suggested Next Step</p>
 
                            <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">{homeSuggestion}</p>
                         </div>
                      </div>
 
                      <div className="rounded-2xl bg-[var(--color-bg)] p-4">
-                        <p className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Today at a glance</p>
+                        <p className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Schedule at a Glance</p>
 
                         <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{calendarGlance}</p>
                      </div>
@@ -924,7 +1024,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
 
                <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap">
                   <button
-                     onClick={() => setActiveModule("canvas")}
+                     onClick={() => setActiveModule("integrations")}
                      className="
                         w-full
                         rounded-2xl
@@ -939,11 +1039,11 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                         hover:opacity-90
                      "
                   >
-                     Start in Canvas
+                     Open Projects
                   </button>
 
                   <button
-                     onClick={() => setActiveModule("integrations")}
+                     onClick={handleContinueLatestProjectInCanvas}
                      className="
                         w-full
                         rounded-2xl
@@ -959,7 +1059,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                         hover:bg-[var(--color-bg)]
                      "
                   >
-                     Open Projects
+                     Continue in Canvas
                   </button>
 
                   <button
@@ -980,7 +1080,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                         hover:bg-[var(--color-bg)]
                      "
                   >
-                     Reset Workspace
+                     Reset Test Workspace
                   </button>
 
                   {resetNotice && <p className="w-full text-sm text-[var(--color-text-secondary)]">{resetNotice}</p>}
@@ -992,7 +1092,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
             {steps.map((step) => (
                <button
                   key={step.label}
-                  onClick={() => setActiveModule(step.module)}
+                  onClick={() => (step.module === "canvas" ? handleContinueLatestProjectInCanvas() : setActiveModule(step.module))}
                   className="
                      rounded-[22px]
                      border
@@ -1031,7 +1131,7 @@ export default function Home() {
 
       const resolvedModuleId = isProductModuleId(sanitizedModuleId) ? sanitizedModuleId : "home";
 
-      const safeModuleId: ProductModuleId = resolvedModuleId === "tasks" || resolvedModuleId === "board" || resolvedModuleId === "recovery" || resolvedModuleId === "control" ? "integrations" : resolvedModuleId;
+      const safeModuleId: ProductModuleId = resolvedModuleId;
 
       setActiveModule(safeModuleId);
 
@@ -1078,17 +1178,7 @@ export default function Home() {
             return;
          }
 
-         if (moduleId === "tasks" || moduleId === "board" || moduleId === "recovery" || moduleId === "control") {
-            activateModule("integrations");
-
-            return;
-         }
-
          activateModule(moduleId);
-      }
-
-      function handleOpenWorkflowControl() {
-         activateModule("integrations");
       }
 
       function makeWorkflowHandler(eventName: string) {
@@ -1110,16 +1200,7 @@ export default function Home() {
          };
       }
 
-      const workflowHandlers = [
-         "allevin-send-to-canvas",
-         "allevin-send-to-task",
-         "allevin-send-to-board",
-         "allevin-send-to-calendar",
-         "allevin-calendar-readback",
-         "allevin-prepare-integration",
-         "allevin-request-workflow-action",
-         "allevin-internal-integration-suggestion",
-      ].map((eventName) => ({
+      const workflowHandlers = ["allevin-send-to-canvas", "allevin-send-to-calendar", "allevin-calendar-readback", "allevin-prepare-integration", "allevin-internal-integration-suggestion"].map((eventName) => ({
          eventName,
 
          handler: makeWorkflowHandler(eventName),
@@ -1127,16 +1208,12 @@ export default function Home() {
 
       window.addEventListener("allevin-open-product-module", handleOpenProductModule);
 
-      window.addEventListener("allevin-open-workflow-control", handleOpenWorkflowControl);
-
       workflowHandlers.forEach(({ eventName, handler }) => {
          window.addEventListener(eventName, handler);
       });
 
       return () => {
          window.removeEventListener("allevin-open-product-module", handleOpenProductModule);
-
-         window.removeEventListener("allevin-open-workflow-control", handleOpenWorkflowControl);
 
          workflowHandlers.forEach(({ eventName, handler }) => {
             window.removeEventListener(eventName, handler);

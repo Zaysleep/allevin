@@ -3,7 +3,7 @@
 // Purpose:
 // Real workflow surface for notes, planning,
 // writing, and cognitive work inside ALLEVIN.
-// MK III polish keeps Canvas clear,
+// MK VI polish keeps Canvas clear,
 // user-friendly, project-aware, and simple for
 // focused writing and saved work.
 // ========================================
@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { motion } from "framer-motion";
 
-import { FileText, Save, RotateCcw, CheckCircle2 } from "lucide-react";
+import { FileText, Save, RotateCcw, CheckCircle2, NotebookPen, Layers, Clock3 } from "lucide-react";
 
 import { useFocus } from "@/components/FocusContext";
 
@@ -36,10 +36,14 @@ const STORAGE_KEY = "allevin-adaptive-work-canvas";
 
 const PROJECT_LIBRARY_STORAGE_KEY = "allevin-project-library";
 
+const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
+
+const CANVAS_SELECTED_REFERENCES_STORAGE_KEY = "allevin-canvas-selected-references-mkvi";
+
 const APPROVED_INTERNAL_INTEGRATION_HANDLED_KEY = "allevin-canvas-approved-internal-integration-handled";
 
 // ========================================
-// MK V Build 6 — Canvas Sanitization Parameters
+// MK VI — Canvas Sanitization Parameters
 // Canvas should feel open, but stored/rendered text still needs guardrails.
 // ========================================
 
@@ -51,6 +55,7 @@ const CANVAS_SANITIZE_LIMITS = {
    projectBody: 100000,
    projectPreview: 500,
    notice: 220,
+   nextStep: 1000,
 } as const;
 
 function limitCanvasTextLength(value: string, maxLength: number) {
@@ -87,11 +92,15 @@ function sanitizeCanvasPlainText(value?: string, maxLength: number = CANVAS_SANI
 }
 
 function sanitizeLiveCanvasTitle(value?: string) {
-   return sanitizeCanvasPlainText(value, CANVAS_SANITIZE_LIMITS.title, { preserveEdges: true }).replace(/\n+/g, " ");
+   return sanitizeCanvasPlainText(value, CANVAS_SANITIZE_LIMITS.title, {
+      preserveEdges: true,
+   }).replace(/\n+/g, " ");
 }
 
 function sanitizeLiveCanvasBody(value?: string) {
-   return sanitizeCanvasPlainText(value, CANVAS_SANITIZE_LIMITS.bodyHard, { preserveEdges: true });
+   return sanitizeCanvasPlainText(value, CANVAS_SANITIZE_LIMITS.bodyHard, {
+      preserveEdges: true,
+   });
 }
 
 function sanitizeCanvasTitle(value?: string) {
@@ -114,11 +123,11 @@ function getCanvasSizeNotice(value?: string) {
    const length = (value || "").length;
 
    if (length >= CANVAS_SANITIZE_LIMITS.bodyHard) {
-      return "Large Canvas protected at the current safety limit.";
+      return "Canvas is at the current size limit.";
    }
 
    if (length >= CANVAS_SANITIZE_LIMITS.bodySoft) {
-      return "Large Canvas active.";
+      return "Canvas is getting large.";
    }
 
    return "";
@@ -182,6 +191,55 @@ interface CanvasState {
    updatedAt: number;
 }
 
+type ProjectMaterialType = "Note" | "Reference" | "Research" | "Feedback" | "Requirement" | "Idea" | "Meeting Note" | "Visual Reference" | "Document" | "Image" | "Other";
+
+interface ProjectMaterial {
+   id: string;
+   projectId: string;
+   projectTitle: string;
+   title: string;
+   type: ProjectMaterialType;
+   source: string;
+   notes: string;
+   summary: string;
+   imageDataUrl?: string;
+   imageFileName?: string;
+   imageMimeType?: string;
+   documentDataUrl?: string;
+   documentFileName?: string;
+   documentMimeType?: string;
+   documentText?: string;
+   interpretationSummary?: string;
+   interpretationUsefulContext?: string;
+   interpretationNextStep?: string;
+   interpretedAt?: number;
+   createdAt: number;
+   updatedAt: number;
+}
+
+interface CanvasReferenceItem {
+   id: string;
+   kind: "note" | "material";
+   projectId: string;
+   title: string;
+   label: string;
+   source: string;
+   summary: string;
+   body: string;
+   imageDataUrl?: string;
+   imageFileName?: string;
+   imageMimeType?: string;
+   documentDataUrl?: string;
+   documentFileName?: string;
+   documentMimeType?: string;
+   documentText?: string;
+   interpretationSummary?: string;
+   interpretationUsefulContext?: string;
+   interpretationNextStep?: string;
+   interpretedAt?: number;
+   updatedAt: number;
+}
+
 // ========================================
 // Canvas Import Payload
 // ========================================
@@ -204,6 +262,32 @@ interface CanvasImportPayload {
    workingSummary?: string;
 
    cleanSourceContent?: string;
+
+   projectId?: string;
+
+   materialId?: string;
+
+   referenceMode?: "selected-material" | "project-context";
+
+   selectedMaterial?: {
+      id?: string;
+      title?: string;
+      type?: string;
+      source?: string;
+      summary?: string;
+      notes?: string;
+      imageDataUrl?: string;
+      imageFileName?: string;
+      imageMimeType?: string;
+      documentDataUrl?: string;
+      documentFileName?: string;
+      documentMimeType?: string;
+      documentText?: string;
+      interpretationSummary?: string;
+      interpretationUsefulContext?: string;
+      interpretationNextStep?: string;
+      interpretedAt?: number;
+   };
 }
 
 interface CanvasInsightPayload {
@@ -249,7 +333,7 @@ interface ApprovedInternalIntegrationPayload {
 }
 
 // ========================================
-// Task Export Payload
+// Task Save Payload
 // ========================================
 
 interface TaskSavePayload {
@@ -275,11 +359,11 @@ interface TaskSavePayload {
 }
 
 // ========================================
-// Integration Export Payload
+// Integration Save Payload
 // ========================================
 
 interface IntegrationSavePayload {
-   destination: "notes" | "calendar" | "tasks";
+   destination: "notes" | "calendar" | "projects";
 
    objectType: "canvas-draft" | "research-note" | "project-summary" | "task-action" | "workflow-review";
 
@@ -302,7 +386,7 @@ interface IntegrationSavePayload {
    cleanSourceContent?: string;
 
    recommendation?: {
-      destination?: "notes" | "calendar" | "tasks";
+      destination?: "notes" | "calendar" | "projects";
       objectType?: "canvas-draft" | "research-note" | "project-summary" | "task-action" | "workflow-review";
       reason?: string;
       suggestedNextStep?: string;
@@ -344,7 +428,7 @@ function getInitialCanvas(): CanvasState {
 
 function stripExistingAllevinInsight(value?: string) {
    return cleanText(value)
-      .replace(/\n*ALLEVIN Insight\n[\s\S]*$/i, "")
+      .replace(/\n*Helpful note\n[\s\S]*$/i, "")
       .trim();
 }
 
@@ -418,7 +502,7 @@ function buildCanvasContentWithInsight(baseContent?: string, insight?: string) {
 
    const cleanInsight = cleanText(insight);
 
-   const insightBlock = cleanInsight ? `ALLEVIN Insight\n\n${cleanInsight}` : "";
+   const insightBlock = cleanInsight ? `Helpful note\n\n${cleanInsight}` : "";
 
    return [cleanBase, insightBlock].filter(Boolean).join("\n\n").trim();
 }
@@ -462,7 +546,7 @@ function getDocumentSection(text: string, label: string) {
    }
 
    const pattern = new RegExp(
-      `(?:^|\\n)\\s*${label}\\s*:\\s*\\n?([\\s\\S]*?)(?=\\n\\s*(?:Focus|Useful Context|Next Step|Current Location|Status|Stage|Latest Movement|Project Notes|ALLEVIN Recommendation|Recommended Move|Destination|Confidence|Risk|Reason|Projects|Summary|Title|Primary Content|Current Working View|Working Summary|Workflow Metadata|Source|Lane|Priority|Current board status)\\s*:|$)`,
+      `(?:^|\\n)\\s*${label}\\s*:\\s*\\n?([\\s\\S]*?)(?=\\n\\s*(?:Focus|Helpful Context|Next Step|Current Location|Status|Stage|Latest Movement|Project Notes|ALLEVIN Recommendation|Recommended Move|Destination|Confidence|Risk|Reason|Projects|Summary|Title|Primary Content|Current Working View|Working Summary|Workflow Metadata|Source|Lane|Priority|Project status)\\s*:|$)`,
       "i",
    );
 
@@ -516,7 +600,7 @@ function removeDocumentMetadata(value?: string) {
       "source",
       "lane",
       "priority",
-      "current board status",
+      "project status",
       "current working view",
       "working summary",
    ];
@@ -765,7 +849,7 @@ function isStructuralLine(value?: string) {
       "next decision:",
       "workflow metadata:",
       "source:",
-      "current board status:",
+      "project status:",
    ];
 
    return structuralLines.includes(lower);
@@ -853,7 +937,7 @@ function getSectionAfterLabel(text: string, label: string) {
             lower === "movement:" ||
             lower === "context:" ||
             lower === "source:" ||
-            lower === "current board status:";
+            lower === "project status:";
 
          if (isNextTopLevelSection) {
             break;
@@ -871,7 +955,7 @@ function extractPrimaryContentBlock(value?: string) {
 
    if (!text) return "";
 
-   const regexMatch = text.match(/(?:^|\n)\s*primary content:\s*\n?([\s\S]*?)(?=\n\s*(?:lane|priority|next step|useful context|current board status|working summary|current working view|source|title|focus):|$)/i);
+   const regexMatch = text.match(/(?:^|\n)\s*primary content:\s*\n?([\s\S]*?)(?=\n\s*(?:lane|priority|next step|useful context|project status|working summary|current working view|source|title|focus):|$)/i);
 
    if (regexMatch?.[1]) {
       const extracted = cleanText(regexMatch[1]);
@@ -914,7 +998,7 @@ function extractPrimaryContentBlock(value?: string) {
             lower === "priority:" ||
             lower === "next step:" ||
             lower === "useful context:" ||
-            lower === "current board status:" ||
+            lower === "project status:" ||
             lower === "working summary:" ||
             lower === "current working view:" ||
             lower === "source:" ||
@@ -922,7 +1006,7 @@ function extractPrimaryContentBlock(value?: string) {
             lower.startsWith("priority:") ||
             lower.startsWith("next step:") ||
             lower.startsWith("useful context:") ||
-            lower.startsWith("current board status:") ||
+            lower.startsWith("project status:") ||
             lower.startsWith("working summary:") ||
             lower.startsWith("current working view:") ||
             lower.startsWith("source:");
@@ -1003,9 +1087,9 @@ function isGenericCanvasTitle(title?: string) {
       "allevin mk iii workflow review",
       "allevin mk iii signal check",
       "project work item",
-      "board item completed",
+      "project item completed",
       "workflow signal",
-      "task routed to board",
+      "project item saved",
       "task generated from canvas",
       "task created",
       "active allevin project",
@@ -1063,7 +1147,7 @@ function extractCleanFocusContent(value?: string) {
             !lower.startsWith("priority:") &&
             !lower.startsWith("next step:") &&
             !lower.startsWith("useful context:") &&
-            !lower.startsWith("current board status:")
+            !lower.startsWith("project status:")
          );
       });
 
@@ -1096,7 +1180,7 @@ function extractCleanFocusContent(value?: string) {
          lower === "priority:" ||
          lower === "next step:" ||
          lower === "useful context:" ||
-         lower === "current board status:" ||
+         lower === "project status:" ||
          lower === "working summary:" ||
          lower === "current working view:"
       ) {
@@ -1112,7 +1196,7 @@ function extractCleanFocusContent(value?: string) {
          lower.startsWith("priority:") ||
          lower.startsWith("next step:") ||
          lower.startsWith("useful context:") ||
-         lower.startsWith("current board status:") ||
+         lower.startsWith("project status:") ||
          lower.startsWith("working summary:") ||
          lower.startsWith("current working view:")
       ) {
@@ -1169,7 +1253,7 @@ function sanitizeProjectVisibleContent(value: string, payload: CanvasImportPaylo
 
    const existingFocus = extractCleanFocusContent(sourceText) || extractCleanFocusContent(value);
 
-   const existingUsefulContext = getSectionAfterLabel(sourceText, "Useful Context") || getSectionAfterLabel(value, "Useful Context");
+   const existingUsefulContext = getSectionAfterLabel(sourceText, "Helpful Context") || getSectionAfterLabel(value, "Helpful Context");
 
    const existingNextStep = getSectionAfterLabel(sourceText, "Next Step") || getSectionAfterLabel(value, "Next Step");
 
@@ -1193,7 +1277,7 @@ function sanitizeProjectVisibleContent(value: string, payload: CanvasImportPaylo
          return !lower.includes("\nlane:") && !lower.includes("\npriority:") && !lower.includes("\nnext step:") && !lower.includes("\nuseful context:") && !lower.startsWith("primary content:");
       });
 
-   const lane = getValueAfterLabel(sourceText, "Current board status") || getValueAfterLabel(value, "Current board status") || getValueAfterLabel(sourceText, "Lane") || getValueAfterLabel(value, "Lane");
+   const lane = getValueAfterLabel(sourceText, "Project status") || getValueAfterLabel(value, "Project status") || getValueAfterLabel(sourceText, "Lane") || getValueAfterLabel(value, "Lane");
 
    const priority = getValueAfterLabel(sourceText, "Priority") || getValueAfterLabel(value, "Priority") || "medium";
 
@@ -1205,10 +1289,10 @@ function sanitizeProjectVisibleContent(value: string, payload: CanvasImportPaylo
 
    const usefulContext = mergeUsefulContextLines([
       title ? `Project: ${title}` : null,
-      boardStatus ? `Current board status: ${boardStatus}` : null,
+      boardStatus ? `Project status: ${boardStatus}` : null,
       priority ? `Priority: ${priority}` : null,
-      payload.source === "project" ? "Board context: This work came from the Project Board and is now being continued in Canvas." : null,
-      payload.source === "project" ? "Latest update: ALLEVIN is treating the newest Board edit as the current project version." : null,
+      payload.source === "project" ? "This work came from Projects and is now being continued in Canvas." : null,
+      payload.source === "project" ? "This is the latest saved project update." : null,
       existingUsefulContext,
    ]);
 
@@ -1216,10 +1300,10 @@ function sanitizeProjectVisibleContent(value: string, payload: CanvasImportPaylo
       existingNextStep && !isGenericNextStep(existingNextStep)
          ? existingNextStep
          : payload.source === "project"
-           ? "Continue developing the latest Board update in Canvas. When the work is ready, send it to Tasks, move it forward on the Board, or save it to Projects."
-           : "Review the latest content, make any needed edits, then choose the next useful move.";
+           ? "Continue editing this project in Canvas. When it is ready, save it to Projects or schedule time to work on it."
+           : "Review the content, make any edits, then choose the next step.";
 
-   return [`Focus:\n${focus}`, usefulContext ? `Useful Context:\n${usefulContext}` : "", `Next Step:\n${nextStep}`].filter(Boolean).join("\n\n").trim();
+   return [`Focus:\n${focus}`, usefulContext ? `Helpful Context:\n${usefulContext}` : "", `Next Step:\n${nextStep}`].filter(Boolean).join("\n\n").trim();
 }
 
 function getPriorityFromPayload(payload: CanvasImportPayload): "low" | "medium" | "high" {
@@ -1234,7 +1318,7 @@ function getPriorityFromPayload(payload: CanvasImportPayload): "low" | "medium" 
    return "medium";
 }
 
-function buildBoardProjectCanvasImport(payload: CanvasImportPayload) {
+function buildProjectCanvasImport(payload: CanvasImportPayload) {
    // Canvas should feel like a document.
    // Keep metadata in memory, but only place the latest project text on the page.
    return getPlainCanvasDocument(payload) || getBestIncomingTitle(payload);
@@ -1305,7 +1389,7 @@ function getBestIncomingTitle(payload: CanvasImportPayload) {
       return truncate(normalizeProjectTitle(firstUsefulLine) || firstUsefulLine, 120);
    }
 
-   return "Focused Canvas Work";
+   return "Canvas Draft";
 }
 
 function extractSourceContentFromPayload(payload: CanvasImportPayload) {
@@ -1417,7 +1501,7 @@ function normalizeInternalIntegrationDestination(destination?: string): Integrat
    const lower = (destination || "").toLowerCase();
 
    if (lower.includes("task")) {
-      return "tasks";
+      return "projects";
    }
 
    if (lower.includes("calendar") || lower.includes("schedule") || lower.includes("event")) {
@@ -1429,8 +1513,8 @@ function normalizeInternalIntegrationDestination(destination?: string): Integrat
 
 function getInternalIntegrationDestinationLabel(destination: IntegrationSavePayload["destination"]) {
    switch (destination) {
-      case "tasks":
-         return "Tasks";
+      case "projects":
+         return "Projects";
 
       case "calendar":
          return "Calendar";
@@ -1456,7 +1540,7 @@ function getInternalIntegrationNextStep(destination: IntegrationSavePayload["des
       return cleanFallback;
    }
 
-   if (destination === "tasks") {
+   if (destination === "projects") {
       return "Create a task when this is ready to become a concrete next step.";
    }
 
@@ -1506,6 +1590,284 @@ function readCanvasProjectLibrary() {
    }
 }
 
+function isProjectMaterialType(value?: string): value is ProjectMaterialType {
+   return (
+      value === "Note" ||
+      value === "Reference" ||
+      value === "Research" ||
+      value === "Feedback" ||
+      value === "Requirement" ||
+      value === "Idea" ||
+      value === "Meeting Note" ||
+      value === "Visual Reference" ||
+      value === "Document" ||
+      value === "Image" ||
+      value === "Other"
+   );
+}
+
+function sanitizeProjectMaterialType(value?: string): ProjectMaterialType {
+   return isProjectMaterialType(value) ? value : "Note";
+}
+
+function sanitizeCanvasDocumentDataUrl(value?: string) {
+   const cleanValue = typeof value === "string" ? value.trim() : "";
+
+   if (!cleanValue.startsWith("data:")) {
+      return undefined;
+   }
+
+   return cleanValue;
+}
+
+function sanitizeCanvasDocumentFileName(value?: string) {
+   return typeof value === "string" ? sanitizeCanvasPlainText(value, 180).replace(/\n+/g, " ").trim() : undefined;
+}
+
+function sanitizeCanvasDocumentMimeType(value?: string) {
+   const cleanValue = typeof value === "string" ? sanitizeCanvasPlainText(value, 120).toLowerCase() : "";
+
+   return cleanValue || undefined;
+}
+
+function isCanvasReadableTextDocument(reference?: CanvasReferenceItem | ProjectMaterial | null) {
+   const mimeType = (reference?.documentMimeType || "").toLowerCase();
+
+   return Boolean(reference?.documentText || mimeType.includes("text/plain") || mimeType.includes("markdown"));
+}
+
+function isCanvasReadablePdfDocument(reference?: CanvasReferenceItem | ProjectMaterial | null) {
+   const mimeType = (reference?.documentMimeType || "").toLowerCase();
+
+   return Boolean(reference?.documentDataUrl && mimeType.includes("pdf"));
+}
+
+function canOpenCanvasDocument(reference?: CanvasReferenceItem | null) {
+   return Boolean(reference?.documentDataUrl || reference?.documentText);
+}
+
+function sanitizeCanvasInterpretationText(value?: string, limit: number = CANVAS_SANITIZE_LIMITS.summary) {
+   return sanitizeCanvasPlainText(value, limit);
+}
+
+function getCanvasReferenceMainPreview(reference: CanvasReferenceItem) {
+   return (
+      reference.interpretationSummary ||
+      reference.summary ||
+      getReferencePreview(reference.body, 180) ||
+      (reference.imageDataUrl ? "Image saved for this project." : reference.documentDataUrl || reference.documentText ? "Document saved for this project." : "Reference saved for this project.")
+   );
+}
+
+function readCanvasProjectMaterials() {
+   if (typeof window === "undefined") {
+      return [] as ProjectMaterial[];
+   }
+
+   const stored = localStorage.getItem(PROJECT_MATERIALS_STORAGE_KEY);
+
+   if (!stored) {
+      return [] as ProjectMaterial[];
+   }
+
+   try {
+      const parsed = JSON.parse(stored);
+
+      if (!Array.isArray(parsed)) {
+         return [] as ProjectMaterial[];
+      }
+
+      return parsed
+         .filter((material) => material && typeof material.id === "string" && typeof material.projectId === "string")
+         .map((material) => ({
+            id: sanitizeCanvasPlainText(material.id, 180),
+            projectId: sanitizeCanvasPlainText(material.projectId, 180),
+            projectTitle: sanitizeCanvasTitle(material.projectTitle || "Project"),
+            title: sanitizeCanvasTitle(material.title || "Untitled material"),
+            type: sanitizeProjectMaterialType(material.type),
+            source: sanitizeCanvasPlainText(material.source || "", 300),
+            notes: sanitizeProjectBodyFromCanvas(material.notes || ""),
+            summary: sanitizeCanvasSummary(material.summary || material.notes || material.title || ""),
+            imageDataUrl: typeof material.imageDataUrl === "string" && material.imageDataUrl.startsWith("data:image/") ? material.imageDataUrl : undefined,
+            imageFileName: typeof material.imageFileName === "string" ? sanitizeCanvasPlainText(material.imageFileName, 180) : undefined,
+            imageMimeType: typeof material.imageMimeType === "string" ? sanitizeCanvasPlainText(material.imageMimeType, 80) : undefined,
+            documentDataUrl: sanitizeCanvasDocumentDataUrl(material.documentDataUrl),
+            documentFileName: sanitizeCanvasDocumentFileName(material.documentFileName),
+            documentMimeType: sanitizeCanvasDocumentMimeType(material.documentMimeType),
+            documentText: typeof material.documentText === "string" ? sanitizeProjectBodyFromCanvas(material.documentText) : undefined,
+            interpretationSummary: sanitizeCanvasInterpretationText(material.interpretationSummary, CANVAS_SANITIZE_LIMITS.summary),
+            interpretationUsefulContext: sanitizeCanvasInterpretationText(material.interpretationUsefulContext, CANVAS_SANITIZE_LIMITS.summary),
+            interpretationNextStep: sanitizeCanvasInterpretationText(material.interpretationNextStep, CANVAS_SANITIZE_LIMITS.nextStep),
+            interpretedAt: typeof material.interpretedAt === "number" && Number.isFinite(material.interpretedAt) ? material.interpretedAt : undefined,
+            createdAt: typeof material.createdAt === "number" && Number.isFinite(material.createdAt) ? material.createdAt : Date.now(),
+            updatedAt: typeof material.updatedAt === "number" && Number.isFinite(material.updatedAt) ? material.updatedAt : Date.now(),
+         }))
+         .sort((a, b) => b.updatedAt - a.updatedAt);
+   } catch {
+      localStorage.removeItem(PROJECT_MATERIALS_STORAGE_KEY);
+
+      return [] as ProjectMaterial[];
+   }
+}
+
+function getCanvasTitleKey(value?: string) {
+   return compactText(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+}
+
+function getActiveCanvasProjectRecord(canvas: CanvasState) {
+   const projects = readCanvasProjectLibrary();
+
+   const workflowId = canvas.workflowId || canvas.originBoardItemId;
+
+   const titleKey = getCanvasTitleKey(canvas.sourceTitle || canvas.title);
+
+   return (
+      projects.find((project: any) => workflowId && (project.workflowId === workflowId || project.originBoardItemId === workflowId || project.id === workflowId)) ||
+      projects.find((project: any) => titleKey && getCanvasTitleKey(project?.title) === titleKey)
+   );
+}
+
+function getReferencePreview(value?: string, limit = 160) {
+   const clean = compactText(value);
+
+   if (clean.length <= limit) {
+      return clean;
+   }
+
+   return `${clean.slice(0, limit).trim()}...`;
+}
+
+function isCurrentCanvasBodyReference(note: any, activeProject: any, canvas: CanvasState) {
+   const noteBodyKey = compactText(note?.body || note?.summary || "").toLowerCase();
+
+   const noteTitleKey = getCanvasTitleKey(note?.title);
+
+   const canvasBodyKey = compactText(canvas.content || canvas.sourceContent || canvas.workingSummary || "").toLowerCase();
+
+   const projectBodyKey = compactText(activeProject?.latestSummary || activeProject?.notes?.[0]?.body || "").toLowerCase();
+
+   const activeTitleKey = getCanvasTitleKey(activeProject?.title || canvas.sourceTitle || canvas.title);
+
+   const looksLikeFullProjectBody = noteTitleKey && activeTitleKey && noteTitleKey === activeTitleKey;
+
+   const sameAsCanvas = noteBodyKey && canvasBodyKey && noteBodyKey === canvasBodyKey;
+
+   const sameAsProjectBody = noteBodyKey && projectBodyKey && noteBodyKey === projectBodyKey;
+
+   return Boolean(looksLikeFullProjectBody && (sameAsCanvas || sameAsProjectBody));
+}
+
+function getCanvasReferenceItems(canvas: CanvasState) {
+   const activeProject = getActiveCanvasProjectRecord(canvas);
+
+   const activeProjectId = activeProject?.id || canvas.workflowId || canvas.originBoardItemId || "";
+
+   const activeTitleKey = getCanvasTitleKey(activeProject?.title || canvas.sourceTitle || canvas.title);
+
+   const notes: CanvasReferenceItem[] = Array.isArray(activeProject?.notes)
+      ? activeProject.notes
+           .filter((note: any) => note && typeof note.id === "string")
+           .filter((note: any) => !isCurrentCanvasBodyReference(note, activeProject, canvas))
+           .map((note: any) => ({
+              id: `note:${note.id}`,
+              kind: "note" as const,
+              projectId: activeProject?.id || activeProjectId,
+              title: sanitizeCanvasTitle(note.title || activeProject?.title || "Project note"),
+              label: "Saved note",
+              source: sanitizeCanvasPlainText(note.source || "Projects", 120),
+              summary: sanitizeCanvasSummary(note.summary || note.body || ""),
+              body: sanitizeProjectBodyFromCanvas(note.body || note.summary || ""),
+              updatedAt: typeof note.savedAt === "number" ? note.savedAt : typeof activeProject?.updatedAt === "number" ? activeProject.updatedAt : Date.now(),
+           }))
+           .slice(0, 8)
+      : [];
+
+   const materials = readCanvasProjectMaterials()
+      .filter((material) => {
+         const sameProjectId = activeProjectId && material.projectId === activeProjectId;
+
+         const sameProjectTitle = activeTitleKey && getCanvasTitleKey(material.projectTitle) === activeTitleKey;
+
+         return Boolean(sameProjectId || sameProjectTitle);
+      })
+      .map((material) => ({
+         id: `material:${material.id}`,
+         kind: "material" as const,
+         projectId: material.projectId,
+         title: material.title,
+         label: material.type,
+         source: material.source || "Project material",
+         summary: material.summary || getReferencePreview(material.notes, 220),
+         body: material.notes || material.summary || "",
+         imageDataUrl: material.imageDataUrl,
+         imageFileName: material.imageFileName,
+         imageMimeType: material.imageMimeType,
+         documentDataUrl: material.documentDataUrl,
+         documentFileName: material.documentFileName,
+         documentMimeType: material.documentMimeType,
+         documentText: material.documentText,
+         interpretationSummary: material.interpretationSummary,
+         interpretationUsefulContext: material.interpretationUsefulContext,
+         interpretationNextStep: material.interpretationNextStep,
+         interpretedAt: material.interpretedAt,
+         updatedAt: material.updatedAt,
+      }));
+
+   return [...materials, ...notes].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function readSelectedCanvasReferenceIds() {
+   if (typeof window === "undefined") {
+      return [] as string[];
+   }
+
+   try {
+      const stored = localStorage.getItem(CANVAS_SELECTED_REFERENCES_STORAGE_KEY);
+
+      const parsed = stored ? JSON.parse(stored) : [];
+
+      return Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : [];
+   } catch {
+      localStorage.removeItem(CANVAS_SELECTED_REFERENCES_STORAGE_KEY);
+
+      return [] as string[];
+   }
+}
+
+function saveSelectedCanvasReferenceIds(ids: string[]) {
+   if (typeof window === "undefined") {
+      return;
+   }
+
+   localStorage.setItem(CANVAS_SELECTED_REFERENCES_STORAGE_KEY, JSON.stringify(Array.from(new Set(ids)).slice(0, 20)));
+}
+
+function getReadableCanvasUpdatedAt(value?: number) {
+   if (!value) {
+      return "Not saved yet";
+   }
+
+   try {
+      return new Intl.DateTimeFormat(undefined, {
+         month: "short",
+         day: "numeric",
+         hour: "numeric",
+         minute: "2-digit",
+      }).format(new Date(value));
+   } catch {
+      return "Recently updated";
+   }
+}
+
+function getCanvasWordCount(value?: string) {
+   const words = compactText(value).split(" ").filter(Boolean);
+
+   return words.length;
+}
+
 function getCanvasProjectLibraryKey({ workflowId, originBoardItemId, title }: { workflowId?: string; originBoardItemId?: string; title?: string }) {
    if (workflowId) {
       return `workflow:${workflowId}`;
@@ -1534,15 +1896,33 @@ function saveCanvasProjectToLibrary({ title, body, summary, workflowId, originBo
 
    const cleanSummary = sanitizeCanvasSummary(summary || cleanBody) || cleanTitle;
 
-   const key = getCanvasProjectLibraryKey({
-      workflowId,
-      originBoardItemId,
-      title: cleanTitle,
-   });
-
    const current = readCanvasProjectLibrary();
 
-   const existing = current.find((project) => project?.id === key);
+   const cleanTitleKey = getCanvasTitleKey(cleanTitle);
+
+   const matchingProject = current.find((project) => {
+      if (!project) {
+         return false;
+      }
+
+      const projectTitleKey = getCanvasTitleKey(project.title);
+
+      const sameTitle = cleanTitleKey && projectTitleKey && cleanTitleKey === projectTitleKey;
+
+      const sameWorkflow = workflowId && (project.workflowId === workflowId || project.originBoardItemId === workflowId || project.id === workflowId || project.id === `workflow:${workflowId}`);
+
+      const sameOrigin = originBoardItemId && (project.originBoardItemId === originBoardItemId || project.workflowId === originBoardItemId || project.id === originBoardItemId || project.id === `origin:${originBoardItemId}`);
+
+      return Boolean(sameTitle || sameWorkflow || sameOrigin);
+   });
+
+   const key =
+      matchingProject?.id ||
+      getCanvasProjectLibraryKey({
+         workflowId,
+         originBoardItemId,
+         title: cleanTitle,
+      });
 
    const note = {
       id: crypto.randomUUID(),
@@ -1553,15 +1933,18 @@ function saveCanvasProjectToLibrary({ title, body, summary, workflowId, originBo
       savedAt: Date.now(),
    };
 
-   const nextProject = existing
+   const previousNotes = Array.isArray(matchingProject?.notes) ? matchingProject.notes : [];
+
+   const nextProject = matchingProject
       ? {
-           ...existing,
-           title: cleanTitle || existing.title,
-           workflowId: workflowId || existing.workflowId,
-           originBoardItemId: originBoardItemId || existing.originBoardItemId,
+           ...matchingProject,
+           id: matchingProject.id || key,
+           title: cleanTitle || matchingProject.title,
+           workflowId: workflowId || matchingProject.workflowId,
+           originBoardItemId: originBoardItemId || matchingProject.originBoardItemId,
            latestSummary: cleanBody.length >= cleanSummary.length ? cleanBody : cleanSummary,
            latestMovement: "Saved to Projects",
-           notes: [note, ...((existing.notes || []) as any[]).filter((existingNote) => existingNote?.id !== note.id)].slice(0, 30),
+           notes: [note, ...previousNotes.filter((existingNote: any) => existingNote?.id !== note.id)].slice(0, 30),
            updatedAt: Date.now(),
         }
       : {
@@ -1576,7 +1959,28 @@ function saveCanvasProjectToLibrary({ title, body, summary, workflowId, originBo
            updatedAt: Date.now(),
         };
 
-   localStorage.setItem(PROJECT_LIBRARY_STORAGE_KEY, JSON.stringify([nextProject, ...current.filter((project) => project?.id !== key)].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 80)));
+   const nextProjects = [
+      nextProject,
+      ...current.filter((project) => {
+         if (!project) {
+            return false;
+         }
+
+         const sameId = project.id === nextProject.id;
+
+         const sameTitle = cleanTitleKey && getCanvasTitleKey(project.title) === cleanTitleKey;
+
+         const sameWorkflow = workflowId && (project.workflowId === workflowId || project.originBoardItemId === workflowId || project.id === workflowId || project.id === `workflow:${workflowId}`);
+
+         const sameOrigin = originBoardItemId && (project.originBoardItemId === originBoardItemId || project.workflowId === originBoardItemId || project.id === originBoardItemId || project.id === `origin:${originBoardItemId}`);
+
+         return !sameId && !sameTitle && !sameWorkflow && !sameOrigin;
+      }),
+   ]
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+      .slice(0, 80);
+
+   localStorage.setItem(PROJECT_LIBRARY_STORAGE_KEY, JSON.stringify(nextProjects));
 
    window.dispatchEvent(new CustomEvent("allevin-project-library-update"));
 
@@ -1584,8 +1988,8 @@ function saveCanvasProjectToLibrary({ title, body, summary, workflowId, originBo
       new CustomEvent("allevin-project-note-saved", {
          detail: {
             title: cleanTitle,
-            workflowId,
-            originBoardItemId,
+            workflowId: nextProject.workflowId,
+            originBoardItemId: nextProject.originBoardItemId,
             noteId: note.id,
             savedAt: note.savedAt,
          },
@@ -1618,7 +2022,7 @@ function buildCanonicalBody({
 
    const sections: string[] = [];
 
-   sections.push(`Title:\n${sanitizeCanvasTitle(title || "Untitled Canvas Work")}`);
+   sections.push(`Title:\n${sanitizeCanvasTitle(title || "Untitled Canvas Draft")}`);
 
    if (cleanSource) {
       sections.push(`Primary Content:\n${cleanSource}`);
@@ -1725,7 +2129,71 @@ export default function AdaptiveWorkCanvas() {
 
    const [importNotice, setImportNotice] = useState(false);
 
-   const [exportNotice, setExportNotice] = useState(false);
+   const [saveNotice, setSaveNotice] = useState(false);
+
+   const [selectedReferenceIds, setSelectedReferenceIds] = useState<string[]>([]);
+
+   const [expandedReferenceId, setExpandedReferenceId] = useState<string | null>(null);
+
+   const [referenceRefreshKey, setReferenceRefreshKey] = useState(0);
+
+   const [fullscreenReferenceImage, setFullscreenReferenceImage] = useState<CanvasReferenceItem | null>(null);
+
+   const [fullscreenReferenceDocument, setFullscreenReferenceDocument] = useState<CanvasReferenceItem | null>(null);
+
+   const canvasReferenceItems = useMemo(() => getCanvasReferenceItems(canvas), [canvas.title, canvas.sourceTitle, canvas.workflowId, canvas.originBoardItemId, referenceRefreshKey]);
+
+   const activeReferenceItems = useMemo(() => canvasReferenceItems.filter((reference) => selectedReferenceIds.includes(reference.id)), [canvasReferenceItems, selectedReferenceIds]);
+
+   const selectedReferenceItem = useMemo(
+      () => canvasReferenceItems.find((reference) => reference.id === expandedReferenceId) || canvasReferenceItems.find((reference) => selectedReferenceIds.includes(reference.id)) || null,
+      [canvasReferenceItems, expandedReferenceId, selectedReferenceIds],
+   );
+
+   const activeProjectRecord = useMemo(() => getActiveCanvasProjectRecord(canvas), [canvas.title, canvas.sourceTitle, canvas.workflowId, canvas.originBoardItemId, referenceRefreshKey]);
+
+   function openCanvasReference(referenceId: string) {
+      // Build 7 Patch 5:
+      // Clicking a reference toggles selection and preview together.
+      // No separate Select button is needed.
+      const wasSelected = selectedReferenceIds.includes(referenceId);
+
+      setSelectedReferenceIds((current) => {
+         const next = current.includes(referenceId) ? current.filter((id) => id !== referenceId) : [...current, referenceId].slice(-8);
+
+         saveSelectedCanvasReferenceIds(next);
+
+         return next;
+      });
+
+      setExpandedReferenceId(wasSelected ? null : referenceId);
+   }
+
+   function chooseCanvasReference(referenceId: string) {
+      if (!referenceId) {
+         clearCanvasReferences();
+
+         return;
+      }
+
+      setSelectedReferenceIds([referenceId]);
+
+      saveSelectedCanvasReferenceIds([referenceId]);
+
+      setExpandedReferenceId(referenceId);
+   }
+
+   function clearCanvasReferences() {
+      setSelectedReferenceIds([]);
+
+      saveSelectedCanvasReferenceIds([]);
+
+      setExpandedReferenceId(null);
+
+      setFullscreenReferenceImage(null);
+
+      setFullscreenReferenceDocument(null);
+   }
 
    function syncCanvasStatus(status: "focused-work-active" | "integration-ready" | "workspace-stable" = "focused-work-active") {
       workspace.setSystemStatus(status);
@@ -1739,6 +2207,8 @@ export default function AdaptiveWorkCanvas() {
 
    useEffect(() => {
       setMounted(true);
+
+      setSelectedReferenceIds(readSelectedCanvasReferenceIds());
 
       const savedCanvas = localStorage.getItem(STORAGE_KEY);
 
@@ -1784,6 +2254,26 @@ export default function AdaptiveWorkCanvas() {
    useEffect(() => {
       liveCanvasRef.current = canvas;
    }, [canvas]);
+
+   useEffect(() => {
+      function refreshCanvasReferences() {
+         setReferenceRefreshKey((current) => current + 1);
+      }
+
+      window.addEventListener("allevin-project-materials-update", refreshCanvasReferences);
+
+      window.addEventListener("allevin-project-library-update", refreshCanvasReferences);
+
+      window.addEventListener("storage", refreshCanvasReferences);
+
+      return () => {
+         window.removeEventListener("allevin-project-materials-update", refreshCanvasReferences);
+
+         window.removeEventListener("allevin-project-library-update", refreshCanvasReferences);
+
+         window.removeEventListener("storage", refreshCanvasReferences);
+      };
+   }, []);
 
    // ========================================
    // Save Canvas
@@ -1846,7 +2336,7 @@ export default function AdaptiveWorkCanvas() {
                   type: "insight",
                   source: "canvas",
                   destination: "canvas",
-                  title: updated.title || "Untitled Canvas Work",
+                  title: updated.title || "Untitled Canvas Draft",
                   summary: sanitizeCanvasSummary(`Canvas updated. ${updated.content || updated.workingSummary || ""}`),
                   sourceTitle: updated.title,
                   sourceContent: sanitizeProjectBodyFromCanvas(updated.sourceContent || updated.content),
@@ -1895,6 +2385,8 @@ export default function AdaptiveWorkCanvas() {
 
       setCanvas(freshCanvas);
 
+      clearCanvasReferences();
+
       syncCanvasStatus("workspace-stable");
 
       setResetNotice(true);
@@ -1912,17 +2404,37 @@ export default function AdaptiveWorkCanvas() {
    // ========================================
 
    function replaceCanvasWithImport(payload: CanvasImportPayload) {
-      const isBoardProjectImport = payload.source === "project";
+      const isProjectImport = payload.source === "project";
 
-      const focusedImport = isBoardProjectImport
+      const focusedImport = isProjectImport
          ? {
               title: getBestIncomingTitle(payload),
-              content: buildBoardProjectCanvasImport(payload),
+              content: buildProjectCanvasImport(payload),
            }
          : buildFocusedCanvasImport(payload);
 
-      // Board → Canvas handoffs should preserve the smarter context generator output.
-      // The older project sanitizer was useful for removing noisy board payloads,
+      if (payload.referenceMode === "selected-material" && payload.materialId) {
+         const referenceId = `material:${payload.materialId}`;
+
+         setSelectedReferenceIds((current) => {
+            const next = [referenceId, ...current.filter((id) => id !== referenceId)].slice(0, 8);
+
+            saveSelectedCanvasReferenceIds(next);
+
+            return next;
+         });
+
+         setExpandedReferenceId(referenceId);
+
+         setReferenceRefreshKey((current) => current + 1);
+      }
+
+      // Project → Canvas handoffs should keep reference material in the side panel,
+      // not paste it into the writing space.
+      // The editor stays focused on the current draft/update while references remain selectable.
+
+      // Projects → Canvas handoffs should preserve the smarter context generator output.
+      // The older project sanitizer was useful for removing noisy project payloads,
       // but it also stripped the smarter MK III context back down to only Priority.
       const visibleContent = removeDocumentMetadata(focusedImport.content) || focusedImport.content;
 
@@ -1931,9 +2443,9 @@ export default function AdaptiveWorkCanvas() {
 
          const incomingSourceContent = getPlainCanvasDocument(payload) || visibleContent;
 
-         // For Board → Canvas, the incoming project handoff is the newest source of truth.
-         // Do not preserve the previous Canvas source over the latest Board edit.
-         const shouldPreservePreviousSource = !isBoardProjectImport && Boolean(prev.sourceContent?.trim()) && Boolean(prev.workflowId) && Boolean(payload.workflowId) && prev.workflowId === payload.workflowId && payload.source === "system";
+         // For Projects → Canvas, the incoming project handoff is the newest source of truth.
+         // Do not preserve the previous Canvas source over the latest Project update.
+         const shouldPreservePreviousSource = !isProjectImport && Boolean(prev.sourceContent?.trim()) && Boolean(prev.workflowId) && Boolean(payload.workflowId) && prev.workflowId === payload.workflowId && payload.source === "system";
 
          const sourceTitle = shouldPreservePreviousSource ? prev.sourceTitle || incomingSourceTitle || focusedImport.title : incomingSourceTitle || focusedImport.title;
 
@@ -1969,7 +2481,7 @@ export default function AdaptiveWorkCanvas() {
             workingSummary: updatedCanvas.workingSummary || updatedCanvas.content,
             workflowId: updatedCanvas.workflowId,
             originBoardItemId: updatedCanvas.originBoardItemId,
-            source: updatedCanvas.source === "system" ? "system" : updatedCanvas.source === "research" ? "research" : updatedCanvas.source === "task" ? "task" : updatedCanvas.source === "project" ? "board" : "canvas",
+            source: updatedCanvas.source === "system" ? "system" : updatedCanvas.source === "research" ? "research" : updatedCanvas.source === "task" ? "task" : updatedCanvas.source === "project" ? "projects" : "canvas",
             destination: "canvas",
             stage: "drafting",
             status: "active",
@@ -2015,7 +2527,7 @@ export default function AdaptiveWorkCanvas() {
       recent.forEach((entry) => {
          const message = entry.message.toLowerCase();
 
-         if (message.includes("plan") || message.includes("organize") || message.includes("roadmap") || message.includes("schedule") || message.includes("tasks")) {
+         if (message.includes("plan") || message.includes("organize") || message.includes("roadmap") || message.includes("schedule") || message.includes("projects")) {
             planningSignals++;
          }
 
@@ -2148,11 +2660,11 @@ export default function AdaptiveWorkCanvas() {
    }
 
    // ========================================
-   // Build Preserved Task Context
+   // Build Preserved Project Context
    // ========================================
 
    // ========================================
-   // Send Canvas To Task System
+   // Save Canvas Into Project Flow
    // ========================================
 
    // ========================================
@@ -2161,7 +2673,7 @@ export default function AdaptiveWorkCanvas() {
    // Clears Canvas after save preparation
    // ========================================
 
-   function prepareCanvasExport() {
+   function prepareCanvasSave() {
       const title = sanitizeCanvasTitle(normalizeProjectTitle(canvas.sourceTitle) || normalizeProjectTitle(canvas.title) || getTaskTitleFromCanvas());
 
       const continuity = buildProjectContinuityMetadata(canvas, title);
@@ -2208,7 +2720,7 @@ export default function AdaptiveWorkCanvas() {
 
       // The "Save to Projects" button should always save directly to Projects.
       // Recommendations can still help shape the next step, but they should not reroute
-      // this button into Tasks/Calendar or any confirmation queue.
+      // this button into Projects/Calendar or any confirmation queue.
       const internalDestination = "notes" as IntegrationSavePayload["destination"];
 
       const internalSuggestedNextStep = getInternalIntegrationNextStep(internalDestination, recommendation.suggestedNextStep);
@@ -2218,7 +2730,7 @@ export default function AdaptiveWorkCanvas() {
 
          objectType: "project-summary",
 
-         title: sanitizeCanvasTitle(canvas.title.trim() || "Untitled Canvas Output"),
+         title: sanitizeCanvasTitle(canvas.title.trim() || "Untitled Canvas Draft"),
 
          body: cleanInternalOutputBody(sanitizeProjectBodyFromCanvas(canvas.content)),
 
@@ -2240,7 +2752,7 @@ export default function AdaptiveWorkCanvas() {
             ...recommendation,
             destination: internalDestination,
             objectType: "project-summary",
-            reason: "This Canvas content is ready to be saved to Projects.",
+            reason: "This draft is ready to save to Projects.",
             suggestedNextStep: "Save this to Projects when you want to keep it for later.",
          },
       };
@@ -2303,10 +2815,10 @@ export default function AdaptiveWorkCanvas() {
 
       syncCanvasStatus("integration-ready");
 
-      setExportNotice(true);
+      setSaveNotice(true);
 
       setTimeout(() => {
-         setExportNotice(false);
+         setSaveNotice(false);
       }, 1200);
    }
 
@@ -2342,12 +2854,12 @@ export default function AdaptiveWorkCanvas() {
    }, [canvas, mounted]);
 
    // ========================================
-   // Pipeline Advancement Cleanup
+   // Project Continuity Cleanup
    // Option 3:
    // Archive the previous active Canvas stage after
-   // an approved Canvas → Task movement.
+   // an approved Canvas → Projects movement.
    // This keeps Calm/project memory intact while
-   // preventing Canvas from continuing to look like
+   // keeping Canvas from continuing to look like
    // the active source after the pipeline advances.
    // ========================================
 
@@ -2510,7 +3022,7 @@ export default function AdaptiveWorkCanvas() {
          status: "active",
          priority: "medium",
          latestMovement: `${payload.source || "aidock"} → canvas`,
-         recommendedNextAction: payload.suggestedAction || "Continue refining this in Canvas.",
+         recommendedNextAction: payload.suggestedAction || "Keep editing this in Canvas.",
       });
 
       syncCanvasStatus("focused-work-active");
@@ -2686,14 +3198,14 @@ export default function AdaptiveWorkCanvas() {
                <div>
                   <h2 className="text-2xl sm:text-3xl">Canvas</h2>
 
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">Write, update, and continue project work here. Save in Canvas or save the project when you want to keep it for later.</p>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">Start here to draft, update, or continue the selected project with notes and materials nearby.</p>
                </div>
             </div>
 
             <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:w-auto lg:flex-wrap lg:items-center lg:gap-3">
                {importNotice && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">Opened in Canvas</div>}
 
-               {exportNotice && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">Saved to Projects</div>}
+               {saveNotice && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">Saved to Projects</div>}
 
                {resetNotice && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">Canvas reset</div>}
 
@@ -2730,7 +3242,7 @@ export default function AdaptiveWorkCanvas() {
                   {saved ? "Saved" : "Save"}
                </button>
                <button
-                  onClick={prepareCanvasExport}
+                  onClick={prepareCanvasSave}
                   className="
                      flex
                      w-full
@@ -2783,10 +3295,45 @@ export default function AdaptiveWorkCanvas() {
 
          {/* Canvas Grid */}
 
-         <div className="grid gap-4 lg:gap-6">
+         <div className="grid min-w-0 gap-4 lg:grid-cols-12 lg:gap-6">
             {/* Main Editor */}
 
-            <div>
+            <div className="min-w-0 lg:col-span-8">
+               <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="rounded-[20px] border border-[var(--border-subtle)] bg-white p-4">
+                     <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                        <Clock3 size={14} />
+                        Where you left off
+                     </div>
+
+                     <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{canvas.title || activeProjectRecord?.title || "Untitled Canvas"}</p>
+
+                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Updated {getReadableCanvasUpdatedAt(canvas.updatedAt)}</p>
+                  </div>
+
+                  <div className="rounded-[20px] border border-[var(--border-subtle)] bg-white p-4">
+                     <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                        <NotebookPen size={14} />
+                        Current work
+                     </div>
+
+                     <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{getCanvasWordCount(canvas.content)} words</p>
+
+                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Use the editor for today’s draft, update, or plan.</p>
+                  </div>
+
+                  <div className="rounded-[20px] border border-[var(--border-subtle)] bg-white p-4">
+                     <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                        <Layers size={14} />
+                        References
+                     </div>
+
+                     <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{selectedReferenceItem ? "1 selected" : "None selected"}</p>
+
+                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Notes and materials available for this project.</p>
+                  </div>
+               </div>
+
                <div className="rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
                   <input
                      value={canvas.title}
@@ -2870,8 +3417,8 @@ export default function AdaptiveWorkCanvas() {
                               content: nextContent,
 
                               // The current Canvas edit becomes the latest project source.
-                              // This prevents older Task/Board context from overwriting
-                              // new information when the same project is routed again.
+                              // This prevents older context from overwriting new information
+                              // when the same project is routed again.
                               sourceContent: nextContent,
 
                               workingSummary: nextContent,
@@ -2896,11 +3443,217 @@ export default function AdaptiveWorkCanvas() {
 
                         ${canvasMode.editorClass}
                      `}
-                     placeholder="Start writing here. Capture the idea, plan, note, or project you want ALLEVIN to help move forward..."
+                     placeholder="Write today’s update, draft, or next working version here."
                   />
                </div>
             </div>
+
+            {/* Reference Panel */}
+
+            <aside className="min-w-0 lg:col-span-4">
+               <div className="rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:rounded-3xl">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between lg:flex-col xl:flex-row">
+                     <div>
+                        <p className="flex items-center gap-2 font-medium">
+                           <Layers size={17} />
+                           Project References
+                        </p>
+
+                        <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Choose a project note or material to keep beside your draft while you work.</p>
+                     </div>
+                  </div>
+
+                  {canvasReferenceItems.length > 0 ? (
+                     <div className="mt-4 space-y-3">
+                        <label className="block text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]" htmlFor="canvas-reference-picker">
+                           Choose a reference
+                        </label>
+
+                        <select
+                           id="canvas-reference-picker"
+                           value={selectedReferenceItem?.id || ""}
+                           onChange={(event) => chooseCanvasReference(event.target.value)}
+                           className="w-full rounded-2xl border border-[var(--border-subtle)] bg-white px-3 py-3 text-sm text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
+                        >
+                           <option value="">No reference selected</option>
+
+                           {canvasReferenceItems.map((reference) => (
+                              <option key={reference.id} value={reference.id}>
+                                 {reference.kind === "material" ? reference.label : "Note"}: {reference.title}
+                              </option>
+                           ))}
+                        </select>
+
+                        {selectedReferenceItem && (
+                           <div className="rounded-2xl border border-[var(--color-primary)] bg-[var(--color-bg)] p-3">
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                 <span className="max-w-full break-words rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-[var(--color-text-secondary)]">
+                                    {selectedReferenceItem.kind === "material" ? selectedReferenceItem.label : "Note"}
+                                 </span>
+
+                                 {selectedReferenceItem.source && <span className="max-w-full break-words rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-[var(--color-text-secondary)]">{selectedReferenceItem.source}</span>}
+
+                                 <span className="max-w-full break-words rounded-full bg-[var(--color-primary)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-cream)]">Selected</span>
+                              </div>
+
+                              <p className="mt-3 break-words text-sm font-semibold leading-5 text-[var(--color-text-primary)]">{selectedReferenceItem.title}</p>
+
+                              <p className="mt-2 break-words text-xs leading-5 text-[var(--color-text-secondary)]">{getCanvasReferenceMainPreview(selectedReferenceItem)}</p>
+
+                              {selectedReferenceItem.interpretationSummary && (
+                                 <div className="mt-3 rounded-2xl border border-[var(--border-subtle)] bg-white p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Material Summary</p>
+
+                                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-primary)]">{selectedReferenceItem.interpretationSummary}</p>
+
+                                    {selectedReferenceItem.interpretationUsefulContext && <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-[var(--color-text-secondary)]">{selectedReferenceItem.interpretationUsefulContext}</p>}
+
+                                    {selectedReferenceItem.interpretationNextStep && (
+                                       <div className="mt-3 rounded-xl bg-[var(--color-bg)] p-3">
+                                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Suggested next step</p>
+
+                                          <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-primary)]">{selectedReferenceItem.interpretationNextStep}</p>
+                                       </div>
+                                    )}
+                                 </div>
+                              )}
+
+                              {selectedReferenceItem.imageDataUrl && (
+                                 <button
+                                    type="button"
+                                    onClick={() => setFullscreenReferenceImage(selectedReferenceItem)}
+                                    className="mt-3 block w-full overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-white text-left transition-transform hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
+                                    aria-label={`Open ${selectedReferenceItem.title} image fullscreen`}
+                                 >
+                                    <img src={selectedReferenceItem.imageDataUrl} alt={selectedReferenceItem.title} className="max-h-64 w-full object-contain" />
+
+                                    <div className="border-t border-[var(--border-subtle)] px-3 py-2 text-xs leading-5 text-[var(--color-text-secondary)]">
+                                       Click to view larger
+                                       {selectedReferenceItem.imageFileName ? ` • ${selectedReferenceItem.imageFileName}` : ""}
+                                    </div>
+                                 </button>
+                              )}
+
+                              {selectedReferenceItem.label === "Document" && canOpenCanvasDocument(selectedReferenceItem) && (
+                                 <button
+                                    type="button"
+                                    onClick={() => setFullscreenReferenceDocument(selectedReferenceItem)}
+                                    className="mt-3 block w-full rounded-2xl border border-[var(--border-subtle)] bg-white p-4 text-left transition-transform hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
+                                    aria-label={`Open ${selectedReferenceItem.title} document reader`}
+                                 >
+                                    <div className="flex items-start gap-3">
+                                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--color-bg)] text-[var(--color-text-primary)]">
+                                          <FileText size={18} />
+                                       </div>
+
+                                       <div className="min-w-0 flex-1">
+                                          <p className="break-words text-sm font-semibold text-[var(--color-text-primary)]">Open document</p>
+
+                                          <p className="mt-1 break-words text-xs leading-5 text-[var(--color-text-secondary)]">{selectedReferenceItem.documentFileName || selectedReferenceItem.title} • Open to scroll and read.</p>
+                                       </div>
+                                    </div>
+                                 </button>
+                              )}
+
+                              <div className="mt-3 max-h-[360px] overflow-auto rounded-2xl bg-white p-3">
+                                 <p className="whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-secondary)]">
+                                    {selectedReferenceItem.body ||
+                                       selectedReferenceItem.summary ||
+                                       selectedReferenceItem.interpretationSummary ||
+                                       (selectedReferenceItem.imageDataUrl
+                                          ? "Image saved for this project."
+                                          : selectedReferenceItem.documentDataUrl || selectedReferenceItem.documentText
+                                            ? "Document saved for this project."
+                                            : "No additional notes saved for this reference yet.")}
+                                 </p>
+                              </div>
+                           </div>
+                        )}
+                     </div>
+                  ) : (
+                     <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">No references yet. Add notes or materials in Projects, then open this project in Canvas.</div>
+                  )}
+               </div>
+            </aside>
          </div>
+
+         {fullscreenReferenceImage?.imageDataUrl && (
+            <div
+               className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+               onClick={() => setFullscreenReferenceImage(null)}
+               role="dialog"
+               aria-modal="true"
+               aria-label={`${fullscreenReferenceImage.title} fullscreen image preview`}
+            >
+               <div className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-[28px] bg-white shadow-[var(--shadow-soft)]" onClick={(event) => event.stopPropagation()}>
+                  <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] p-4">
+                     <div className="min-w-0">
+                        <p className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--color-text-secondary)]">Image Reference</p>
+
+                        <h3 className="mt-1 break-words text-lg font-semibold text-[var(--color-text-primary)]">{fullscreenReferenceImage.title}</h3>
+
+                        {fullscreenReferenceImage.imageFileName && <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">{fullscreenReferenceImage.imageFileName}</p>}
+                     </div>
+
+                     <button
+                        type="button"
+                        onClick={() => setFullscreenReferenceImage(null)}
+                        className="rounded-full border border-[var(--border-subtle)] px-4 py-2 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]"
+                     >
+                        Close
+                     </button>
+                  </div>
+
+                  <div className="flex max-h-[76vh] items-center justify-center overflow-auto bg-[var(--color-bg)] p-4">
+                     <img src={fullscreenReferenceImage.imageDataUrl} alt={fullscreenReferenceImage.title} className="max-h-[72vh] max-w-full rounded-2xl object-contain" />
+                  </div>
+               </div>
+            </div>
+         )}
+
+         {fullscreenReferenceDocument && (
+            <div
+               className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+               onClick={() => setFullscreenReferenceDocument(null)}
+               role="dialog"
+               aria-modal="true"
+               aria-label={`${fullscreenReferenceDocument.title} document reader`}
+            >
+               <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] bg-white shadow-[var(--shadow-soft)]" onClick={(event) => event.stopPropagation()}>
+                  <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] p-4">
+                     <div className="min-w-0">
+                        <p className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--color-text-secondary)]">Document Reference</p>
+
+                        <h3 className="mt-1 break-words text-lg font-semibold text-[var(--color-text-primary)]">{fullscreenReferenceDocument.title}</h3>
+
+                        {fullscreenReferenceDocument.documentFileName && <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">{fullscreenReferenceDocument.documentFileName}</p>}
+                     </div>
+
+                     <button
+                        type="button"
+                        onClick={() => setFullscreenReferenceDocument(null)}
+                        className="rounded-full border border-[var(--border-subtle)] px-4 py-2 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]"
+                     >
+                        Close
+                     </button>
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-auto bg-[var(--color-bg)] p-4">
+                     {isCanvasReadablePdfDocument(fullscreenReferenceDocument) && fullscreenReferenceDocument.documentDataUrl ? (
+                        <iframe src={fullscreenReferenceDocument.documentDataUrl} title={fullscreenReferenceDocument.title} className="h-[74vh] w-full rounded-2xl border border-[var(--border-subtle)] bg-white" />
+                     ) : isCanvasReadableTextDocument(fullscreenReferenceDocument) ? (
+                        <pre className="min-h-[70vh] whitespace-pre-wrap break-words rounded-2xl border border-[var(--border-subtle)] bg-white p-5 text-sm leading-7 text-[var(--color-text-secondary)]">
+                           {fullscreenReferenceDocument.documentText || fullscreenReferenceDocument.body || fullscreenReferenceDocument.summary || "No readable text is available for this document."}
+                        </pre>
+                     ) : (
+                        <div className="rounded-2xl border border-[var(--border-subtle)] bg-white p-5 text-sm leading-6 text-[var(--color-text-secondary)]">
+                           This document is attached, but this file type does not have an in-app reader yet. Add notes to the material so ALLEVIN can still use it as project context.
+                        </div>
+                     )}
+                  </div>
+               </div>
+            </div>
+         )}
       </motion.section>
    );
 }

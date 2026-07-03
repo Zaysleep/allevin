@@ -1,16 +1,16 @@
 // ========================================
 // ALLEVIN Command Palette
 // Purpose:
-// Keyboard-first command layer for MK V
-// navigation, project movement, memory,
-// and simple workspace control.
+// Keyboard-first command layer for MK VI
+// project-first navigation, references, schedule,
+// and simple workspace guidance.
 // ========================================
 
 "use client";
 
 import { useEffect, useMemo, useState, type ElementType } from "react";
 
-import { Command, Search, Brain, House, CalendarDays, FolderKanban, ArrowRight, X, Cpu, RotateCcw, Compass } from "lucide-react";
+import { Command, Search, NotebookPen, House, CalendarDays, FolderKanban, ArrowRight, X, Sparkles } from "lucide-react";
 
 import { useWorkspace, type WorkspaceSystemStatus } from "@/components/WorkspaceContext";
 
@@ -18,7 +18,7 @@ import { useWorkspace, type WorkspaceSystemStatus } from "@/components/Workspace
 // Types
 // ========================================
 
-type CommandGroup = "Navigation" | "Workspace" | "System";
+type CommandGroup = "Navigation";
 
 type ProductModuleId = "home" | "canvas" | "tasks" | "board" | "recovery" | "control" | "calendar" | "integrations" | "advanced";
 
@@ -51,10 +51,10 @@ interface CommandItem {
 // This controls visual order AND keyboard order.
 // ========================================
 
-const commandGroupOrder: CommandGroup[] = ["Navigation", "Workspace", "System"];
+const commandGroupOrder: CommandGroup[] = ["Navigation"];
 
 // ========================================
-// MK V Build 6 — Command Palette Sanitization
+// MK VI — Command Palette Sanitization
 // ========================================
 
 const COMMAND_SANITIZE_LIMITS = {
@@ -97,7 +97,9 @@ function sanitizeCommandText(value?: string, maxLength: number = COMMAND_SANITIZ
 }
 
 function sanitizeLiveCommandQuery(value?: string) {
-   return sanitizeCommandText(value, COMMAND_SANITIZE_LIMITS.query, { preserveEdges: true });
+   return sanitizeCommandText(value, COMMAND_SANITIZE_LIMITS.query, {
+      preserveEdges: true,
+   });
 }
 
 function sanitizeCommandRouteValue(value?: string) {
@@ -113,7 +115,7 @@ function sanitizeCommandRouteValue(value?: string) {
 const commands: CommandItem[] = [
    {
       label: "Open Home",
-      description: "Return to the welcome view, current thread, and today at a glance.",
+      description: "Return to Home to see your latest project, schedule, and next step.",
       group: "Navigation",
       keywords: ["home", "overview", "dashboard", "start", "welcome", "today", "glance"],
       icon: House,
@@ -121,85 +123,59 @@ const commands: CommandItem[] = [
       targetId: "overview",
       activeView: "home",
       systemStatus: "workspace-stable",
-      assistantCue: "Home opened. Your workspace is ready.",
+      assistantCue: "Home opened.",
    },
 
    {
       label: "Open Canvas",
-      description: "Open the writing and drafting space for the active project.",
-      group: "Workspace",
-      keywords: ["canvas", "draft", "write", "work surface", "focus", "continue", "start"],
-      icon: Brain,
+      description: "Open the writing space for your active project.",
+      group: "Navigation",
+      keywords: ["canvas", "draft", "write", "active work", "work surface", "focus", "continue", "start", "project"],
+      icon: NotebookPen,
       moduleId: "canvas",
       targetId: "work-area",
       activeView: "focus",
       systemStatus: "focused-work-active",
-      assistantCue: "Canvas opened. You can keep shaping the current work.",
+      assistantCue: "Canvas opened. Continue your project here.",
    },
 
    {
       label: "Open Projects",
-      description: "Open saved projects, project memory, and continue-work actions.",
-      group: "Workspace",
-      keywords: ["projects", "project hub", "saved work", "notes", "memory", "continue", "organize"],
+      description: "Open saved projects, materials, and project notes.",
+      group: "Navigation",
+      keywords: ["projects", "project hub", "home base", "saved work", "materials", "references", "notes", "memory", "continue", "organize"],
       icon: FolderKanban,
       moduleId: "integrations",
       targetId: "work-area",
       activeView: "integrations",
       systemStatus: "integration-ready",
-      assistantCue: "Projects opened. Saved work is ready when you need it.",
+      assistantCue: "Projects opened.",
    },
 
    {
       label: "Open Calendar",
-      description: "Open events, schedule notes, recurring items, and time blocks.",
-      group: "Workspace",
-      keywords: ["calendar", "schedule", "meeting", "event", "events", "notes", "readback", "time"],
+      description: "Open events, deadlines, and project time blocks.",
+      group: "Navigation",
+      keywords: ["calendar", "schedule", "meeting", "event", "events", "deadline", "time block", "time"],
       icon: CalendarDays,
       moduleId: "calendar",
       targetId: "work-area",
       activeView: "workspace",
       systemStatus: "schedule-context-active",
-      assistantCue: "Calendar opened. Your schedule is in view.",
+      assistantCue: "Calendar opened.",
    },
 
    {
-      label: "Open Cognition",
-      description: "Open the simple cognition view for response style and workspace state.",
-      group: "System",
-      keywords: ["cognition", "advanced", "state", "signals", "focus", "response style", "mode"],
-      icon: Cpu,
+      label: "Open Insights",
+      description: "Open workspace insights and guidance options.",
+      group: "Navigation",
+      keywords: ["insights", "guidance", "advanced", "focus", "response style", "mode"],
+      icon: Sparkles,
       moduleId: "advanced",
       targetId: "cognition",
       activeView: "insights",
       systemStatus: "system-observing",
-      assistantCue: "Cognition opened. You can adjust how ALLEVIN responds.",
-   },
-
-   {
-      label: "Resume Workspace",
-      description: "Open Projects so you can continue the last saved project.",
-      group: "Navigation",
-      keywords: ["resume", "continue", "continue workspace", "last work", "latest project", "pick up"],
-      icon: RotateCcw,
-      moduleId: "integrations",
-      targetId: "work-area",
-      activeView: "integrations",
-      systemStatus: "integration-ready",
-      assistantCue: "Projects opened. Choose the project you want to continue.",
-   },
-
-   {
-      label: "Recommend Next Move",
-      description: "Open Home, then ask ALLEVIN for the next useful move.",
-      group: "Navigation",
-      keywords: ["recommend", "next move", "what should i do", "best move", "guide"],
-      icon: Compass,
-      moduleId: "home",
-      targetId: "overview",
-      activeView: "home",
-      systemStatus: "workspace-stable",
-      assistantCue: "Home opened. Ask ALLEVIN what would be useful next.",
+      assistantCue: "Insights opened.",
    },
 ];
 
@@ -216,7 +192,7 @@ function scrollToSection(targetId: string, showNotice: (message: string) => void
       const target = document.getElementById(targetId);
 
       if (!target) {
-         showNotice("Module not found");
+         showNotice("That section is not available right now.");
 
          return;
       }
@@ -414,7 +390,7 @@ export default function CommandPalette() {
       const safeCommandModuleId = sanitizeCommandRouteValue(command.moduleId);
 
       if (!isProductModuleId(safeCommandModuleId)) {
-         showNotice("Command route unavailable");
+         showNotice("That command is not available right now.");
 
          return;
       }
@@ -506,11 +482,11 @@ export default function CommandPalette() {
             >
                <div className="mb-2 flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                     <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-secondary)] sm:text-xs">ALLEVIN MK V Command Palette</p>
+                     <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-secondary)] sm:text-xs">Quick Actions</p>
 
                      <h2 className="mt-1 text-base font-medium sm:text-lg">Where do you want to go?</h2>
 
-                     <p className="mt-1 hidden text-xs text-[var(--color-text-secondary)] sm:block">Jump between the five main workspace pages.</p>
+                     <p className="mt-1 hidden text-xs text-[var(--color-text-secondary)] sm:block">Jump between Home, Projects, Canvas, Calendar, and Insights.</p>
                   </div>
 
                   <button
@@ -550,7 +526,7 @@ export default function CommandPalette() {
                      value={query}
                      onChange={(event) => setQuery(sanitizeLiveCommandQuery(event.target.value))}
                      type="text"
-                     placeholder="Search Home, Canvas, Projects, Calendar, or Cognition..."
+                     placeholder="Search Home, Projects, Canvas, Calendar, or Insights..."
                      className="
                         flex-1
                         bg-transparent
@@ -693,7 +669,7 @@ export default function CommandPalette() {
                         text-[var(--color-text-secondary)]
                      "
                   >
-                     No ALLEVIN command matched that search. Try “Home,” “Canvas,” “Projects,” “Calendar,” or “Cognition.”
+                     No command matched that search. Try “Projects,” “Canvas,” “Calendar,” “Insights,” or “Home.”
                   </div>
                )}
             </div>
@@ -718,15 +694,16 @@ export default function CommandPalette() {
                "
             >
                <div className="hidden flex-wrap items-center gap-2 sm:flex">
-                  <span className="rounded-lg bg-[var(--color-bg)] px-2 py-1">↑↓ Navigate</span>
+                  <span className="rounded-lg bg-[var(--color-bg)] px-2 py-1">↑↓ to move</span>
 
-                  <span className="rounded-lg bg-[var(--color-bg)] px-2 py-1">Enter Open</span>
+                  <span className="rounded-lg bg-[var(--color-bg)] px-2 py-1">Enter to open</span>
 
-                  <span className="rounded-lg bg-[var(--color-bg)] px-2 py-1">Esc Close</span>
+                  <span className="rounded-lg bg-[var(--color-bg)] px-2 py-1">Esc to close</span>
                </div>
 
                <span>
-                  {displayCommands.length} command result{displayCommands.length === 1 ? "" : "s"}
+                  {displayCommands.length} result
+                  {displayCommands.length === 1 ? "" : "s"}
                </span>
             </div>
          </div>

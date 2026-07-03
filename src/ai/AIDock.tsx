@@ -1,7 +1,7 @@
 // ========================================
 // AI Dock
 // Purpose:
-// ALLEVIN MK V Assistant Dock for
+// ALLEVIN MK VI Assistant Dock for
 // calm project-aware guidance, quick actions,
 // varied personality responses,
 // and source-aware workspace awareness.
@@ -68,7 +68,7 @@ interface TimelineEvent {
 interface PendingWorkflowAction {
    id: string;
 
-   actionType: "send-to-canvas" | "send-to-task" | "send-to-board" | "send-to-calendar" | "prepare-integration" | "save-internal-note" | "custom";
+   actionType: "send-to-canvas" | "send-to-task" | "send-to-calendar" | "prepare-integration" | "save-internal-note" | "custom";
 
    source: string;
 
@@ -97,7 +97,7 @@ interface PendingWorkflowAction {
    status: "pending" | "editing";
 }
 
-type ProductModuleId = "home" | "canvas" | "tasks" | "board" | "recovery" | "control" | "calendar" | "integrations" | "advanced";
+type ProductModuleId = "home" | "canvas" | "calendar" | "integrations" | "advanced";
 
 type ProductModuleView = "home" | "focus" | "workspace" | "insights" | "integrations";
 
@@ -139,8 +139,54 @@ interface CalendarNoteCreatedPayload {
    createdAt?: number;
 }
 
+type ProjectMaterialType = "Note" | "Document" | "Image" | "Research" | "Feedback" | "Reference";
+
+interface ProjectMaterial {
+   id: string;
+
+   projectId: string;
+
+   projectTitle: string;
+
+   title: string;
+
+   type: ProjectMaterialType;
+
+   source: string;
+
+   notes: string;
+
+   summary: string;
+
+   imageDataUrl?: string;
+
+   imageFileName?: string;
+
+   imageMimeType?: string;
+
+   documentDataUrl?: string;
+
+   documentFileName?: string;
+
+   documentMimeType?: string;
+
+   documentText?: string;
+
+   interpretationSummary?: string;
+
+   interpretationUsefulContext?: string;
+
+   interpretationNextStep?: string;
+
+   interpretedAt?: number;
+
+   createdAt: number;
+
+   updatedAt: number;
+}
+
 interface AllevinInternalContextPacket {
-   version: "MK V";
+   version: "MK VI";
 
    userIntent: {
       rawPrompt: string;
@@ -168,6 +214,14 @@ interface AllevinInternalContextPacket {
       latestProjectNote: string;
 
       recommendedNextAction: string;
+
+      materials: {
+         count: number;
+
+         summaries: string[];
+
+         hasMaterials: boolean;
+      };
    };
 
    projects: {
@@ -233,6 +287,8 @@ const CANVAS_STORAGE_KEY = "allevin-adaptive-work-canvas";
 
 const PROJECT_LIBRARY_STORAGE_KEY = "allevin-project-library";
 
+const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
+
 const COGNITION_STATE_STORAGE_KEY = "allevin-cognition-state";
 
 const COGNITION_ACTIVE_MODE_STORAGE_KEY = "allevin-cognition-active-response-mode";
@@ -240,7 +296,7 @@ const COGNITION_ACTIVE_MODE_STORAGE_KEY = "allevin-cognition-active-response-mod
 const DIRECT_CALENDAR_APPROVAL_GUARD_KEY = "allevin-direct-calendar-approval-guard";
 
 // ========================================
-// MK V Build 6 — Sanitization Parameters
+// MK VI Build 6 — Sanitization Parameters
 // Canvas should feel open/infinite, but stored/rendered data still needs guardrails.
 // ========================================
 
@@ -293,7 +349,9 @@ function sanitizePlainText(value?: string, maxLength: number = SANITIZE_LIMITS.a
 }
 
 function sanitizeLiveAIDockInput(value?: string) {
-   return sanitizePlainText(value, SANITIZE_LIMITS.aidockMessage, { preserveEdges: true });
+   return sanitizePlainText(value, SANITIZE_LIMITS.aidockMessage, {
+      preserveEdges: true,
+   });
 }
 
 function sanitizeTitle(value?: string, maxLength: number = SANITIZE_LIMITS.title) {
@@ -781,9 +839,6 @@ function getWorkflowActionLabel(actionType: PendingWorkflowAction["actionType"])
       case "send-to-task":
          return "Save to Projects";
 
-      case "send-to-board":
-         return "Save to Projects";
-
       case "send-to-calendar":
          return "Prepare Calendar";
 
@@ -1268,7 +1323,17 @@ function getFocusedCalendarBlockLabel(window?: { startTime: number; endTime: num
    return getCalendarWindowLabel(block);
 }
 
-function getCalendarListReadback(events: Array<{ title?: string; startTime?: number; endTime?: number; allDay?: boolean; repeat?: string; repeatSeriesId?: string }>, emptyText: string) {
+function getCalendarListReadback(
+   events: Array<{
+      title?: string;
+      startTime?: number;
+      endTime?: number;
+      allDay?: boolean;
+      repeat?: string;
+      repeatSeriesId?: string;
+   }>,
+   emptyText: string,
+) {
    const cleanEvents = getCalendarReadbackEvents(events).slice(0, 5);
 
    if (!cleanEvents.length) {
@@ -2142,6 +2207,937 @@ function getInternalIntegrationProjectContext() {
    };
 }
 
+function isProjectMaterialType(value?: string): value is ProjectMaterialType {
+   return value === "Note" || value === "Document" || value === "Image" || value === "Research" || value === "Feedback" || value === "Reference";
+}
+
+function sanitizeProjectMaterialType(value?: string): ProjectMaterialType {
+   return isProjectMaterialType(value) ? value : "Reference";
+}
+
+function sanitizeMaterialImageDataUrl(value?: string) {
+   const clean = typeof value === "string" ? value.trim() : "";
+
+   if (!clean) {
+      return undefined;
+   }
+
+   // Local image previews are stored as data URLs by Projects.
+   // Keep this narrow so AIDock never treats arbitrary data as usable content.
+   if (/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(clean)) {
+      return clean;
+   }
+
+   return undefined;
+}
+
+function sanitizeMaterialDocumentDataUrl(value?: string) {
+   const clean = typeof value === "string" ? value.trim() : "";
+
+   if (!clean) {
+      return undefined;
+   }
+
+   if (/^data:(application\/pdf|text\/plain|text\/markdown|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document);base64,/i.test(clean)) {
+      return clean;
+   }
+
+   return undefined;
+}
+
+function sanitizeMaterialDocumentMimeType(value?: string) {
+   const clean = sanitizePlainText(value || "", 120).toLowerCase();
+
+   return ["application/pdf", "text/plain", "text/markdown", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].includes(clean) ? clean : undefined;
+}
+
+function hasReadableDocumentText(material: ProjectMaterial) {
+   return material.type === "Document" && Boolean(compactText(material.documentText));
+}
+
+function hasDocumentAttachment(material: ProjectMaterial) {
+   return material.type === "Document" && Boolean(material.documentDataUrl || material.documentFileName || material.documentText);
+}
+
+function getDocumentMaterialFileLabel(material: ProjectMaterial) {
+   return sanitizePlainText(material.documentFileName || material.title || "document", 220);
+}
+
+function getDocumentMaterialPreview(material: ProjectMaterial, limit = 280) {
+   const text = compactText(material.documentText || material.notes || material.summary);
+
+   if (!text) {
+      return "";
+   }
+
+   return text.length > limit ? `${text.slice(0, limit).trim()}...` : text;
+}
+
+function hasMaterialInterpretation(material?: ProjectMaterial | null) {
+   return Boolean(compactText(material?.interpretationSummary || material?.interpretationUsefulContext || material?.interpretationNextStep));
+}
+
+function getMaterialInterpretationPreview(material: ProjectMaterial, limit = 260) {
+   const usefulText = compactText(material.interpretationSummary || material.interpretationUsefulContext || material.summary || material.notes);
+
+   if (!usefulText) {
+      return "";
+   }
+
+   return usefulText.length > limit ? `${usefulText.slice(0, limit).trim()}...` : usefulText;
+}
+
+function getMaterialInterpretationNextMove(material: ProjectMaterial, fallback = "Use it to write one small Canvas update with what to use, what to summarize, and what can wait.") {
+   const rawMove = compactText(material.interpretationNextStep) || fallback;
+
+   return rawMove
+      .replace(/^consider adding a task to your project for\s*/i, "Add one Canvas note for ")
+      .replace(/^consider adding a task for\s*/i, "Add one Canvas note for ")
+      .replace(/^consider\s+/i, "")
+      .replace(/add a task to your project/gi, "add one Canvas note")
+      .replace(/drafting a new section/gi, "drafting a short section")
+      .trim();
+}
+
+function getMaterialInterpretationAwarenessLine(material: ProjectMaterial) {
+   const usefulPart = getMaterialInterpretationPreview(material, 280);
+
+   if (!usefulPart) {
+      return "";
+   }
+
+   return `ALLEVIN already read ${getShortMaterialTitle(material)}. The useful part: ${usefulPart}`;
+}
+
+function buildSelectedMaterialInterpretationResponse(material: ProjectMaterial, intent: ProjectMaterialConversationIntent) {
+   const usefulRead = getMaterialInterpretationPreview(material, 320) || getMaterialPlainPreview(material, 320) || "it gives this project clearer context to work from.";
+
+   const materialTitle = getShortMaterialTitle(material);
+
+   const activeProject = getActiveProjectLibraryMatchForAIDock();
+
+   const projectTitle = sanitizeTitle(activeProject?.title || material.projectTitle || "this project");
+
+   const nextMove = getMaterialInterpretationNextMove(material, `Add one Canvas note called “Proof points” and list the skills, tools, projects, and experience that should support ${projectTitle}.`);
+
+   if (!usefulRead) {
+      return "";
+   }
+
+   if (intent === "summarize") {
+      return `${materialTitle} is a ${getMaterialTypeNoun(material.type)} for ${projectTitle}. In plain terms, it says: ${usefulRead}`;
+   }
+
+   if (intent === "help") {
+      return `${materialTitle} helps ${projectTitle} by giving the project concrete context to build from instead of starting from memory alone. The part worth keeping close: ${usefulRead}`;
+   }
+
+   if (intent === "recommend") {
+      if (material.type === "Document" && compactText(`${material.title} ${material.documentFileName} ${material.notes} ${material.summary}`).toLowerCase().includes("resume")) {
+         return `I’d pull the proof points from ${materialTitle}: skills, tools, projects, and experience that support ${projectTitle}. The useful read: ${usefulRead}\n\nNext move: ${nextMove}`;
+      }
+
+      return `I’d use ${materialTitle} as the main reference for this pass. The useful read: ${usefulRead}\n\nNext move: ${nextMove}`;
+   }
+
+   if (intent === "focus") {
+      return `I’d let ${materialTitle} guide the next pass. The useful read: ${usefulRead}\n\nNext move: ${nextMove}`;
+   }
+
+   if (intent === "selected") {
+      return `I’d use ${materialTitle} as the selected reference for this pass. The useful read: ${usefulRead}`;
+   }
+
+   return `ALLEVIN already read ${materialTitle}. The useful part: ${usefulRead}`;
+}
+
+function usefulSentenceFromMaterial(material: ProjectMaterial) {
+   const usefulPart = getMaterialInterpretationPreview(material, 220) || getMaterialPlainPreview(material, 220);
+
+   return usefulPart ? `The part worth keeping close is: ${usefulPart}` : "It gives the project a cleaner point of comparison.";
+}
+
+function getDocumentReferenceAwarenessLine(material: ProjectMaterial) {
+   const interpreted = getMaterialInterpretationAwarenessLine(material);
+
+   if (interpreted) {
+      return interpreted;
+   }
+
+   const fileLabel = getDocumentMaterialFileLabel(material);
+
+   const readableText = getDocumentMaterialPreview(
+      {
+         ...material,
+         notes: hasReadableDocumentText(material) ? material.documentText || "" : material.notes,
+      },
+      260,
+   );
+
+   if (hasReadableDocumentText(material)) {
+      return `I can use ${getShortMaterialTitle(material)} as the document reference here. I’ve got readable text from ${fileLabel}, so I can pull from that without making you manually retype the thing. Small mercy.`;
+   }
+
+   if (readableText) {
+      return `I can use ${getShortMaterialTitle(material)} as the document reference here. I’ll lean on the notes you saved with it: ${readableText}`;
+   }
+
+   return `I can use ${getShortMaterialTitle(material)} as the document reference here${fileLabel ? ` (${fileLabel})` : ""}. You can open and read it in the document viewer, and I’ll use the title, file name, summary, and notes unless readable text is attached. No pretending I inhaled a PDF through sheer confidence.`;
+}
+
+function readProjectMaterialsFromStorage() {
+   if (typeof window === "undefined") {
+      return [] as ProjectMaterial[];
+   }
+
+   const stored = localStorage.getItem(PROJECT_MATERIALS_STORAGE_KEY);
+
+   if (!stored) {
+      return [] as ProjectMaterial[];
+   }
+
+   try {
+      const parsed = JSON.parse(stored);
+
+      if (!Array.isArray(parsed)) {
+         return [] as ProjectMaterial[];
+      }
+
+      return parsed
+         .filter((material) => material && typeof material.id === "string" && typeof material.projectId === "string")
+         .map((material) => ({
+            id: sanitizePlainText(material.id, 180),
+            projectId: sanitizePlainText(material.projectId, 180),
+            projectTitle: sanitizeTitle(material.projectTitle || material.title || "Project"),
+            title: sanitizeTitle(material.title || "Untitled reference"),
+            type: sanitizeProjectMaterialType(material.type),
+            source: sanitizePlainText(material.source || "", 300),
+            notes: sanitizeLongText(material.notes || "", SANITIZE_LIMITS.projectBody),
+            summary: sanitizeCanvasSummary(material.summary || material.notes || material.title),
+            imageDataUrl: sanitizeMaterialImageDataUrl(material.imageDataUrl),
+            imageFileName: sanitizePlainText(material.imageFileName || "", 220) || undefined,
+            imageMimeType: sanitizePlainText(material.imageMimeType || "", 80) || undefined,
+            documentDataUrl: sanitizeMaterialDocumentDataUrl(material.documentDataUrl),
+            documentFileName: sanitizePlainText(material.documentFileName || "", 220) || undefined,
+            documentMimeType: sanitizeMaterialDocumentMimeType(material.documentMimeType),
+            documentText: sanitizeLongText(material.documentText || "", SANITIZE_LIMITS.projectBody) || undefined,
+            interpretationSummary: sanitizeCanvasSummary(material.interpretationSummary || "") || undefined,
+            interpretationUsefulContext: sanitizeCanvasSummary(material.interpretationUsefulContext || "") || undefined,
+            interpretationNextStep: sanitizePlainText(material.interpretationNextStep || "", 1000) || undefined,
+            interpretedAt: isValidTimestamp(material.interpretedAt) ? material.interpretedAt : undefined,
+            createdAt: isValidTimestamp(material.createdAt) ? material.createdAt : Date.now(),
+            updatedAt: isValidTimestamp(material.updatedAt) ? material.updatedAt : Date.now(),
+         }))
+         .sort((a, b) => b.updatedAt - a.updatedAt);
+   } catch {
+      localStorage.removeItem(PROJECT_MATERIALS_STORAGE_KEY);
+
+      return [] as ProjectMaterial[];
+   }
+}
+
+function getActiveProjectLibraryMatchForAIDock() {
+   if (typeof window === "undefined") {
+      return null as any;
+   }
+
+   try {
+      const stored = localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
+
+      const parsed = stored ? JSON.parse(stored) : [];
+
+      const projects = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : [];
+
+      if (!projects.length) {
+         return null;
+      }
+
+      let canvasTitle = "";
+
+      try {
+         const canvasStored = localStorage.getItem(CANVAS_STORAGE_KEY);
+
+         if (canvasStored) {
+            const parsedCanvas = JSON.parse(canvasStored);
+
+            canvasTitle = compactText(parsedCanvas?.sourceTitle || parsedCanvas?.title || parsedCanvas?.projectTitle || parsedCanvas?.activeTitle);
+         }
+      } catch {
+         canvasTitle = "";
+      }
+
+      const canvasKey = getNormalizedTitleKey(canvasTitle);
+
+      const titleMatch = canvasKey ? projects.find((project: any) => getNormalizedTitleKey(project?.title) === canvasKey) : null;
+
+      if (titleMatch) {
+         return titleMatch;
+      }
+
+      return projects.filter((project: any) => project && typeof project.title === "string").sort((a: any, b: any) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0))[0] || null;
+   } catch {
+      return null;
+   }
+}
+
+function getActiveProjectMaterialsForAIDock() {
+   const activeProject = getActiveProjectLibraryMatchForAIDock();
+
+   if (!activeProject) {
+      return [] as ProjectMaterial[];
+   }
+
+   const projectId = compactText(activeProject.id);
+
+   const projectTitleKey = getNormalizedTitleKey(activeProject.title);
+
+   return readProjectMaterialsFromStorage().filter((material) => {
+      const sameId = projectId && material.projectId === projectId;
+
+      const sameTitle = projectTitleKey && getNormalizedTitleKey(material.projectTitle) === projectTitleKey;
+
+      return Boolean(sameId || sameTitle);
+   });
+}
+
+function getMaterialPreviewLine(material: ProjectMaterial, limit = 220) {
+   const usefulText = compactText(material.interpretationSummary || material.summary || material.notes || material.title);
+
+   const preview = usefulText.length > limit ? `${usefulText.slice(0, limit).trim()}...` : usefulText;
+
+   return `${material.title} (${material.type})${preview ? ` — ${preview}` : ""}`;
+}
+
+function buildActiveProjectMaterialsContext(limit = 4) {
+   const materials = getActiveProjectMaterialsForAIDock().slice(0, limit);
+
+   if (!materials.length) {
+      return "";
+   }
+
+   return materials.map((material, index) => `${index + 1}. ${getMaterialPreviewLine(material)}`).join("\n");
+}
+
+function getActiveProjectMaterialsCount() {
+   return getActiveProjectMaterialsForAIDock().length;
+}
+
+function looksLikeProjectMaterialsQuestion(prompt: string) {
+   const lower = normalizeUserIntentPrompt(prompt);
+
+   return (
+      lower.includes("material") ||
+      lower.includes("materials") ||
+      lower.includes("reference") ||
+      lower.includes("references") ||
+      lower.includes("document") ||
+      lower.includes("documents") ||
+      lower.includes("upload") ||
+      lower.includes("file") ||
+      lower.includes("files") ||
+      lower.includes("resume") ||
+      lower.includes("résumé") ||
+      lower.includes("cv") ||
+      lower.includes("portfolio proof") ||
+      lower.includes("use my notes") ||
+      lower.includes("use my sources") ||
+      lower.includes("use my research") ||
+      lower.includes("how does this help") ||
+      lower.includes("how does this help the project") ||
+      lower.includes("how does it help") ||
+      lower.includes("how does this support") ||
+      lower.includes("how does this fit")
+   );
+}
+
+type ProjectMaterialConversationIntent = "list" | "recommend" | "focus" | "selected" | "summarize" | "help" | "general";
+
+const CANVAS_SELECTED_REFERENCES_STORAGE_KEY = "allevin-canvas-selected-references-mkvi";
+
+function getShortMaterialTitle(material: ProjectMaterial, limit = 72) {
+   const title = sanitizeTitle(material.title || "Untitled reference");
+
+   if (title.length <= limit) {
+      return title;
+   }
+
+   return `${title.slice(0, limit).trim()}...`;
+}
+
+function hasMaterialImagePreview(material?: ProjectMaterial) {
+   return material?.type === "Image" && Boolean(material.imageDataUrl);
+}
+
+function getImageMaterialFileLabel(material: ProjectMaterial) {
+   return compactText(material.imageFileName || material.source || "image reference");
+}
+
+function getMaterialPlainPreview(material: ProjectMaterial, limit = 180) {
+   const usefulText = compactText(
+      material.interpretationSummary || material.interpretationUsefulContext || material.notes || material.summary || (hasMaterialImagePreview(material) ? `Image attached: ${getImageMaterialFileLabel(material)}.` : material.title),
+   );
+
+   if (!usefulText) {
+      return hasMaterialImagePreview(material) ? "Image reference saved for this project." : "";
+   }
+
+   return usefulText.length > limit ? `${usefulText.slice(0, limit).trim()}...` : usefulText;
+}
+
+function getImageReferenceAwarenessLine(material: ProjectMaterial) {
+   const interpreted = getMaterialInterpretationAwarenessLine(material);
+
+   if (interpreted) {
+      return interpreted;
+   }
+
+   const fileLabel = getImageMaterialFileLabel(material);
+
+   const notes = getMaterialPlainPreview(material, 240);
+
+   if (notes && !notes.toLowerCase().startsWith("image attached:")) {
+      return `I can use ${getShortMaterialTitle(material)} as the visual reference here. I’ll lean on the notes you saved with it: ${notes}`;
+   }
+
+   return `I can see ${getShortMaterialTitle(material)} is an image reference${fileLabel ? ` (${fileLabel})` : ""}. Right now I can use the title, file name, and any notes you attach to it; full pixel-reading is the next upgrade. Very honest of me, annoyingly responsible.`;
+}
+
+function getSelectedCanvasReferenceIdsForAIDock() {
+   if (typeof window === "undefined") {
+      return [] as string[];
+   }
+
+   try {
+      const stored = localStorage.getItem(CANVAS_SELECTED_REFERENCES_STORAGE_KEY);
+
+      const parsed = stored ? JSON.parse(stored) : [];
+
+      return Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : [];
+   } catch {
+      return [];
+   }
+}
+
+function getSelectedProjectMaterialsForAIDock(materials: ProjectMaterial[] = getActiveProjectMaterialsForAIDock()) {
+   const selectedIds = getSelectedCanvasReferenceIdsForAIDock();
+
+   if (!selectedIds.length) {
+      return [] as ProjectMaterial[];
+   }
+
+   const selectedMaterialIds = selectedIds.map((id) => id.replace(/^material:/, ""));
+
+   return materials.filter((material) => selectedIds.includes(`material:${material.id}`) || selectedMaterialIds.includes(material.id));
+}
+
+function getProjectMaterialConversationIntent(prompt: string): ProjectMaterialConversationIntent {
+   const lower = normalizeUserIntentPrompt(prompt);
+
+   if (lower.includes("selected reference") || lower.includes("selected material") || lower.includes("this reference") || lower.includes("this material")) {
+      return "selected";
+   }
+
+   // Use/recommendation questions need to win before list questions.
+   // Example: "What should I use from the project materials?" contains
+   // "project materials", but the user is asking for guidance, not inventory.
+   if (
+      lower.includes("what should i use") ||
+      lower.includes("which should i use") ||
+      lower.includes("what can i use") ||
+      lower.includes("what should we use") ||
+      lower.includes("use from") ||
+      lower.includes("use the project materials") ||
+      lower.includes("use these materials") ||
+      lower.includes("which reference") ||
+      lower.includes("which material") ||
+      lower.includes("what should i use from this resume") ||
+      lower.includes("what should i use from my resume") ||
+      lower.includes("what should i pull from this resume") ||
+      lower.includes("what should i pull from my resume") ||
+      lower.includes("what resume details should i use")
+   ) {
+      return "recommend";
+   }
+
+   if (
+      lower.includes("what materials do i have") ||
+      lower.includes("what material do i have") ||
+      lower.includes("what project materials do i have") ||
+      lower.includes("what materials are attached") ||
+      lower.includes("what material is attached") ||
+      lower.includes("what references do i have") ||
+      lower.includes("what reference do i have") ||
+      lower.includes("what references are attached") ||
+      lower.includes("what reference is attached") ||
+      lower.includes("show references") ||
+      lower.includes("list references") ||
+      lower.includes("show materials") ||
+      lower.includes("list materials") ||
+      lower.includes("attached references") ||
+      lower.includes("attached materials") ||
+      lower.includes("materials attached to this project") ||
+      lower.includes("references attached to this project") ||
+      (lower.includes("project materials") && (lower.includes("show") || lower.includes("list") || lower.includes("how many")))
+   ) {
+      return "list";
+   }
+
+   if (lower.includes("focus on") || lower.includes("focus next") || lower.includes("what should i focus") || lower.includes("next for this") || lower.includes("next step") || lower.includes("where should i start") || lower.includes("start with")) {
+      return "focus";
+   }
+
+   if (
+      lower.includes("how does this help") ||
+      lower.includes("how does this help the project") ||
+      lower.includes("how does it help") ||
+      lower.includes("how does this support") ||
+      lower.includes("how does this fit") ||
+      lower.includes("how does this document help") ||
+      lower.includes("document help") ||
+      lower.includes("reference help") ||
+      lower.includes("material help") ||
+      lower.includes("why does this matter") ||
+      lower.includes("why is this useful")
+   ) {
+      return "help";
+   }
+
+   if (lower.includes("summarize") || lower.includes("summary") || lower.includes("explain")) {
+      return "summarize";
+   }
+
+   return "general";
+}
+
+function getMaterialTypeNoun(type: ProjectMaterialType) {
+   switch (type) {
+      case "Feedback":
+         return "feedback";
+      case "Document":
+         return "checklist";
+      case "Research":
+         return "research notes";
+      case "Image":
+         return "visual reference";
+      case "Note":
+         return "note";
+      case "Reference":
+      default:
+         return "reference";
+   }
+}
+
+function getConversationalMaterialLine(material: ProjectMaterial, index: number) {
+   const preview = getMaterialPlainPreview(material, 150);
+
+   const imageLabel = hasMaterialImagePreview(material) ? ` • image attached${material.imageFileName ? `: ${material.imageFileName}` : ""}` : "";
+
+   const documentLabel = hasDocumentAttachment(material) ? ` • document attached${material.documentFileName ? `: ${material.documentFileName}` : ""}` : "";
+
+   const interpretedLabel = hasMaterialInterpretation(material) ? " • ALLEVIN read" : "";
+
+   return `${index + 1}. ${getShortMaterialTitle(material)} (${material.type}${imageLabel}${documentLabel}${interpretedLabel})${preview ? ` — ${preview}` : ""}`;
+}
+
+function getMaterialUseRecommendation(materials: ProjectMaterial[]) {
+   const interpreted = materials.find((material) => hasMaterialInterpretation(material));
+   const feedback = materials.find((material) => material.type === "Feedback");
+   const document = materials.find((material) => material.type === "Document");
+   const research = materials.find((material) => material.type === "Research");
+   const image = materials.find((material) => material.type === "Image");
+   const reference = materials.find((material) => material.type === "Reference");
+   const note = materials.find((material) => material.type === "Note");
+
+   if (materials.length > 1) {
+      const lines: string[] = [];
+
+      const foundation = interpreted || document || image || reference || materials[0];
+
+      if (foundation) {
+         lines.push(`Use ${getShortMaterialTitle(foundation)} for the main direction and starting context.`);
+      }
+
+      const decisionGuide = research || note;
+
+      if (decisionGuide && decisionGuide.id !== foundation?.id) {
+         lines.push(`Use ${getShortMaterialTitle(decisionGuide)} to keep the product choices focused and specific.`);
+      }
+
+      if (feedback && feedback.id !== foundation?.id && feedback.id !== decisionGuide?.id) {
+         lines.push(`Use ${getShortMaterialTitle(feedback)} to protect the user experience and avoid adding too much.`);
+      }
+
+      const remaining = materials.find((material) => ![foundation?.id, decisionGuide?.id, feedback?.id].includes(material.id));
+
+      if (remaining) {
+         lines.push(`Keep ${getShortMaterialTitle(remaining)} nearby as extra support if the project needs more detail.`);
+      }
+
+      return `I’d use the project materials this way:
+
+${lines.map((line, index) => `${index + 1}. ${line}`).join("\n")}`;
+   }
+
+   const first = interpreted || document || research || feedback || image || reference || note || materials[0];
+
+   if (first) {
+      return `I’d start with ${getShortMaterialTitle(first)}. Use it as the main reference for this pass. ${usefulSentenceFromMaterial(first)}`;
+   }
+
+   return "I’d start with the clearest material and pull out 2–3 details that directly support the project.";
+}
+
+function getMaterialFocusSuggestion(materials: ProjectMaterial[]) {
+   const interpreted = materials.find((material) => hasMaterialInterpretation(material));
+
+   if (interpreted) {
+      const nextMove = getMaterialInterpretationNextMove(interpreted, "Turn the interpretation into one short Canvas checklist with what to use, what to check, and what can wait.");
+
+      return `I’d start with ${getShortMaterialTitle(interpreted)} since ALLEVIN already read it. ${getMaterialInterpretationPreview(interpreted, 220) || "It gives the project a clearer starting point."}
+
+Next move: ${nextMove}`;
+   }
+
+   const combined = compactText(materials.map((material) => `${material.title} ${material.summary} ${material.notes}`).join(" ")).toLowerCase();
+
+   if (combined.includes("navigation") || combined.includes("sidebar") || combined.includes("label")) {
+      return "I’d start with the navigation labels. They’re the part most likely to make users pause and go, “Wait, where am I supposed to click?” Tiny drama, very fixable.";
+   }
+
+   if (combined.includes("contrast") || combined.includes("button") || combined.includes("readable")) {
+      return "I’d check button contrast and readability next. Not glamorous, but it saves the page from looking fine while quietly betraying the user.";
+   }
+
+   if (combined.includes("screen reader") || combined.includes("keyboard") || combined.includes("accessible")) {
+      return "I’d give the interaction flow a quick accessibility pass: keyboard movement, screen reader order, and whether the page still makes sense without visual guessing.";
+   }
+
+   return "I’d start by turning the materials into one short checklist, then pick the easiest item to verify first. Start small and keep it clear.";
+}
+
+function buildProjectMaterialsReadbackResponse(prompt = "") {
+   const materials = getActiveProjectMaterialsForAIDock();
+
+   const activeProject = getActiveProjectLibraryMatchForAIDock();
+
+   const projectTitle = sanitizeTitle(activeProject?.title || "this project");
+
+   const intent = getProjectMaterialConversationIntent(prompt);
+
+   const selectedMaterials = getSelectedProjectMaterialsForAIDock(materials);
+
+   const usableMaterials = selectedMaterials.length ? selectedMaterials : materials;
+
+   if (!materials.length) {
+      return `I do not see project materials attached to ${projectTitle} yet. Add a note, document, image, research item, feedback, or reference in Projects, and I’ll have more to work with.`;
+   }
+
+   if (intent === "list") {
+      const materialList = materials
+         .slice(0, 6)
+         .map((material, index) => getConversationalMaterialLine(material, index))
+         .join("\n");
+
+      return `You have ${materials.length} project material${materials.length === 1 ? "" : "s"} attached to ${projectTitle}:\n\n${materialList}\n\nThese are support materials for the project. Select one in Canvas when you want ALLEVIN to focus on a specific reference.`;
+   }
+
+   if (intent === "selected") {
+      if (!selectedMaterials.length) {
+         return `No reference is selected in Canvas right now. Pick one from the Project References dropdown and I’ll focus on that one without showing every material at once.`;
+      }
+
+      const selected = selectedMaterials[0];
+
+      const interpretedResponse = buildSelectedMaterialInterpretationResponse(selected, intent);
+
+      if (interpretedResponse) {
+         return interpretedResponse;
+      }
+
+      if (hasMaterialImagePreview(selected)) {
+         return `${getImageReferenceAwarenessLine(selected)}
+
+Next move: use it as the visual comparison point and write one small Canvas note for what should stay, what should change, and what needs a second look. No pixel-based detective cosplay just yet.`;
+      }
+
+      if (hasDocumentAttachment(selected)) {
+         return `${getDocumentReferenceAwarenessLine(selected)}
+
+Next move: pull 2–3 useful details into Canvas and label them as “use,” “check,” or “save for later.” Very organized. We’ll try not to let it go to our heads.`;
+      }
+
+      return `I’d use the selected reference, ${getShortMaterialTitle(selected)}, as the guide for this pass.
+
+The useful part: ${getMaterialPlainPreview(selected, 260) || "it gives the project a clearer point of comparison."}
+
+Next move: add one small Canvas note for how this reference should shape the current update.`;
+   }
+
+   if (intent === "recommend") {
+      const lowerPrompt = normalizeUserIntentPrompt(prompt);
+      const asksAcrossProjectMaterials = lowerPrompt.includes("project materials") || lowerPrompt.includes("materials") || lowerPrompt.includes("references");
+
+      if (selectedMaterials.length && !asksAcrossProjectMaterials) {
+         const selected = selectedMaterials[0];
+
+         const interpretedResponse = buildSelectedMaterialInterpretationResponse(selected, intent);
+
+         if (interpretedResponse) {
+            return interpretedResponse;
+         }
+
+         if (hasMaterialImagePreview(selected)) {
+            return `${getImageReferenceAwarenessLine(selected)}
+
+Next move: use it as the visual comparison point and write 2–3 checks in Canvas. Keep it simple and useful.`;
+         }
+
+         if (hasDocumentAttachment(selected)) {
+            return `${getDocumentReferenceAwarenessLine(selected)}
+
+Next move: pull 2–3 details from the document into a short Canvas checklist. Keep it simple and useful.`;
+         }
+
+         return `I’d use ${getShortMaterialTitle(selected)} for this pass.
+
+The useful part: ${getMaterialPlainPreview(selected, 260) || "it gives you a cleaner way to guide the next update."}
+
+Next move: turn 2–3 details from that reference into a short Canvas checklist. Keep it simple and useful.`;
+      }
+
+      const recommendation = getMaterialUseRecommendation(materials);
+
+      return `${recommendation || "I’d use the clearest material first."}
+
+Next move: pull 2–3 useful details into Canvas and turn them into a short checklist.`;
+   }
+
+   if (intent === "focus") {
+      if (selectedMaterials.length) {
+         const selected = selectedMaterials[0];
+
+         const interpretedResponse = buildSelectedMaterialInterpretationResponse(selected, intent);
+
+         if (interpretedResponse) {
+            return interpretedResponse;
+         }
+
+         if (hasMaterialImagePreview(selected)) {
+            const imageNotes = getMaterialPlainPreview(selected, 220);
+
+            return `I’d let ${getShortMaterialTitle(selected)} guide the visual pass. ${imageNotes ? `Your note says: ${imageNotes}` : "Right now I can use the image title, file name, and notes; full image reading comes next, so I won’t pretend I inspected pixels I did not inspect. Very noble of me."}
+
+Next move: write one Canvas section with three quick checks: what the image should help compare, what looks right, and what needs changing.`;
+         }
+
+         if (hasDocumentAttachment(selected)) {
+            const documentPreview = getDocumentMaterialPreview(selected, 220) || getMaterialPlainPreview(selected, 220);
+
+            return `I’d let ${getShortMaterialTitle(selected)} guide the document pass. ${documentPreview ? `The useful part: ${documentPreview}` : "Open it in the reader first, then grab the parts that actually help the project. The document is invited; the document does not get to take over the meeting."}
+
+Next move: write one Canvas section with three quick checks: what the document says, what should be used, and what can wait.`;
+         }
+
+         return `I’d let ${getShortMaterialTitle(selected)} steer this pass. ${getMaterialFocusSuggestion([selected])}
+
+Next move: write one Canvas section with the thing to check, what good looks like, and what needs changing.`;
+      }
+
+      return `${getMaterialFocusSuggestion(usableMaterials)}
+
+Next move: write one Canvas section with the thing to check, what good looks like, and what needs changing.`;
+   }
+
+   if (intent === "help") {
+      const selected = selectedMaterials[0];
+
+      if (selected) {
+         const interpretedResponse = buildSelectedMaterialInterpretationResponse(selected, intent);
+
+         if (interpretedResponse) {
+            return interpretedResponse;
+         }
+
+         return `${getShortMaterialTitle(selected)} helps ${projectTitle} by giving the project a concrete reference to work from. The part worth keeping close: ${getMaterialPlainPreview(selected, 260) || "it gives the project a clearer point of comparison."}`;
+      }
+
+      const interpreted = usableMaterials.find((material) => hasMaterialInterpretation(material));
+
+      if (interpreted) {
+         return buildSelectedMaterialInterpretationResponse(interpreted, intent);
+      }
+
+      return `These materials help ${projectTitle} by giving the project reference points instead of making you work from memory alone. Use the clearest document, image, research note, or feedback item as the evidence for the next Canvas update.`;
+   }
+
+   if (intent === "summarize") {
+      const feedback = materials.find((material) => material.type === "Feedback");
+      const document = materials.find((material) => material.type === "Document");
+      const research = materials.find((material) => material.type === "Research");
+      const reference = materials.find((material) => material.type === "Reference" || material.type === "Image");
+      const selected = selectedMaterials[0];
+
+      if (selected) {
+         const interpretedResponse = buildSelectedMaterialInterpretationResponse(selected, intent);
+
+         if (interpretedResponse) {
+            return interpretedResponse;
+         }
+
+         return `The selected reference, ${getShortMaterialTitle(selected)}, helps by giving this pass a clear guide instead of making you juggle every note at once. The useful part is: ${getMaterialPlainPreview(selected, 220) || "it gives the project a cleaner point of comparison."}\n\nNext move: use it to write one small Canvas update with what to use, what to check, and what can wait.`;
+      }
+
+      const helpfulParts = [
+         document
+            ? hasDocumentAttachment(document)
+               ? `${getShortMaterialTitle(document)} gives you the document source — the “please use the actual file, not vague memory fog” friend.`
+               : `${getShortMaterialTitle(document)} gives you the checklist — the “please do not forget the basics” friend.`
+            : "",
+         feedback ? `${getShortMaterialTitle(feedback)} tells you what a real person actually noticed, which is annoyingly useful.` : "",
+         research ? `${getShortMaterialTitle(research)} keeps the review grounded so the review stays grounded.` : "",
+         reference
+            ? hasMaterialImagePreview(reference)
+               ? `${getShortMaterialTitle(reference)} gives you a visual comparison point — the “does this actually look right?” friend.`
+               : `${getShortMaterialTitle(reference)} gives you something to compare against when the design needs a cleaner example.`
+            : "",
+      ].filter(Boolean);
+
+      if (helpfulParts.length) {
+         return `They help by giving the project a little structure from different angles:\n\n${helpfulParts.map((part, index) => `${index + 1}. ${part}`).join("\n")}\n\nNext move: use them to make a short Canvas checklist with what to use, what to check, and what can wait. No paperwork avalanche. We are civilized today.`;
+      }
+
+      const materialList = materials
+         .slice(0, 4)
+         .map((material, index) => getConversationalMaterialLine(material, index))
+         .join("\n");
+
+      return `Here’s how they help:\n\n${materialList}\n\nUse them as support while you work, not as the draft itself. The references can sit nearby like responsible adults.`;
+   }
+
+   return `I’ve got ${materials.length} project reference${materials.length === 1 ? "" : "s"} available for ${projectTitle}. Ask me what to use, what to focus on next, or select one reference in Canvas and I’ll work from that.`;
+}
+
+function cleanConversationalMaterialResponse(value?: string) {
+   return sanitizeAssistantOutput(value)
+      .replace(/\bbest starting point\b/gi, "best place to start")
+      .replace(/\bdetected patterns?\b/gi, "what I’m seeing")
+      .replace(/\bpriority indicator\b/gi, "useful clue")
+      .replace(/\banalysis indicates\b/gi, "I’d say")
+      .replace(/\bconfidence\b/gi, "read")
+      .replace(/\bsignal\b/gi, "hint")
+      .trim();
+}
+
+function materialResponseMentionsProjectContext(response: string, materials: ProjectMaterial[]) {
+   const lower = normalizeUserIntentPrompt(response);
+
+   if (!lower) {
+      return false;
+   }
+
+   const materialTitleKeys = materials
+      .map((material) => getNormalizedTitleKey(material.title))
+      .filter(Boolean)
+      .map((key) => key.replace(/-/g, " "));
+
+   const materialTopicWords = materials
+      .flatMap((material) =>
+         compactText(`${material.title} ${material.summary} ${material.notes}`)
+            .toLowerCase()
+            .split(/[^a-z0-9]+/g),
+      )
+      .filter((word) => word.length >= 6 && !["project", "material", "reference", "review", "website", "accessibility"].includes(word));
+
+   return materialTitleKeys.some((key) => key && lower.includes(key.slice(0, 24))) || materialTopicWords.some((word) => lower.includes(word));
+}
+
+function isTooGenericMaterialHelperResponse(response: string, materials: ProjectMaterial[]) {
+   const lower = normalizeUserIntentPrompt(response);
+
+   if (!lower) {
+      return true;
+   }
+
+   const genericPhrases = ["check the first three items", "ensure your navigation clarity", "a clear path is key", "improve website accessibility", "make sure it is accessible", "focus on improving text contrast", "based on wcag notes"];
+
+   if (genericPhrases.some((phrase) => lower.includes(phrase))) {
+      return true;
+   }
+
+   return !materialResponseMentionsProjectContext(response, materials);
+}
+
+async function buildProjectMaterialsHelperResponse(prompt: string) {
+   const localResponse = buildProjectMaterialsReadbackResponse(prompt);
+
+   const intent = getProjectMaterialConversationIntent(prompt);
+
+   // For material decision questions, stay local-first so the answer is grounded in the
+   // actual saved references instead of drifting into generic advice. The external helper
+   // remains available for broader material summaries/general guidance, but not for
+   // "what should I use" or "what should I focus on" where specificity matters.
+   if (intent === "list" || intent === "recommend" || intent === "focus" || intent === "selected" || intent === "summarize" || intent === "help" || typeof window === "undefined") {
+      return localResponse;
+   }
+
+   const materials = getActiveProjectMaterialsForAIDock();
+
+   const selectedMaterials = getSelectedProjectMaterialsForAIDock(materials);
+
+   const activeProject = getActiveProjectLibraryMatchForAIDock();
+
+   if (!materials.length) {
+      return localResponse;
+   }
+
+   try {
+      const contextMaterials = selectedMaterials.length ? selectedMaterials : materials.slice(0, 6);
+
+      const response = await requestAllevinLLM({
+         mode: "project-guidance",
+         source: "materials",
+         title: sanitizeTitle(activeProject?.title || "Active project"),
+         focus: prompt,
+         usefulContext: [
+            `Active project: ${sanitizeTitle(activeProject?.title || "Active project")}`,
+            selectedMaterials.length ? `Selected reference: ${selectedMaterials.map((material) => getMaterialPreviewLine(material, 260)).join("; ")}` : "",
+            `Project materials:\n${contextMaterials.map((material, index) => `${index + 1}. ${getMaterialPreviewLine(material, 320)}${hasMaterialInterpretation(material) ? ` | ALLEVIN interpretation: ${getMaterialInterpretationPreview(material, 320)} | Next: ${getMaterialInterpretationNextMove(material, "")}` : ""}`).join("\n")}`,
+         ]
+            .filter(Boolean)
+            .join("\n\n"),
+         nextStep: "Give one conversational next move.",
+         rawContent: contextMaterials
+            .map(
+               (material) =>
+                  `${material.title}\n${material.type}\n${material.source}\n${material.interpretationSummary || ""}\n${material.interpretationUsefulContext || ""}\n${material.interpretationNextStep || ""}\n${material.notes || material.summary}`,
+            )
+            .join("\n\n---\n\n"),
+         projectStage: "material-aware-guidance",
+         currentLocation: "AIDock",
+         priority: "medium",
+         maxWords: 150,
+         projectMaterials: {
+            count: materials.length,
+            selectedTitles: selectedMaterials.map((material) => material.title),
+            titles: materials.map((material) => material.title).slice(0, 8),
+            summaries: materials.map((material) => material.interpretationSummary || material.summary || material.notes).slice(0, 8),
+         },
+         userInstruction:
+            "Answer like ALLEVIN: calm, natural, clear, and useful. Use the project materials and general knowledge together, but do not sound like an analytics report. Avoid robotic wording such as detected, pattern, analysis, confidence, or priority indicator. Do not mention OpenAI. Do not give a generic accessibility tip. Mention at least one specific material title or one specific detail from the materials. Keep the answer conversational and short.",
+      });
+
+      const candidate = cleanConversationalMaterialResponse(response.summary || response.focus || response.nextStep || "");
+
+      if (!candidate || isTooGenericMaterialHelperResponse(candidate, contextMaterials)) {
+         return localResponse;
+      }
+
+      return candidate;
+   } catch {
+      return localResponse;
+   }
+}
+
 function normalizeIntegrationPrompt(prompt: string) {
    return normalizeUserIntentPrompt(prompt);
 }
@@ -2336,7 +3332,7 @@ function getInternalIntegrationIntent(prompt: string): InternalIntegrationIntent
       return {
          source: "cognition",
          target: "aidock",
-         label: "Cognition → AIDock",
+         label: "Insights → ALLEVIN",
          summary: `AIDock is currently using ${profile.label} as the response style.`,
          suggestedAction: profile.suggestion || "Keep responses aligned to the current cognition style.",
       };
@@ -3289,7 +4285,7 @@ function buildWeatherPlanningSuggestion(prompt: string, weather: OpenMeteoCurren
       }
 
       if (warm) {
-         return "A walk makes sense earlier before it warms up. Keep it easy, not heroic.";
+         return "A walk makes sense earlier before it warms up. Keep it simple and manageable.";
       }
 
       if (mild) {
@@ -3321,7 +4317,7 @@ function buildWeatherPlanningSuggestion(prompt: string, weather: OpenMeteoCurren
       }
 
       if (warm) {
-         return "Errands make sense earlier. Future you will appreciate not doing them once it gets warmer.";
+         return "Errands make sense earlier. That should make the rest of the day easier.";
       }
 
       if (mild) {
@@ -3333,7 +4329,7 @@ function buildWeatherPlanningSuggestion(prompt: string, weather: OpenMeteoCurren
 
    if (asksWork) {
       if (rainy) {
-         return "This is a solid indoor-work signal. I’d use it for a focused block and save outside tasks for later.";
+         return "This is a good time for indoor work. I’d use it for a focused block and save outside tasks for later.";
       }
 
       return "The weather is calm enough that it does not need to control the plan. Pick the task with the most momentum and keep it simple.";
@@ -3344,7 +4340,7 @@ function buildWeatherPlanningSuggestion(prompt: string, weather: OpenMeteoCurren
    }
 
    if (warm) {
-      return "Nothing dramatic, but earlier is better for anything outside.";
+      return "Earlier is better for anything outside.";
    }
 
    return "Pretty calm weather. Nothing here needs to hijack the plan.";
@@ -3391,7 +4387,7 @@ function buildWeatherToolSummary(prompt: string, weather: OpenMeteoCurrentWeathe
 }
 
 async function fetchOpenMeteoWeather() {
-   // MK V Build 4:
+   // MK VI Build 4:
    // Default test location uses the user's known San Diego County context.
    // Later builds can replace this with browser geolocation or a saved city preference.
    const latitude = 32.6781;
@@ -4111,17 +5107,17 @@ function rememberPersonalityLine(line: string) {
 
 function choosePersonalityLine(category: PersonalityCategory) {
    const options: Record<PersonalityCategory, string[]> = {
-      save: ["Saved. Nice and tidy.", "Saved. No chaos detected.", "Saved. I’ll keep that ready.", "Saved. Safely tucked away.", "Saved. The workspace behaved itself."],
+      save: ["Saved. Nice and tidy.", "Saved. Everything is organized.", "Saved. I’ll keep that ready.", "Saved. Safely tucked away.", "Saved. The workspace is up to date."],
 
-      projectSaved: ["Saved to Projects. I’ll keep it ready for later.", "Saved to Projects. Filed neatly, no cabinet required.", "Saved to Projects. Future you has been considered.", "Saved to Projects. That one is safe."],
+      projectSaved: ["Saved to Projects. I’ll keep it ready for later.", "Saved to Projects. Saved where you can find it.", "Saved to Projects. Saved for later.", "Saved to Projects. That one is safe."],
 
-      opened: ["Opened in Canvas. Back to the main workbench.", "Opened in Canvas. Ready when you are.", "Opened in Canvas. Let’s pick up cleanly.", "Opened in Canvas. No digging required."],
+      opened: ["Opened in Canvas. Back to the main workbench.", "Opened in Canvas. Ready when you are.", "Opened in Canvas. Let’s pick up cleanly.", "Opened in Canvas. Ready when you need it."],
 
-      deleted: ["Deleted. I won’t treat it as active anymore.", "Deleted. Consider it officially retired.", "Deleted. I’ll keep it out of the way.", "Deleted. No resurrection scheduled."],
+      deleted: ["Deleted. I won’t treat it as active anymore.", "Deleted. Consider it officially retired.", "Deleted. I’ll keep it out of the way.", "Deleted. It will stay out of the active workspace."],
 
-      currentWork: ["I checked the workspace — no chaos detected.", "I found the current work.", "I’ve got the current project.", "The latest work is accounted for."],
+      currentWork: ["I checked the workspace.", "I found the current work.", "I’ve got the current project.", "The latest work is accounted for."],
 
-      projectReadback: ["I’ve got it.", "I checked the project.", "Got it — no chaos detected.", "The project is clear."],
+      projectReadback: ["I’ve got it.", "I checked the project.", "Got it — the project is clear.", "The project is clear."],
 
       nextStep: ["Here’s the cleanest next move.", "I’d keep this simple.", "Best move from here:", "The useful next step is straightforward."],
 
@@ -4136,7 +5132,7 @@ function choosePersonalityLine(category: PersonalityCategory) {
 
       calm: ["We can slow this down.", "One thing at a time.", "No need to rebuild anything."],
 
-      api: ["Clean read.", "Useful direction.", "Small, specific move.", "No dramatic rebuild required.", "The signal is usable.", "This has enough shape to move."],
+      api: ["Clean read.", "Useful direction.", "Small, specific move.", "No major rebuild needed.", "This is useful.", "This has enough shape to move."],
 
       default: ["I’m here.", "Ready when you are.", "Standing by."],
    };
@@ -4162,7 +5158,7 @@ function getEmptyWorkspaceResponse() {
       "Canvas is ready for a new idea, and Projects has saved work when you need it.",
       "Open Projects to continue saved work, or start fresh in Canvas.",
       "No ghost projects on my watch. Start in Canvas or choose something from Projects.",
-      "Peaceful, but slightly suspicious. Canvas and Projects are standing by.",
+      "Canvas and Projects are ready when you are.",
    ];
 
    return `${openings[Math.floor(Math.random() * openings.length)]} ${tails[Math.floor(Math.random() * tails.length)]}`;
@@ -4218,7 +5214,7 @@ function getProjectAwareNotice(type?: string, title?: string, rawMessage?: strin
          return `${cleanTitle ? `Updated "${cleanTitle}" in Projects.` : "Updated in Projects."} That thought has a home base now.`;
 
       case "project-scheduled":
-         return `${cleanTitle ? `Scheduled "${cleanTitle}" in Calendar.` : "Scheduled in Calendar."} Time has entered the chat.`;
+         return `${cleanTitle ? `Scheduled "${cleanTitle}" in Calendar.` : "Scheduled in Calendar."} The time is saved.`;
 
       case "project-deleted":
          return `${cleanTitle ? `Deleted "${cleanTitle}" from Projects.` : "Project deleted."} ${choosePersonalityLine("deleted")}`;
@@ -4363,7 +5359,10 @@ export default function ALLEVIN() {
       function syncCognitionReset(event?: Event) {
          setCognitionResetActive(getStoredCognitionResetActive());
 
-         const customEvent = event as CustomEvent<{ label?: string; suggestion?: string }>;
+         const customEvent = event as CustomEvent<{
+            label?: string;
+            suggestion?: string;
+         }>;
 
          updateCognitionDisplay(customEvent?.detail);
       }
@@ -4480,7 +5479,7 @@ export default function ALLEVIN() {
 
    const sourceAwareProject = getSourceAwareActiveProject();
 
-   // MK V Build 4:
+   // MK VI Build 4:
    // Source-aware ranking lets Canvas and Projects beat stale timeline noise.
 
    // MK V Memory Foundation:
@@ -4783,7 +5782,17 @@ export default function ALLEVIN() {
 
    function readCognitionState() {
       if (typeof window === "undefined") {
-         return null as null | { state?: string; label?: string; mood?: string; momentum?: string; suggestion?: string; adapts?: string; manualReset?: boolean; responseOnly?: boolean; resetAt?: number };
+         return null as null | {
+            state?: string;
+            label?: string;
+            mood?: string;
+            momentum?: string;
+            suggestion?: string;
+            adapts?: string;
+            manualReset?: boolean;
+            responseOnly?: boolean;
+            resetAt?: number;
+         };
       }
 
       try {
@@ -4817,7 +5826,7 @@ export default function ALLEVIN() {
                   mood: "Workspace steady",
                   momentum: "stable",
                   suggestion: "Continue the active project or ask ALLEVIN what to add to Canvas next.",
-                  adapts: "Responses can be conversational, lightly witty, and focused on the current project.",
+                  adapts: "Responses can be conversational, clear, and focused on the current project.",
                   manualReset: true,
                   responseOnly: true,
                   resetAt: manualReset.resetAt,
@@ -4845,7 +5854,7 @@ export default function ALLEVIN() {
                mood: "Workspace steady",
                momentum: "stable",
                suggestion: "Continue the active project or ask ALLEVIN what to add to Canvas next.",
-               adapts: "Responses can be conversational, lightly witty, and focused on the current project.",
+               adapts: "Responses can be conversational, clear, and focused on the current project.",
             };
          }
 
@@ -4873,30 +5882,30 @@ export default function ALLEVIN() {
       }
 
       if (cognition.manualReset === true || cognition.state === "balanced") {
-         return cognition.suggestion ? `Cognition note: ${cognition.suggestion}` : "";
+         return cognition.suggestion ? `Style note: ${cognition.suggestion}` : "";
       }
 
       switch (cognition.state) {
          case "context-switching":
-            return "Cognition note: keep this to one project and one next move before opening anything else.";
+            return "Style note: keep this to one project and one next move before opening anything else.";
 
          case "calm":
-            return "Cognition note: keep the next step small and low-friction.";
+            return "Style note: keep the next step small and low-friction.";
 
          case "deep-work":
-            return "Cognition note: this is a good moment to protect focus and avoid extra branches.";
+            return "Style note: this is a good moment to protect focus and avoid extra branches.";
 
          case "planning":
-            return "Cognition note: structure the work before creating too many moving parts.";
+            return "Style note: structure the work before creating too many moving parts.";
 
          case "creative":
-            return "Cognition note: keep shaping the idea in Canvas before over-organizing it.";
+            return "Style note: keep shaping the idea in Canvas before over-organizing it.";
 
          case "research":
-            return "Cognition note: capture sources, questions, and decisions before routing the work.";
+            return "Style note: capture sources, questions, and decisions before routing the work.";
 
          default:
-            return cognition.suggestion ? `Cognition note: ${cognition.suggestion}` : "";
+            return cognition.suggestion ? `Style note: ${cognition.suggestion}` : "";
       }
    }
 
@@ -5038,7 +6047,7 @@ export default function ALLEVIN() {
       }
 
       if (cleanType.includes("career")) {
-         return "Choose the target roles and match your strongest evidence to them.";
+         return "Choose the target roles and match your best evidence to them.";
       }
 
       if (cleanType.includes("testing") || cleanType.includes("product feedback") || cleanType.includes("user testing")) {
@@ -5201,7 +6210,11 @@ export default function ALLEVIN() {
 
       const action = stripTrailingSentencePunctuation(profile.nextAction);
 
-      return cleanFinalAIDockResponse(`I remember ${profile.title} as a ${profile.type} project in ${profile.location}. ${memoryLine}${latestLine} It was ${profile.updatedLabel}, and I’d keep the next move focused on this: ${action}.`);
+      const materialCount = getActiveProjectMaterialsCount();
+
+      const materialLine = materialCount ? ` I also see ${materialCount} project reference${materialCount === 1 ? "" : "s"} attached, so I can use those when shaping the work.` : "";
+
+      return cleanFinalAIDockResponse(`I remember ${profile.title} as a ${profile.type} project in ${profile.location}. ${memoryLine}${latestLine}${materialLine} It was ${profile.updatedLabel}, and I’d keep the next move focused on this: ${action}.`);
    }
 
    function buildActiveProjectSummaryResponse() {
@@ -5215,7 +6228,11 @@ export default function ALLEVIN() {
 
       const action = stripTrailingSentencePunctuation(profile.nextAction);
 
-      return cleanFinalAIDockResponse(`${profile.title} is a ${profile.type} in ${profile.location}. ${summary} From here, I’d keep the next move focused on this: ${action}.`);
+      const materialContext = buildActiveProjectMaterialsContext(3);
+
+      const materialLine = materialContext ? `\n\nReferences I can use:\n${materialContext}` : "";
+
+      return cleanFinalAIDockResponse(`${profile.title} is a ${profile.type} in ${profile.location}. ${summary}${materialLine}\n\nFrom here, I’d keep the next move focused on this: ${action}.`);
    }
 
    function buildAllevinInternalContextPacket(prompt = ""): AllevinInternalContextPacket {
@@ -5239,8 +6256,10 @@ export default function ALLEVIN() {
 
       const projectBody = compactText(memoryProfile.summary || getProjectInsightBody());
 
+      const activeMaterials = getActiveProjectMaterialsForAIDock();
+
       return {
-         version: "MK V",
+         version: "MK VI",
 
          userIntent: {
             rawPrompt: prompt,
@@ -5258,6 +6277,11 @@ export default function ALLEVIN() {
             canvasContent: memoryProfile.title ? canvasContent : "",
             latestProjectNote: memoryProfile.title ? memoryProfile.latestNote : "",
             recommendedNextAction: memoryProfile.nextAction || getSafeRecommendedNextAction(),
+            materials: {
+               count: activeMaterials.length,
+               summaries: activeMaterials.slice(0, 6).map((material) => getMaterialPreviewLine(material, 180)),
+               hasMaterials: activeMaterials.length > 0,
+            },
          },
 
          projects: {
@@ -5281,17 +6305,19 @@ export default function ALLEVIN() {
             mood: cognition?.mood || "Workspace steady",
             momentum: cognition?.momentum || "stable",
             suggestion: cognition?.suggestion || "Continue the active project or ask ALLEVIN what to add to Canvas next.",
-            adapts: cognition?.adapts || "Responses can be conversational, lightly witty, and focused on the current project.",
+            adapts: cognition?.adapts || "Responses can be conversational, clear, and focused on the current project.",
          },
 
          responseRules: {
-            tone: `ALLEVIN: calm, witty, useful, concise, project-aware, and adapted to ${cognition?.label || "Balanced"} cognition.`,
+            tone: `ALLEVIN: calm, clear, useful, concise, project-aware, and adapted to ${cognition?.label || "Balanced"} cognition.`,
             format: "Brief opener, useful insight, and one clean next move shaped by cognition state.",
             avoid: [
                "Do not mention raw storage, implementation details, or confidence scores.",
                "Do not say to open Canvas if the project is already in Canvas.",
                "Do not say to move work to Projects if it is already in Projects.",
                "Do not mention Tasks or Board as user-facing destinations.",
+               "Use Project Materials as reference context when the user asks about project structure, summaries, planning, or references.",
+               "Do not paste full project materials into Canvas-style responses unless the user explicitly asks for full content.",
                "Do not over-explain unless the user asks for detail.",
             ],
          },
@@ -5370,7 +6396,7 @@ export default function ALLEVIN() {
                mood: "Workspace steady",
                momentum: "stable",
                suggestion: "Continue the active project or ask ALLEVIN what to add to Canvas next.",
-               adapts: "Responses can be conversational, lightly witty, and focused on the current project.",
+               adapts: "Responses can be conversational, clear, and focused on the current project.",
             };
       }
    }
@@ -5510,7 +6536,7 @@ export default function ALLEVIN() {
          .replace(/ask ALLEVIN what to add to Canvas next/gi, "ask what should be added to Canvas")
          .replace(/ask ALLEVIN/gi, "ask me");
 
-      return `Cognition is set to ${profile.label}. I’ll use that style in how I respond: ${suggestion.charAt(0).toLowerCase()}${suggestion.slice(1)}`;
+      return `Insights is set to ${profile.label}. I’ll use that style in how I respond: ${suggestion.charAt(0).toLowerCase()}${suggestion.slice(1)}`;
    }
 
    function looksLikeCurrentTimeQuestion(prompt: string) {
@@ -5661,7 +6687,7 @@ export default function ALLEVIN() {
          : profile.type.includes("home organization")
            ? `Schedule a short reset block for ${title}: one shelf or section only. Thirty minutes is plenty.`
            : profile.type.includes("career")
-             ? `Schedule a career update block for ${title}: target roles, strongest evidence, or one resume/portfolio section.`
+             ? `Schedule a career update block for ${title}: target roles, best evidence, or one resume/portfolio section.`
              : profile.type.includes("development")
                ? `Schedule one implementation block for ${title}: expected behavior, first code change, and a quick test.`
                : `Schedule one clear action for ${title}: ${profile.nextMove}.`;
@@ -5721,7 +6747,7 @@ export default function ALLEVIN() {
       }
 
       if (type === "career") {
-         return "choose target roles and match your strongest evidence to them";
+         return "choose target roles and match your best evidence to them";
       }
 
       if (type === "development") {
@@ -5865,7 +6891,18 @@ export default function ALLEVIN() {
       return `I’d work on ${recommended.title} today. It is ${recommended.reason}, and the next move is specific enough to start: ${sentenceCaseFirstLetter(recommended.nextMove)}.`;
    }
 
-   function buildProjectFocusResponse() {
+   function buildProjectFocusResponse(prompt = "") {
+      const lower = normalizeUserIntentPrompt(prompt);
+
+      const hasActiveMaterials = getActiveProjectMaterialsForAIDock().length > 0;
+
+      // If the user is asking what to focus on for the active project, let the
+      // saved project materials guide the answer first. This keeps ALLEVIN
+      // conversational and grounded instead of drifting into generic advice.
+      if (hasActiveMaterials && (lower.includes("this") || lower.includes("review") || lower.includes("project") || lower.includes("accessibility") || lower.includes("focus"))) {
+         return buildProjectMaterialsReadbackResponse(prompt || "what should I focus on next");
+      }
+
       const profiles = buildCrossProjectProfiles();
 
       if (!profiles.length) {
@@ -5886,7 +6923,7 @@ export default function ALLEVIN() {
          return `${recommended.title} is already selected in Canvas, so it has the active thread right now. I’d keep the next move focused on this: ${sentenceCaseFirstLetter(recommended.nextMove)}.`;
       }
 
-      return `I’d focus on ${recommended.title}. It has the strongest current signal because it is ${recommended.reason}. The useful move is ${sentenceCaseFirstLetter(recommended.nextMove)}.`;
+      return `I’d focus on ${recommended.title}. It looks like the cleanest place to continue because it is ${recommended.reason}. The useful move is ${sentenceCaseFirstLetter(recommended.nextMove)}.`;
    }
 
    function buildProjectCompareResponse() {
@@ -5985,7 +7022,7 @@ export default function ALLEVIN() {
       if (!projects.length) {
          return `${getGeneratedInsightOpener()}
 
-No saved projects are active right now. Canvas is open for a fresh start, which is suspiciously peaceful but acceptable.`;
+No saved projects are active right now. Canvas is ready for a fresh start.`;
       }
 
       const projectLines = projects.slice(0, 8).map((project, index) => {
@@ -6033,7 +7070,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
    }
 
    function hasSourceAwareProject() {
-      if (!sourceAwareProject?.title || sourceAwareProject.title === "No active project detected") {
+      if (!sourceAwareProject?.title || sourceAwareProject.title === "No active project yet") {
          return false;
       }
 
@@ -6282,13 +7319,13 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          return {
             type: "career project",
             purpose: "turning career material into a stronger application or interview plan",
-            missingPiece: "target roles, strongest evidence, skills to highlight, gaps, and interview examples",
-            canvasNote: "Target roles:\nStrongest evidence:\nSkills to highlight:\nPortfolio proof:\nInterview examples:",
+            missingPiece: "target roles, best evidence, skills to highlight, gaps, and interview examples",
+            canvasNote: "Target roles:\nBest evidence:\nSkills to highlight:\nPortfolio proof:\nInterview examples:",
             nextMove: "schedule or write one clear next action for the first resume, portfolio, or interview update",
          };
       }
 
-      if (hasAny(["portfolio", "homepage", "project descriptions", "visual layout", "mobile responsiveness", "navigation", "strongest work", "case study", "personal website"])) {
+      if (hasAny(["portfolio", "homepage", "project descriptions", "visual layout", "mobile responsiveness", "navigation", "best work", "case study", "personal website"])) {
          return {
             type: "portfolio project",
             purpose: "making personal work easier to understand and more polished",
@@ -6442,33 +7479,33 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
    }
 
    function getGeneratedInsightOpener() {
-      const signalWords = ["strategy", "clarity", "momentum", "structure", "focus", "usefulness", "planning", "progress", "sanity", "direction", "organization", "next-step"];
+      const signalWords = ["strategy", "clarity", "momentum", "structure", "focus", "usefulness", "planning", "progress", "direction", "organization", "next step"];
 
-      const verbs = ["ping", "scan", "check", "sweep", "pass", "read", "filter", "calibration", "inspection", "vibe check", "signal", "alignment"];
+      const verbs = ["check", "review", "pass", "read", "summary", "alignment"];
 
       const openingStyles = [
          () => `Tiny ${signalWords[Math.floor(Math.random() * signalWords.length)]} ${verbs[Math.floor(Math.random() * verbs.length)]}.`,
-         () => `${signalWords[Math.floor(Math.random() * signalWords.length)].replace(/^./, (letter) => letter.toUpperCase())} signal acquired.`,
+         () => `${signalWords[Math.floor(Math.random() * signalWords.length)].replace(/^./, (letter) => letter.toUpperCase())} is clear.`,
          () => `I ran a quick ${signalWords[Math.floor(Math.random() * signalWords.length)]} check.`,
-         () => `Useful ${signalWords[Math.floor(Math.random() * signalWords.length)]} detected.`,
+         () => `Useful ${signalWords[Math.floor(Math.random() * signalWords.length)]} found.`,
          () => `A clean ${signalWords[Math.floor(Math.random() * signalWords.length)]} path is showing up.`,
          () => `The project is giving ${signalWords[Math.floor(Math.random() * signalWords.length)]}. Professionally, even.`,
          () => `I checked the notes and found the ${signalWords[Math.floor(Math.random() * signalWords.length)]}.`,
-         () => `Small ${signalWords[Math.floor(Math.random() * signalWords.length)]} flare detected.`,
+         () => `Small ${signalWords[Math.floor(Math.random() * signalWords.length)]} note found.`,
       ];
 
       const closers = [
          "Nothing exploded.",
          "I’ll keep it practical.",
-         "No dramatic rebuild required.",
-         "The chaos committee has been gently escorted out.",
+         "No major rebuild needed.",
+         "The extra noise has been removed.",
          "Simple is doing the heavy lifting here.",
-         "Future you may actually appreciate this.",
-         "No overcomplication ceremony required.",
-         "The gremlins submitted ideas; I declined most of them.",
+         "This should be easier to return to later.",
+         "No extra steps needed.",
+         "I kept only the useful parts.",
          "We are choosing clarity today.",
          "A rare win for organization.",
-         "Suspiciously manageable.",
+         "Manageable.",
          "Very professional of us.",
       ];
 
@@ -6514,7 +7551,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          return {
             label: "action-ready",
             guidance: "This is action-ready, not just a loose idea anymore.",
-            nextBias: "turn the strongest next step into one clear project action",
+            nextBias: "turn the next step into one clear project action",
          };
       }
 
@@ -6586,7 +7623,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
       if (profile.type.includes("creative writing")) {
          return pickRandomLine([
             "The neon is on. Let’s keep the story moving.",
-            "The writer’s room has entered the chat.",
+            "Writing mode is ready.",
             "This one has narrative voltage. Good, mildly dangerous, useful.",
             "The story engine is warming up.",
             "Creative machinery is online. No unnecessary executive notes yet.",
@@ -6605,8 +7642,8 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
       if (profile.type.includes("event planning")) {
          return pickRandomLine([
-            "Event signal acquired. Let’s give it a clean run of show.",
-            "This is planning work, not chaos with decorations. Promising.",
+            "Event planning is ready. Let’s keep the flow clear.",
+            "This is planning work. Let’s keep the details organized.",
             "The event has shape. Let’s keep the moving pieces visible.",
             "A clean event path is available here.",
             "This one wants timing, people, and responsibilities to stop floating around.",
@@ -6615,7 +7652,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
       if (profile.type.includes("career")) {
          return pickRandomLine([
-            "Career signal acquired. Let’s make it useful.",
+            "Career planning is ready. Let’s make it useful.",
             "Professional momentum is available here.",
             "This is career prep, not career fog. Excellent distinction.",
             "The application machinery is waking up.",
@@ -6625,7 +7662,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
       if (profile.type.includes("development")) {
          return pickRandomLine([
-            "Engineering gremlins detected. Contained, for now.",
+            "Engineering work is ready. Let’s keep the next step clear.",
             "Build logic is on the table. Let’s keep the blast radius small.",
             "The code path is visible enough to move carefully.",
             "Implementation mode is available. Helmet optional, tests recommended.",
@@ -6635,20 +7672,20 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
       if (profile.type.includes("research")) {
          return pickRandomLine([
-            "Research table is open. Let’s keep the signal clean.",
+            "Research mode is ready. Let’s keep the notes clear.",
             "The evidence pile has entered the room.",
             "This wants sources, structure, and fewer rabbit holes.",
-            "Research mode is behaving. Suspicious, but useful.",
+            "Research mode is ready and useful.",
             "The question needs a spine before the sources multiply.",
          ]);
       }
 
       if (profile.type === "none") {
-         return pickRandomLine(["Clean slate. The runway is open.", "No active project yet. Peaceful, suspicious, usable.", "The workspace is clear. We can start clean.", "Nothing is pulling focus right now."]);
+         return pickRandomLine(["Clean slate. The runway is open.", "No active project yet. The workspace is ready.", "The workspace is clear. We can start clean.", "Nothing is pulling focus right now."]);
       }
 
       return pickRandomLine([
-         "The workspace has enough signal to be useful.",
+         "The workspace has enough context to be useful.",
          "A clean next move is starting to show.",
          "This is manageable if we keep it small.",
          "The project has shape. Let’s not overcomplicate it.",
@@ -6688,7 +7725,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
       if (profile.type.includes("career")) {
          return pickRandomLine([
             "Career projects get clearer when the role target is specific. The resume, portfolio proof, and interview examples need something to aim at.",
-            "The strongest move is evidence-first: define the roles, then match your best proof to those roles.",
+            "The clearest move is evidence-first: define the roles, then match your best proof to those roles.",
             "Do not polish everything equally. Choose the target roles and let that decide what deserves attention.",
          ]);
       }
@@ -6697,7 +7734,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          return pickRandomLine([
             "Keep the build small: expected behavior, edge case, failure case, then one testable change.",
             "This should move through behavior first and polish second. Define what should happen before adding more UI.",
-            "The safest path is one implementation step with a clear test, not a heroic refactor.",
+            "The safest path is one implementation step with a clear test.",
          ]);
       }
 
@@ -6755,8 +7792,8 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          `${title} is behaving like a ${type}.`,
          `This feels like a ${type} more than a general note.`,
          `The shape here is pretty clear: ${title} is a ${type}.`,
-         `I’d file ${title} under ${type}, with only minor protest from the gremlins.`,
-         `${title} has the signal of a ${type}.`,
+         `I’d file ${title} under ${type}, as a useful project type.`,
+         `${title} looks like a ${type}.`,
       ]);
    }
 
@@ -6769,7 +7806,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          "The practical path is smaller than it looks.",
          "I’d keep the steering wheel pointed here.",
          "This does not need a master plan; it needs one good move.",
-         "The signal is pointing to a smaller next step.",
+         "A smaller next step would help here.",
          "I would not overbuild this one.",
          "This is where I’d aim the next bit of attention.",
          "The useful next step is hiding in plain sight.",
@@ -6781,7 +7818,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
       return pickRandomLine([
          `For ${title}, I’d add a small structure block to Canvas so the next move is easier to see.`,
          `I’d give ${title} a little more shape in Canvas with this block.`,
-         `Canvas could use a clean structure pass for ${title}. Nothing dramatic, just enough to make the next move obvious.`,
+         `Canvas could use a clean structure pass for ${title}. Just enough to make the next move clear.`,
          `I’d add this to Canvas for ${title}. It gives the project a spine without turning it into a spreadsheet with feelings.`,
          `${title} would benefit from this Canvas structure before it becomes a clear action.`,
       ]);
@@ -6798,7 +7835,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
    }
 
    function buildNaturalSummaryIntro() {
-      return pickRandomLine(["Here’s the clean read:", "Here’s the useful version:", "I’d summarize it this way:", "Clean summary, no confetti:", "Here’s what the project is really doing:", "The short version, with the gremlins edited out:"]);
+      return pickRandomLine(["Here’s the clean read:", "Here’s the useful version:", "I’d summarize it this way:", "Clean summary:", "Here’s what the project is really doing:", "Short summary:"]);
    }
 
    function buildNaturalProjectLocationLine(location: string) {
@@ -6922,7 +7959,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
       if (profile.type === "career project") {
          return pickRandomLine([
             "Start with target roles. Once those are clear, the resume, portfolio proof, and interview examples have something to aim at.",
-            "Choose the target roles first, then match your strongest evidence to them.",
+            "Choose the target roles first, then match your best evidence to them.",
             "Pick the roles you are aiming for, then shape the resume and portfolio around that evidence.",
             "Start by deciding what roles this project is serving. The rest of the career prep gets easier after that.",
             "I would anchor this around target roles, then let the resume, portfolio, and interview examples support those roles.",
@@ -6982,13 +8019,13 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
       const maturity = getProjectMaturityProfile();
 
-      const taskTitle = profile.type === "career project" ? "Clarify target roles and strongest evidence" : `Move ${title} forward`;
+      const taskTitle = profile.type === "career project" ? "Clarify target roles and best evidence" : `Move ${title} forward`;
 
       const baseNextMove = compactText(profile.nextMove) || "move the project forward with one clear next step";
 
       const taskAction =
          profile.type === "career project"
-            ? "Define target roles, identify strongest evidence, and choose which resume or portfolio section to update first."
+            ? "Define target roles, identify best evidence, and choose which resume or portfolio section to update first."
             : maturity.label === "blocked"
               ? "Write the blocker, what is missing, and the smallest question that would unblock the project."
               : maturity.label === "idea" || maturity.label === "draft"
@@ -6997,7 +8034,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
       const doneWhen =
          profile.type === "career project"
-            ? "Target roles, strongest evidence, portfolio proof, and interview examples are clear enough to update the resume or portfolio."
+            ? "Target roles, best evidence, portfolio proof, and interview examples are clear enough to update the resume or portfolio."
             : "The next step is specific enough that you know what to do, where it belongs, and what done looks like.";
 
       const cognitionLine = getCognitionAwareGuidanceLine();
@@ -7040,12 +8077,16 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
       const canvasBlock = buildSafeCanvasStructureNote();
 
+      const materialContext = buildActiveProjectMaterialsContext(3);
+
+      const materialLine = materialContext ? `\n\nProject references to keep nearby:\n${materialContext}` : "";
+
       const intro = buildNaturalCanvasIntro(title);
 
       const closing = profile.type.includes("creative writing")
-         ? pickRandomLine(["That keeps the story flexible without letting it dissolve into vibes and neon.", "That gives the story a spine before the plot starts sprinting.", "Small structure first. The drama can make its entrance after."])
+         ? pickRandomLine(["That keeps the story flexible without letting it get too broad.", "That gives the story a spine before the plot starts sprinting.", "Small structure first. The drama can make its entrance after."])
          : profile.type.includes("home organization")
-           ? pickRandomLine(["That keeps the reset physical, simple, and actually finishable.", "That is enough structure to make the space easier without turning it into a command center.", "The pantry may not thank us, but future you probably will."])
+           ? pickRandomLine(["That keeps the reset physical, simple, and actually finishable.", "That is enough structure to make the space easier without turning it into a command center.", "That should make the space easier to use later."])
            : profile.type.includes("event planning")
              ? pickRandomLine([
                   "That gives the event a cleaner spine: people, timing, media, and ownership.",
@@ -7055,7 +8096,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
              : pickRandomLine([
                   `That gives the ${profile.type} a cleaner shape without adding clutter.`,
                   "That is enough structure to make the next move easier without turning this into a dashboard.",
-                  "That should help the project breathe a little without inviting the paperwork gremlins.",
+                  "That should help the project breathe a little without adding extra paperwork.",
                   "Small structure, useful direction. Very adult of us.",
                ]);
 
@@ -7122,7 +8163,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          }),
       );
 
-      return `${getGeneratedInsightOpener()}\n\nI added the Canvas-ready insight to ${title}. Canvas has the structure now — no copy/paste gymnastics required.`;
+      return `${getGeneratedInsightOpener()}\n\nI added the Canvas-ready insight to ${title}. Canvas has the structure now.`;
    }
 
    function buildProjectAwareNextStepInsight(prompt = "") {
@@ -7238,7 +8279,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          return "strengthening career materials, portfolio proof, target roles, and interview preparation";
       }
 
-      if (hasAny(["portfolio", "homepage", "project descriptions", "visual layout", "mobile responsiveness", "navigation", "strongest work", "case study", "personal website"])) {
+      if (hasAny(["portfolio", "homepage", "project descriptions", "visual layout", "mobile responsiveness", "navigation", "best work", "case study", "personal website"])) {
          return "refreshing a personal portfolio with clearer project descriptions, layout, featured work, and mobile navigation";
       }
 
@@ -7291,7 +8332,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
       }
 
       if (lower.includes("mk iii") || lower.includes("personality") || lower.includes("source-aware") || lower.includes("next-step") || lower.includes("test build")) {
-         return "testing and improving ALLEVIN MK V";
+         return "testing and improving ALLEVIN MK VI";
       }
 
       return "the current project";
@@ -7507,7 +8548,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          "calendar event deleted",
          "event deleted",
          "new project",
-         "no active project detected",
+         "no active project yet",
          "no current work selected",
       ];
 
@@ -7960,7 +9001,7 @@ Thread: ${getSafeThreadTitle()}
 Stage: ${getCurrentProjectStageLabel()}
 Status: ${getCurrentProjectStatusLabel()}
 Last known location: ${getCurrentProjectLocationLabel()}
-Signals: ${getDisplaySignalCount(latestProject?.signalCount ?? threadMemory.signalCount)}
+Activity: ${getDisplaySignalCount(latestProject?.signalCount ?? threadMemory.signalCount)}
 Latest movement: ${latestProject?.latestMovement || threadMemory.latestMovement}
 Operating state: ${latestProject ? "Project Memory" : threadMemory.operatingState}
 Cognitive load: ${threadMemory.cognitiveLoad}
@@ -8043,24 +9084,19 @@ The useful next move is ${polishWorkflowControlLanguage(recommendation.suggested
          case "canvas":
             return "Canvas";
 
-         case "tasks":
+         case "projects":
             return "Projects";
 
-         case "board":
-            return "Projects";
-
-         case "notes":
-            return "Projects";
+         case "materials":
+            return "Project Materials";
 
          case "calendar":
             return "Calendar";
 
-         case "integrations":
-            return "Projects";
+         case "cognition":
+            return "Insights";
 
-         case "recovery":
-            return "Projects";
-
+         case "standby":
          default:
             return "Standby";
       }
@@ -8070,25 +9106,22 @@ The useful next move is ${polishWorkflowControlLanguage(recommendation.suggested
       const title = getSafeThreadTitle();
 
       switch (recommendation.action) {
-         case "create-task":
-            return `create a task from ${title}`;
+         case "save-to-projects":
+            return `save ${title} to Projects`;
 
-         case "move-to-board":
-            return `send the ${title} to the board`;
-
-         case "prepare-export":
-            return `export ${title} to Project Notes`;
+         case "save-material":
+            return `add ${title} as project material`;
 
          case "prepare-calendar":
-            return `send the ${title} to calendar`;
+            return `send ${title} to Calendar`;
 
-         case "save-note":
-            return `save the ${title} as a note`;
+         case "review-guidance":
+            return `review guidance for ${title}`;
 
-         case "recover-thread":
          case "continue-in-canvas":
             return `resume ${title}`;
 
+         case "standby":
          default:
             return "";
       }
@@ -8122,35 +9155,30 @@ The useful next move is ${polishWorkflowControlLanguage(recommendation.suggested
       };
 
       switch (recommendation.action) {
-         case "create-task":
-            return {
-               ...baseAction,
-
-               actionType: "send-to-task" as const,
-
-               destination: "task",
-            };
-
-         case "move-to-board":
-            return {
-               ...baseAction,
-
-               actionType: "send-to-board" as const,
-
-               destination: "board",
-            };
-
-         case "prepare-export":
+         case "save-to-projects":
             return {
                ...baseAction,
 
                actionType: "prepare-integration" as const,
 
-               destination: "integration",
+               destination: "projects",
 
-               integrationWhere: "notes",
+               integrationDestination: "projects",
 
                objectType: "project-summary",
+            };
+
+         case "save-material":
+            return {
+               ...baseAction,
+
+               actionType: "prepare-integration" as const,
+
+               destination: "materials",
+
+               integrationDestination: "materials",
+
+               objectType: "research-note",
             };
 
          case "prepare-calendar":
@@ -8163,7 +9191,7 @@ The useful next move is ${polishWorkflowControlLanguage(recommendation.suggested
 
                objectType: "calendar-event",
 
-               reason: "ALLEVIN detected time, schedule, meeting, or deadline language. Calendar can schedule time for this project.",
+               reason: "This mentions time, scheduling, a meeting, or a deadline. Calendar can help schedule time for this project.",
 
                metadata: {
                   sourceTitle: title,
@@ -8178,16 +9206,15 @@ The useful next move is ${polishWorkflowControlLanguage(recommendation.suggested
                },
             };
 
-         case "save-note":
+         case "review-guidance":
             return {
                ...baseAction,
 
                actionType: "custom" as const,
 
-               destination: "notes",
+               destination: "cognition",
             };
 
-         case "recover-thread":
          case "continue-in-canvas":
             return {
                ...baseAction,
@@ -8197,6 +9224,7 @@ The useful next move is ${polishWorkflowControlLanguage(recommendation.suggested
                destination: "canvas",
             };
 
+         case "standby":
          default:
             return null;
       }
@@ -8700,7 +9728,7 @@ I could not turn this recommendation into a clean action yet.
          state: "balanced",
          label: "Balanced",
          opener: "",
-         guidanceRule: "Use normal ALLEVIN style: calm, concise, lightly witty, and specific.",
+         guidanceRule: "Use normal ALLEVIN style: calm, concise, clear, and specific.",
          nextPrefix: "Next",
          maxFocusSentences: 2,
          shouldUseSoftTone: false,
@@ -9167,7 +10195,7 @@ ${getCognitionPromptInstruction()}
             userInstruction: `
 User question: ${prompt}
 
-Use ALLEVIN MK V style, but treat this as a general knowledge answer, not project guidance.
+Use ALLEVIN MK VI style, but treat this as a general knowledge answer, not project guidance.
 
 Rules:
 - Answer the question directly.
@@ -9238,7 +10266,7 @@ Rules:
          nextStep: context.nextStep,
          rawContent: buildCleanContinuationBody(),
          contextPacket: buildAllevinInternalContextPacket(prompt),
-         userInstruction: `${prompt}\n\nUse ALLEVIN MK V natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, lightly personable, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. For event-planning projects, do not invent extra party details; use the saved notes and give slight, concrete structure around guests/RSVPs, timing, media needs, responsibilities, and day-of flow. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Keep it to 2-5 sentences unless the user asks for detail.`,
+         userInstruction: `${prompt}\n\nUse ALLEVIN MK VI natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, clear, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, including project materials when relevant, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. Because beta feedback showed the AI can feel unnecessary when it sounds generic, prioritize concrete guidance tied to the active project, Canvas text, calendar, and project materials. For event-planning projects, do not invent extra party details; use the saved notes and give slight, concrete structure around guests/RSVPs, timing, media needs, responsibilities, and day-of flow. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Keep it to 2-5 sentences unless the user asks for detail.`,
          projectStage: context.stageLabel,
          currentLocation: context.locationLabel,
          priority: focusMode === "deep" ? "high" : "medium",
@@ -9250,7 +10278,11 @@ Rules:
       }
 
       if (shouldUseCoreGuidanceComposer(prompt)) {
-         const composed = buildCoreGuidanceResponseFromContext(prompt) as { focus: string; nextStep: string; nextLabel?: string };
+         const composed = buildCoreGuidanceResponseFromContext(prompt) as {
+            focus: string;
+            nextStep: string;
+            nextLabel?: string;
+         };
 
          return buildLocalHumanResponseFromBase(prompt, `${composed.focus}${composed.nextStep ? ` ${composed.nextStep}` : ""}`.trim());
       }
@@ -9331,8 +10363,6 @@ Rules:
 
       window.addEventListener("allevin-send-to-task", refreshActiveThread);
 
-      window.addEventListener("allevin-send-to-board", refreshActiveThread);
-
       window.addEventListener("allevin-prepare-integration", refreshActiveThread);
 
       window.addEventListener("allevin-command-workflow-action", refreshActiveThread);
@@ -9353,8 +10383,6 @@ Rules:
          window.removeEventListener("allevin-send-to-canvas", refreshActiveThread);
 
          window.removeEventListener("allevin-send-to-task", refreshActiveThread);
-
-         window.removeEventListener("allevin-send-to-board", refreshActiveThread);
 
          window.removeEventListener("allevin-prepare-integration", refreshActiveThread);
 
@@ -9500,7 +10528,7 @@ Rules:
          "I decoded that",
          "I caught the typo drift",
          "Translation handled",
-         "Signal cleaned",
+         "Cleaned up",
          "Typo fog cleared",
          "I read through the static",
          "Close enough",
@@ -9514,22 +10542,22 @@ Rules:
          "on the way in",
          "without drama",
          "before it caused trouble",
-         "with minimal chaos",
+         "with minimal friction",
          "like a responsible assistant",
          "and kept us moving",
          "neatly enough",
          "in one pass",
-         "before the gremlins noticed",
+         "before it gets messy",
          "with the usual elegance",
          "and translated the intent",
          "while preserving the mission",
       ];
 
-      const endings = [".", " — proceeding.", ". We’re good.", ". Very elegant chaos.", ". No issue.", ". Carrying on.", ". I’ve got it.", ". Smooth enough.", ". The runway is clear.", ". Onward.", ". No rebuild required.", ". Crisis avoided."];
+      const endings = [".", " — proceeding.", ". We’re good.", ". Clear and handled.", ". No issue.", ". Carrying on.", ". I’ve got it.", ". Smooth enough.", ". The runway is clear.", ". Onward.", ". No rebuild required.", ". Handled."];
 
       const shouldUseCompactLine = Math.random() > 0.68;
 
-      const compactLines = ["Typo drift handled.", "Signal cleaned.", "I’ve got the intent.", "Tiny typo weather, nothing serious.", "Translation complete.", "Static cleared."];
+      const compactLines = ["Typo drift handled.", "Cleaned up.", "I’ve got the intent.", "Tiny typo weather, nothing serious.", "Translation complete.", "Cleaned up."];
 
       const recentKey = "allevin-typo-generated-history";
 
@@ -9584,9 +10612,9 @@ Rules:
       const openerPatterns = [
          /^I’ve got it\.\s*/i,
          /^I checked the project\.\s*/i,
-         /^Got it — no chaos detected\.\s*/i,
+         /^Got it — the project is clear\.\s*/i,
          /^The project is clear\.\s*/i,
-         /^I checked the workspace — no chaos detected\.\s*/i,
+         /^I checked the workspace\.\s*/i,
          /^I found the current work\.\s*/i,
          /^I’ve got the current project\.\s*/i,
          /^The latest work is accounted for\.\s*/i,
@@ -9596,7 +10624,7 @@ Rules:
    }
 
    function maybeTypoLine(prompt: string) {
-      // MK V Build 6M:
+      // MK VI Build 6M:
       // Typos should be understood silently.
       // ALLEVIN should answer the intent, not comment on the user's spelling.
       void prompt;
@@ -9605,7 +10633,7 @@ Rules:
    }
 
    function withTypoAwareResponse(prompt: string, response: string) {
-      // MK V Build 6M:
+      // MK VI Build 6M:
       // Keep typo tolerance invisible unless a future debug mode asks for it.
       void prompt;
 
@@ -9634,7 +10662,7 @@ Rules:
    }
 
    function getAIDockNavigationClarifier() {
-      return "Which page should I open — Home, Canvas, Projects, Calendar, or Cognition?";
+      return "Which page should I open — Home, Canvas, Projects, Calendar, or Insights?";
    }
 
    function getAIDockPageOpenIntent(prompt: string): AIDockPageOpenIntent | null {
@@ -9703,8 +10731,8 @@ Rules:
             moduleId: "advanced",
             targetId: "cognition",
             targetView: "insights",
-            label: "Cognition",
-            message: "Cognition opened. Response style is ready to adjust.",
+            label: "Insights",
+            message: "Insights opened. Response style is ready to adjust.",
             fallbackTargetId: "advanced",
          };
       }
@@ -9797,7 +10825,7 @@ Rules:
    }
 
    function openWorkflowControl(message = "Opening Projects for the pending action.") {
-      openProductModule("control", "work-area", "workspace", message, "workflow-control");
+      openProductModule("integrations", "work-area", "integrations", message, "integrations");
    }
 
    function approvePendingWorkflowAction(action: PendingWorkflowAction) {
@@ -9856,19 +10884,19 @@ Rules:
 
    function openSuggestedDestination() {
       if (threadMemory.suggestedDestination === "task") {
-         openProductModule("tasks", "work-area", "workspace", "Opening Projects for the current work.", "tasks");
+         openProductModule("integrations", "work-area", "integrations", "Opening Projects for the current work.", "integrations");
 
          return;
       }
 
       if (threadMemory.suggestedDestination === "board") {
-         openProductModule("board", "work-area", "workspace", "Opening Projects for the current work.", "board");
+         openProductModule("integrations", "work-area", "integrations", "Opening Projects for the current work.", "integrations");
 
          return;
       }
 
       if (threadMemory.suggestedDestination === "notes") {
-         openProductModule("advanced", "cognition", "insights", "Opening Cognition for Notes and Memory.", "internal-notes-vault");
+         openProductModule("advanced", "cognition", "insights", "Opening Insights.", "internal-notes-vault");
 
          return;
       }
@@ -9892,15 +10920,15 @@ Rules:
       const latest = events[0];
 
       if (!latest) {
-         addAssistantMessage("No recent activity signal is available yet. Move work through Canvas, Projects, Notes, or Projects and I’ll start tracking it.");
+         addAssistantMessage("No recent activity is available yet. Move work through Canvas, Projects, Notes, or Projects and I’ll start tracking it.");
 
          return;
       }
 
       const body = `
-ALLEVIN Signal Check
+ALLEVIN Activity Check
 
-Latest Signal:
+Latest Activity:
 ${latest.title}
 
 Context:
@@ -9932,7 +10960,7 @@ Decide whether this should continue in Canvas, become a task, move on the Projec
          window.dispatchEvent(
             new CustomEvent("allevin-send-to-canvas", {
                detail: {
-                  title: "ALLEVIN Signal Check",
+                  title: "ALLEVIN Activity Check",
 
                   body,
 
@@ -9978,7 +11006,7 @@ ${getLocationLabel(threadMemory.lastKnownLocation)}
 
 ${threadMemory.latestMovement}
 
-Signals:
+Activity:
 ${getDisplaySignalCount(threadMemory.signalCount)}
 
 Thread 
@@ -10045,7 +11073,7 @@ ${getSafeRecommendedNextAction()}
 
       refreshThreadSoon();
 
-      openProductModule("tasks", "work-area", "workspace", "Next action prepared from Project Memory.", "tasks");
+      openProductModule("integrations", "work-area", "integrations", "Next action prepared from Project Memory.", "integrations");
    }
 
    function continueActiveThread() {
@@ -10141,13 +11169,13 @@ ${getSafeRecommendedNextAction()}
       },
 
       {
-         label: "Cognition",
+         label: "Insights",
 
-         description: "AI style",
+         description: "Response style",
 
-         icon: Brain,
+         icon: Sparkles,
 
-         action: () => openProductModule("advanced", "cognition", "insights", "Opening Cognition.", "cognition"),
+         action: () => openProductModule("advanced", "cognition", "insights", "Opening Insights.", "cognition"),
       },
    ];
 
@@ -10174,7 +11202,7 @@ ${getSafeRecommendedNextAction()}
          "workspace memory",
          "active project",
          "active work",
-         "no active project detected",
+         "no active project yet",
          "no current work selected",
          "no current work",
          "unknown",
@@ -10562,7 +11590,7 @@ Try one of these:
 
       openProductModule(getInternalIntegrationDestinationModule(intent.target), getInternalIntegrationDestinationView(intent.target), "workspace", "", getInternalIntegrationDestinationAnchor(intent.target));
 
-      return `${intent.label} approved. I opened ${intent.target === "projects" ? "Projects" : intent.target === "cognition" ? "Cognition" : intent.target === "calendar" ? "Calendar" : "Canvas"}. ${intent.suggestedAction}`;
+      return `${intent.label} approved. I opened ${intent.target === "projects" ? "Projects" : intent.target === "cognition" ? "Insights" : intent.target === "calendar" ? "Calendar" : "Canvas"}. ${intent.suggestedAction}`;
    }
 
    function cancelPendingInternalIntegration() {
@@ -10615,7 +11643,7 @@ Try one of these:
          return withTypoAwareResponse(prompt, buildCognitionReadbackResponse());
       }
 
-      // MK V Build 11B:
+      // MK VI Build 11B:
       // Integration requests should win before plain calendar readbacks, but not cognition readbacks.
       if (looksLikeInternalIntegrationQuestion(prompt)) {
          const intent = getInternalIntegrationIntent(prompt);
@@ -10625,7 +11653,7 @@ Try one of these:
          return withTypoAwareResponse(prompt, buildInternalIntegrationPreviewResponse(intent));
       }
 
-      // MK V Build 10F:
+      // MK VI Build 10F:
       // Calendar intelligence must win before project guidance.
       if (looksLikeCalendarNotesQuestion(prompt) || looksLikeCalendarScheduleQuestion(prompt)) {
          return withTypoAwareResponse(prompt, buildCalendarAwarenessResponse(prompt));
@@ -10646,7 +11674,7 @@ Try one of these:
       if (looksLikeContextPacketDebugCommand(prompt)) {
          const packet = buildAllevinInternalContextPacket(prompt);
 
-         return `MK V context packet is online.\n\nProject: ${packet.currentProject.title || "None"}\nType: ${packet.currentProject.type}\nLocation: ${packet.currentProject.location}\nIntent: ${looksLikeContextPacketDebugCommand(prompt) ? "debug-context" : packet.userIntent.intentType}\nCognition: ${packet.cognition.label}\nStatus: ${packet.currentProject.status}\nCalendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
+         return `MK VI context packet is online.\n\nProject: ${packet.currentProject.title || "None"}\nType: ${packet.currentProject.type}\nLocation: ${packet.currentProject.location}\nIntent: ${looksLikeContextPacketDebugCommand(prompt) ? "debug-context" : packet.userIntent.intentType}\nInsights: ${packet.cognition.label}\nStatus: ${packet.currentProject.status}\nCalendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
       }
 
       if (looksLikeCurrentTimeToolQuestion(prompt)) {
@@ -10674,7 +11702,7 @@ Try one of these:
       }
 
       if (looksLikeProjectFocusQuestion(prompt)) {
-         return withTypoAwareResponse(prompt, buildProjectFocusResponse());
+         return withTypoAwareResponse(prompt, buildProjectFocusResponse(prompt));
       }
 
       if (looksLikeAllProjectsSummaryQuestion(prompt)) {
@@ -10716,6 +11744,10 @@ Try one of these:
          const nextAction = polishWorkflowControlLanguage(getSafeRecommendedNextAction());
 
          return withTypoAwareResponse(prompt, `${buildTypeAwareOpener(title)}\n\nYou’re working on ${title}.\n\nThe latest version is ready in ${location}. ${nextAction}`.trim());
+      }
+
+      if (looksLikeProjectMaterialsQuestion(prompt)) {
+         return withTypoAwareResponse(prompt, buildProjectMaterialsReadbackResponse(prompt));
       }
 
       if (looksLikeProjectSummaryQuestion(prompt)) {
@@ -10791,7 +11823,7 @@ Try one of these:
          setLlmBusy(false);
       }
 
-      // MK V Build 9B:
+      // MK VI Build 9B:
       // Cognition is now an AI response mode only.
       // Do not infer focus from chat prompts or change the workspace state here.
       void inferFocusMode;
@@ -10814,7 +11846,7 @@ Try one of these:
          workspace: activeView,
       });
 
-      // MK V Build 9B:
+      // MK VI Build 9B:
       // Chat should not shift the visible environment.
       // Cognition only changes ALLEVIN's response style.
       void refreshEnvironment;
@@ -10913,6 +11945,51 @@ Try one of these:
 
       if (pendingInternalIntegration && looksLikeApprovalNo(currentInput)) {
          const responseContent = cleanFinalAIDockResponse(cancelPendingInternalIntegration());
+
+         setMessages((prev) => [
+            ...prev,
+
+            {
+               role: "assistant" as const,
+
+               content: responseContent,
+            },
+         ]);
+
+         refreshThreadSoon();
+
+         return;
+      }
+
+      if (looksLikeProjectMaterialsQuestion(currentInput) && !looksLikeDirectCalendarScheduleRequest(currentInput)) {
+         setLlmBusy(true);
+
+         try {
+            const responseContent = cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, await buildProjectMaterialsHelperResponse(currentInput)));
+
+            setMessages((prev) => [
+               ...prev,
+
+               {
+                  role: "assistant" as const,
+
+                  content: responseContent,
+               },
+            ]);
+         } finally {
+            setLlmBusy(false);
+         }
+
+         refreshThreadSoon();
+
+         return;
+      }
+
+      // MK VI Build 8 Patch 4:
+      // Focus questions for an active material-backed project should stay local-first.
+      // Otherwise the light LLM can drift into generic accessibility-coach language.
+      if (looksLikeProjectFocusQuestion(currentInput) && getActiveProjectMaterialsForAIDock().length > 0 && !looksLikeDirectCalendarScheduleRequest(currentInput)) {
+         const responseContent = cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, buildProjectMaterialsReadbackResponse(currentInput)));
 
          setMessages((prev) => [
             ...prev,
@@ -11268,7 +12345,7 @@ Try one of these:
       const recommendation = getWorkflowRecommendation();
 
       if (mode === "Projects") {
-         return recommendation.destination === "recovery" ? recommendation.suggestedNextStep : "Pick one thread, one task, or ask me to resume your latest work.";
+         return recommendation.suggestedNextStep || "Open Projects, pick one saved item, or continue the latest work in Canvas.";
       }
 
       if (mode === "Focus") {
@@ -11351,7 +12428,7 @@ Try one of these:
    }
 
    function getALLEVINActionReminder() {
-      return "I can recommend moves and keep them simple. You stay in command through Canvas, Projects, Calendar, and Cognition.";
+      return "I can recommend moves and keep them simple. You stay in command through Canvas, Projects, Calendar, and Insights.";
    }
 
    function getLatestAssistantMessage() {
@@ -11471,7 +12548,7 @@ Try one of these:
                   </div>
 
                   <div className="text-left">
-                     <p className="text-sm font-semibold">ALLEVIN MK V</p>
+                     <p className="text-sm font-semibold">ALLEVIN MK VI</p>
 
                      <p className="max-w-[180px] truncate text-sm text-[var(--color-text-secondary)] sm:max-w-[220px]">{getSafeThreadTitle()}</p>
                   </div>
@@ -11565,7 +12642,7 @@ Try one of these:
                            </div>
 
                            <div className="min-w-0">
-                              <p className="text-xs text-[var(--color-text-secondary)]">ALLEVIN MK V</p>
+                              <p className="text-xs text-[var(--color-text-secondary)]">ALLEVIN MK VI</p>
 
                               <h2 className="truncate text-lg">{getSafeThreadTitle()}</h2>
                            </div>
@@ -11595,7 +12672,7 @@ Try one of these:
                      <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4">
                         <div className="flex items-center gap-3">
                            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-[var(--color-primary)]">
-                              <Brain size={18} />
+                              <Sparkles size={18} />
                            </div>
 
                            <div className="min-w-0">

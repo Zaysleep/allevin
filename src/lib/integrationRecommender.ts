@@ -1,18 +1,22 @@
 // ========================================
-// ALLEVIN Integration Recommender
+// ALLEVIN MK VI Internal Recommender
 // Purpose:
-// Recommend the best external destination
-// and export object type based on ALLEVIN
-// workflow content, source, and mode.
+// Recommend the best internal ALLEVIN destination
+// based on project content, current context, and user intent.
+//
+// MK VI keeps ALLEVIN internal-first:
+// Projects hold the work, Canvas shapes the active work,
+// Project Materials preserve references, Calendar holds time,
+// and Cognition/AIDock provide guidance.
 // ========================================
 
-export type IntegrationDestination = "google-docs" | "notes" | "calendar" | "tasks" | "drive";
+export type IntegrationDestination = "projects" | "materials" | "calendar" | "canvas" | "cognition";
 
-export type IntegrationObjectType = "canvas-draft" | "research-note" | "project-summary" | "task-action" | "workflow-review";
+export type IntegrationObjectType = "canvas-draft" | "project-material" | "project-summary" | "calendar-block" | "guidance-note";
 
-export type IntegrationSource = "canvas" | "research" | "task" | "board" | "intel" | "system" | "manual";
+export type IntegrationSource = "canvas" | "research" | "task" | "project" | "projects" | "materials" | "calendar" | "cognition" | "aidock" | "system" | "manual";
 
-export type RecommenderMode = "balanced" | "planning" | "research" | "creative" | "deep-focus" | "recovery";
+export type RecommenderMode = "balanced" | "planning" | "research" | "creative" | "deep-focus" | "calm";
 
 export type RecommendationConfidence = "low" | "medium" | "high";
 
@@ -58,8 +62,8 @@ function normalizeText(value?: string) {
    return value?.toLowerCase().trim() || "";
 }
 
-function getCombinedText(input: IntegrationRecommendationInput) {
-   return `${input.title ?? ""}\n${input.body ?? ""}`.toLowerCase();
+function getCombinedText(input: { title?: string; body?: string; recommendedNextAction?: string; latestMovement?: string }) {
+   return `${input.title ?? ""}\n${input.body ?? ""}\n${input.recommendedNextAction ?? ""}\n${input.latestMovement ?? ""}`.toLowerCase();
 }
 
 function includesAny(text: string, terms: string[]) {
@@ -76,13 +80,13 @@ function getWordCount(text: string) {
    return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-function getRiskLevel(input: IntegrationRecommendationInput) {
+function getRiskLevel(input: { title?: string; body?: string; currentEnvironment?: string; focusMode?: string }) {
    const environment = normalizeText(input.currentEnvironment);
    const focusMode = normalizeText(input.focusMode);
    const text = getCombinedText(input);
    const wordCount = getWordCount(text);
 
-   if (environment === "recovery") {
+   if (environment === "calm" || environment === "recovery") {
       return "low";
    }
 
@@ -90,7 +94,7 @@ function getRiskLevel(input: IntegrationRecommendationInput) {
       return wordCount > 250 ? "medium" : "low";
    }
 
-   if (wordCount > 600) {
+   if (wordCount > 900) {
       return "medium";
    }
 
@@ -100,15 +104,10 @@ function getRiskLevel(input: IntegrationRecommendationInput) {
 function makeRecommendation({ destination, objectType, confidence, risk, reason, suggestedNextStep }: IntegrationRecommendation): IntegrationRecommendation {
    return {
       destination,
-
       objectType,
-
       confidence,
-
       risk,
-
       reason,
-
       suggestedNextStep,
    };
 }
@@ -121,24 +120,20 @@ function getScheduleScore(text: string) {
    return countMatches(text, ["schedule", "calendar", "meeting", "appointment", "deadline", "due date", "tomorrow", "today", "next week", "this week", "reminder", "block time", "time block", "30 minute", "30 minutes", "1 hour"]);
 }
 
-function getTaskScore(text: string) {
-   return countMatches(text, ["task", "to do", "todo", "action item", "next step", "fix", "complete", "finish", "build", "implement", "implementation", "update", "review bug", "send", "create", "resolve", "patch", "test"]);
+function getActionScore(text: string) {
+   return countMatches(text, ["task", "to do", "todo", "action item", "next step", "fix", "complete", "finish", "build", "implement", "implementation", "update", "review", "send", "create", "resolve", "patch", "test"]);
 }
 
-function getResearchScore(text: string) {
-   return countMatches(text, ["research", "source:", "evidence:", "citation", "question:", "finding", "insight:", "study", "analyze", "compare", "investigate", "confidence:"]);
+function getMaterialScore(text: string) {
+   return countMatches(text, ["research", "source:", "evidence:", "citation", "reference", "feedback", "note", "notes", "document", "image", "screenshot", "pdf", "file", "material", "insight:", "confidence:"]);
 }
 
-function getDocumentScore(text: string) {
-   return countMatches(text, ["draft", "document", "report", "essay", "paper", "proposal", "summary", "brief", "outline", "write", "section", "introduction", "conclusion", "recommendation", "findings"]);
+function getCanvasScore(text: string) {
+   return countMatches(text, ["draft", "write", "revise", "edit", "outline", "section", "paragraph", "develop", "continue", "shape", "rewrite", "summary", "brief", "proposal", "report"]);
 }
 
 function getProjectScore(text: string) {
-   return countMatches(text, ["project", "roadmap", "milestone", "progress", "status", "board", "backlog", "in progress", "completed", "workflow"]);
-}
-
-function getReviewScore(text: string) {
-   return countMatches(text, ["workflow review", "review event", "recent movement", "what allevin noticed", "active workflow", "main flow", "load signal"]);
+   return countMatches(text, ["project", "roadmap", "milestone", "progress", "status", "next action", "goal", "plan", "planning", "organize", "structure", "priority"]);
 }
 
 function hasStructuredResearchBlock(text: string) {
@@ -147,368 +142,134 @@ function hasStructuredResearchBlock(text: string) {
    return countMatches(text, labels) >= 3;
 }
 
-function hasStrongTaskAction(text: string) {
-   return includesAny(text, ["fix", "build", "implement", "implementation", "update", "complete", "finish", "patch", "resolve"]);
+function hasStrongActionSignal(text: string) {
+   return includesAny(text, ["fix", "build", "implement", "implementation", "update", "complete", "finish", "patch", "resolve", "test", "next step", "action item"]);
 }
 
-function hasStrongDocumentSignal(text: string) {
-   return includesAny(text, ["draft", "report", "document", "paper", "proposal"]) && includesAny(text, ["summary", "recommendation", "findings", "conclusion", "section"]);
+function hasStrongMaterialSignal(text: string) {
+   return hasStructuredResearchBlock(text) || includesAny(text, ["source:", "evidence:", "reference", "feedback", "screenshot", "image", "pdf", "document", "uploaded", "project material"]);
+}
+
+function hasStrongCanvasSignal(text: string) {
+   return includesAny(text, ["draft", "write", "revise", "rewrite", "outline", "continue in canvas", "work in canvas", "shape this"]);
 }
 
 // ========================================
-// Main Recommender
+// Project / Material Recommender
 // ========================================
 
 export function recommendIntegrationDestination(input: IntegrationRecommendationInput): IntegrationRecommendation {
    const text = getCombinedText(input);
-
    const source = input.source;
-
    const workflowMode = input.workflowMode ?? "balanced";
-
    const risk = getRiskLevel(input);
-
    const wordCount = getWordCount(text);
 
    const scheduleScore = getScheduleScore(text);
-
-   const taskScore = getTaskScore(text);
-
-   const researchScore = getResearchScore(text);
-
-   const documentScore = getDocumentScore(text);
-
+   const actionScore = getActionScore(text);
+   const materialScore = getMaterialScore(text);
+   const canvasScore = getCanvasScore(text);
    const projectScore = getProjectScore(text);
-
-   const reviewScore = getReviewScore(text);
-
-   // ========================================
-   // Explicit Canvas Export Intent
-   // ========================================
-   // When the user clicks Prepare Export from Canvas, ALLEVIN should not reroute
-   // the export preview into Tasks just because the document mentions tasks,
-   // actions, or Board movement. Export intent should preserve the document path.
-   if (source === "canvas" && hasExplicitDocumentExportIntent(text)) {
-      return makeRecommendation({
-         destination: "google-docs",
-
-         objectType: "project-summary",
-
-         confidence: "high",
-
-         risk,
-
-         reason: "This Canvas work is being prepared as an export preview. Google Docs is the correct destination even if the content mentions tasks, actions, or Board movement.",
-
-         suggestedNextStep: "Prepare a Google Docs preview, polish the sections, then confirm only when the document is ready.",
-      });
-   }
-
-   // ========================================
-   // Recovery Mode
-   // ========================================
-
-   if (input.currentEnvironment === "recovery" || workflowMode === "recovery") {
-      if (scheduleScore > 0) {
-         return makeRecommendation({
-            destination: "calendar",
-
-            objectType: "task-action",
-
-            confidence: "medium",
-
-            risk,
-
-            reason: "Recovery mode is active and this content includes a scheduling signal. A small calendar block may reduce mental load.",
-
-            suggestedNextStep: "Prepare a lightweight calendar preview, then confirm only if this truly needs time on the calendar.",
-         });
-      }
-
-      return makeRecommendation({
-         destination: "notes",
-
-         objectType: hasStructuredResearchBlock(text) ? "research-note" : "canvas-draft",
-
-         confidence: "medium",
-
-         risk,
-
-         reason: "Recovery mode is active. Notes are the lowest-pressure destination for saving context without creating more work.",
-
-         suggestedNextStep: "Save this as a note or wait until you are ready to turn it into a task.",
-      });
-   }
-
-   // ========================================
-   // Strong Schedule Signal
-   // ========================================
 
    if (scheduleScore > 0) {
       return makeRecommendation({
          destination: "calendar",
-
-         objectType: "task-action",
-
+         objectType: "calendar-block",
          confidence: "high",
-
          risk,
-
-         reason: "This content includes time, deadline, meeting, or scheduling language, so Calendar is the strongest destination.",
-
-         suggestedNextStep: "Prepare a calendar preview and confirm the timing before creating a live event later.",
+         reason: "This content includes scheduling, deadline, meeting, reminder, or time-block language. Calendar is the best internal reference for time-based work.",
+         suggestedNextStep: "Prepare a calendar block only if this project needs protected time or a reminder.",
       });
    }
 
-   // ========================================
-   // Strong Task Signal
-   // Task action should beat broad research language.
-   // ========================================
-
-   if (source === "task" || (source !== "canvas" && (hasStrongTaskAction(text) || taskScore >= 3))) {
+   if (source === "materials" || source === "research" || hasStrongMaterialSignal(text) || materialScore >= 3) {
       return makeRecommendation({
-         destination: "tasks",
-
-         objectType: "task-action",
-
-         confidence: hasStrongTaskAction(text) ? "high" : "medium",
-
-         risk,
-
-         reason: "This content contains action-oriented language such as fix, build, update, complete, or implement, so an external task preview is the best match.",
-
-         suggestedNextStep: "Prepare a task preview and confirm if this should become an external action item later.",
+         destination: "materials",
+         objectType: "project-material",
+         confidence: source === "materials" || hasStrongMaterialSignal(text) ? "high" : "medium",
+         risk: "low",
+         reason: "This looks like supporting context, research, feedback, or reference content. Project Materials is the best place to keep it available without cluttering Canvas.",
+         suggestedNextStep: "Save it as a project material, then reference it from Canvas when it helps the active work.",
       });
    }
 
-   // ========================================
-   // Strong Document / Draft Signal
-   // Long-form draft/report language should beat broad research language.
-   // ========================================
-
-   if (source === "canvas" && (hasStrongDocumentSignal(text) || documentScore >= 3 || wordCount > 120)) {
+   if (source === "canvas" || hasStrongCanvasSignal(text) || canvasScore >= 3 || wordCount > 140) {
       return makeRecommendation({
-         destination: "google-docs",
-
-         objectType: documentScore >= 3 || hasStrongDocumentSignal(text) ? "canvas-draft" : "project-summary",
-
-         confidence: hasStrongDocumentSignal(text) ? "high" : "medium",
-
+         destination: "canvas",
+         objectType: "canvas-draft",
+         confidence: source === "canvas" || hasStrongCanvasSignal(text) ? "high" : "medium",
          risk,
-
-         reason: "This Canvas content looks like a draft, report, outline, or longer-form document. Google Docs is the best destination.",
-
-         suggestedNextStep: "Prepare a Google Docs preview and review the formatted export before confirming.",
+         reason: "This content is active work that needs shaping, drafting, or refinement. Canvas is the best place to continue developing it.",
+         suggestedNextStep: "Continue in Canvas, use selected project materials as references, and save the cleaner version back to the project when ready.",
       });
    }
 
-   // ========================================
-   // Structured Research Content
-   // Only strong research structure should become Notes.
-   // ========================================
-
-   if (source === "research" || hasStructuredResearchBlock(text) || (workflowMode === "research" && researchScore >= 2 && documentScore < 2)) {
+   if (workflowMode === "planning" || projectScore >= 2 || actionScore >= 2 || hasStrongActionSignal(text)) {
       return makeRecommendation({
-         destination: "notes",
-
-         objectType: "research-note",
-
-         confidence: source === "research" || hasStructuredResearchBlock(text) ? "high" : "medium",
-
-         risk,
-
-         reason: "This content has a structured research pattern with question, source, evidence, insight, or confidence fields. Notes are best for preserving it for future recall.",
-
-         suggestedNextStep: "Prepare a note preview, then later connect this to Docs if it becomes part of a formal report.",
-      });
-   }
-
-   // ========================================
-   // Workflow Review / Intel Content
-   // ========================================
-
-   if (source === "intel" || reviewScore >= 2) {
-      return makeRecommendation({
-         destination: "notes",
-
-         objectType: "workflow-review",
-
-         confidence: "high",
-
-         risk,
-
-         reason: "This content is a workflow review or system insight. Notes are best for preserving the reflection without turning it into a document yet.",
-
-         suggestedNextStep: "Save the review as a note, or convert it into a task if it requires action.",
-      });
-   }
-
-   // ========================================
-   // Board / Project Summary Content
-   // ========================================
-
-   if (source === "board" || projectScore >= 3) {
-      return makeRecommendation({
-         destination: wordCount > 180 ? "google-docs" : "drive",
-
+         destination: "projects",
          objectType: "project-summary",
-
-         confidence: "medium",
-
+         confidence: hasStrongActionSignal(text) || projectScore >= 3 ? "high" : "medium",
          risk,
-
-         reason: "This content appears connected to project progress. A project summary or stored project artifact is the best fit.",
-
-         suggestedNextStep: "Prepare a project summary preview and confirm whether it should become a document or stored project file.",
+         reason: "This content is about organizing the project, clarifying next actions, or updating project direction. Projects is the best home base for it.",
+         suggestedNextStep: "Save the update under the project, then schedule the next focused block only if it needs time on the calendar.",
       });
    }
-
-   // ========================================
-   // Creative Mode
-   // ========================================
 
    if (workflowMode === "creative") {
       return makeRecommendation({
-         destination: "notes",
+         destination: "materials",
+         objectType: "project-material",
+         confidence: "medium",
+         risk: "low",
+         reason: "Creative work often starts as loose concepts or references. Project Materials keeps the idea available without forcing it into the active Canvas draft too early.",
+         suggestedNextStep: "Save the idea as a material, then pull it into Canvas once the direction is clearer.",
+      });
+   }
 
+   if (workflowMode === "deep-focus") {
+      return makeRecommendation({
+         destination: "canvas",
          objectType: "canvas-draft",
-
          confidence: "medium",
-
          risk,
-
-         reason: "Creative mode is active. Notes are useful for preserving concepts before they become formal documents or tasks.",
-
-         suggestedNextStep: "Save this as a note first, then develop the strongest idea into a Canvas draft later.",
+         reason: "Deep focus works best with one visible surface. Canvas keeps the next move clear and avoids scattering the work.",
+         suggestedNextStep: "Keep working in Canvas and make one useful update before adding more structure.",
       });
    }
-
-   // ========================================
-   // Planning Mode
-   // ========================================
-
-   if (workflowMode === "planning") {
-      return makeRecommendation({
-         destination: "google-docs",
-
-         objectType: "project-summary",
-
-         confidence: "medium",
-
-         risk,
-
-         reason: "Planning mode is active. A structured project summary is the best export format for this work.",
-
-         suggestedNextStep: "Prepare a project summary preview and confirm if it should become a planning document.",
-      });
-   }
-
-   // ========================================
-   // Light Task Signal
-   // ========================================
-
-   if (taskScore >= 2 && source !== "canvas") {
-      return makeRecommendation({
-         destination: "tasks",
-
-         objectType: "task-action",
-
-         confidence: "medium",
-
-         risk,
-
-         reason: "This content includes several action signals, so an external task preview is a good fit.",
-
-         suggestedNextStep: "Prepare a task preview and confirm if this should become an external action item later.",
-      });
-   }
-
-   // ========================================
-   // Light Document Signal
-   // ========================================
-
-   if (documentScore >= 2) {
-      return makeRecommendation({
-         destination: "google-docs",
-
-         objectType: "canvas-draft",
-
-         confidence: "medium",
-
-         risk,
-
-         reason: "This content has document-like structure, so Google Docs is a strong destination.",
-
-         suggestedNextStep: "Prepare a Google Docs preview and decide whether this should become a formal document.",
-      });
-   }
-
-   // ========================================
-   // Canvas Integration Fallback
-   // ========================================
-   // If Canvas content reached this point, keep it on the document/export path.
-   // The user entered the Integrations recommender from Canvas, so task language
-   // inside the document should not override the export destination.
-   if (source === "canvas") {
-      return makeRecommendation({
-         destination: "google-docs",
-
-         objectType: wordCount > 80 || projectScore >= 2 ? "project-summary" : "canvas-draft",
-
-         confidence: "medium",
-
-         risk,
-
-         reason: "This Canvas content is being prepared for an integration/export preview. Google Docs is the safest destination for preserving it as a structured document.",
-
-         suggestedNextStep: "Prepare a Google Docs preview and review the formatted export before confirming.",
-      });
-   }
-
-   // ========================================
-   // Default
-   // ========================================
 
    return makeRecommendation({
-      destination: "google-docs",
-
-      objectType: "canvas-draft",
-
+      destination: "projects",
+      objectType: "project-summary",
       confidence: "medium",
-
       risk,
-
-      reason: "This content is general Canvas work. Google Docs is the safest default for preserving a structured draft.",
-
-      suggestedNextStep: "Prepare a Google Docs preview and decide whether this should become a formal document.",
+      reason: "This is general project context. Projects is the safest internal home base because it keeps the work connected to Canvas, Materials, and Calendar.",
+      suggestedNextStep: "Save it to the project, then decide whether it should become active Canvas work, a material, or a calendar block.",
    });
 }
 
 // ========================================
-// ALLEVIN MK II Build 4.1
-// Internal Workflow Recommender Layer
+// MK VI Internal Workflow Recommender Layer
 // Purpose:
 // Recommend the best internal ALLEVIN move:
-// Canvas, Task Vault, Board, Notes, Calendar,
-// Integrations, Recovery, or Standby.
+// Canvas, Projects, Project Materials, Calendar,
+// Cognition, or Standby.
 //
 // Safety:
 // This layer does not move work automatically.
-// It only returns a recommendation that AIDock,
-// Workflow Control, or another component can present
-// to the user for approval.
+// It only returns guidance that AIDock or another
+// visible component can present to the user.
 // ========================================
 
-export type WorkflowRecommendationDestination = "canvas" | "tasks" | "board" | "notes" | "calendar" | "integrations" | "recovery" | "standby";
+export type WorkflowRecommendationDestination = "canvas" | "projects" | "materials" | "calendar" | "cognition" | "standby";
 
-export type WorkflowRecommendationAction = "continue-in-canvas" | "create-task" | "move-to-board" | "save-note" | "prepare-calendar" | "prepare-export" | "recover-thread" | "standby";
+export type WorkflowRecommendationAction = "continue-in-canvas" | "save-to-projects" | "save-material" | "prepare-calendar" | "review-guidance" | "standby";
 
 export interface WorkflowRecommendationInput {
    title?: string;
 
    body?: string;
 
-   source?: IntegrationSource | "recovery" | "calendar" | "integrations";
+   source?: IntegrationSource | "project" | "projects" | "calendar";
 
    currentStage?: string;
 
@@ -568,25 +329,18 @@ function clampWorkflowConfidence(value: number) {
 function makeWorkflowRecommendation({ destination, action, confidence, risk, reason, suggestedNextStep, approvalRequired, label }: WorkflowRecommendation): WorkflowRecommendation {
    return {
       destination,
-
       action,
-
       confidence: clampWorkflowConfidence(confidence),
-
       risk,
-
       reason,
-
       suggestedNextStep,
-
       approvalRequired,
-
       label,
    };
 }
 
 function getWorkflowText(input: WorkflowRecommendationInput) {
-   return `${input.title || ""}\n${input.body || ""}\n${input.recommendedNextAction || ""}\n${input.latestMovement || ""}`.toLowerCase();
+   return getCombinedText(input);
 }
 
 function getWorkflowWordCount(text: string) {
@@ -611,238 +365,123 @@ function getWorkflowConfidenceBump(input: WorkflowRecommendationInput) {
    return bump;
 }
 
+function hasWorkflowScheduleSignal(text: string) {
+   return includesAny(text, ["schedule", "calendar", "meeting", "appointment", "deadline", "due date", "tomorrow", "today", "next week", "this week", "reminder", "block time", "time block"]);
+}
+
+function hasWorkflowActionSignal(text: string) {
+   return includesAny(text, ["fix", "build", "implement", "implementation", "update", "complete", "finish", "patch", "resolve", "action item", "next step", "task", "todo", "to do", "test"]);
+}
+
+function hasWorkflowMaterialSignal(text: string) {
+   return hasStructuredResearchBlock(text) || includesAny(text, ["research", "source:", "evidence:", "citation", "reference", "feedback", "image", "screenshot", "document", "pdf", "material", "notes from", "project note"]);
+}
+
+function hasWorkflowGuidanceSignal(text: string) {
+   return includesAny(text, ["confused", "overwhelmed", "where do i start", "what should i do", "help me structure", "organize this", "make sense of", "guidance", "cognition"]);
+}
+
 function hasCalendarReviewNoteSignal(input: WorkflowRecommendationInput, text: string) {
    const stage = compactWorkflowText(input.currentStage).toLowerCase();
-
    const movement = compactWorkflowText(input.latestMovement).toLowerCase();
-
    const recommendation = compactWorkflowText(input.recommendedNextAction).toLowerCase();
 
-   return (
-      stage === "reviewing" ||
-      movement.includes("calendar → notes") ||
-      movement.includes("calendar -> notes") ||
-      movement.includes("recovery memory") ||
-      text.includes("calendar review note") ||
-      text.includes("saved calendar note") ||
-      recommendation.includes("calendar note") ||
-      recommendation.includes("follow-up task")
-   );
+   return stage === "reviewing" || movement.includes("calendar") || text.includes("calendar review note") || text.includes("saved calendar note") || recommendation.includes("calendar note") || recommendation.includes("follow-up");
 }
 
 function getCalendarReviewNoteRecommendation(input: WorkflowRecommendationInput, text: string, confidenceBump: number, risk: RecommendationRisk) {
    const recommendation = compactWorkflowText(input.recommendedNextAction).toLowerCase();
 
-   if (recommendation.includes("task") || text.includes("follow-up task") || text.includes("create a follow-up task") || text.includes("next action")) {
+   if (recommendation.includes("schedule") || text.includes("time block") || text.includes("calendar")) {
       return makeWorkflowRecommendation({
-         destination: "tasks",
-
-         action: "create-task",
-
-         confidence: 88 + confidenceBump,
-
+         destination: "calendar",
+         action: "prepare-calendar",
+         confidence: 86 + confidenceBump,
          risk,
-
-         reason: "A saved Calendar review note identified a follow-up action. Task Vault is the best next layer because the scheduled review produced actionable work.",
-
-         suggestedNextStep: "Prepare a follow-up Task from the Calendar review note, then move it to the Board when it is ready to track.",
-
+         reason: "The latest calendar context points to a time-based follow-up. Calendar is the right reference if the work needs protected time.",
+         suggestedNextStep: "Prepare a calendar block only if the follow-up needs a specific time window.",
          approvalRequired: true,
-
-         label: "Create Follow-Up Task",
+         label: "Prepare Calendar",
       });
    }
 
-   if (recommendation.includes("board") || text.includes("move the work to the board") || text.includes("move it to the board") || text.includes("track")) {
+   if (recommendation.includes("reference") || recommendation.includes("note") || text.includes("saved calendar note")) {
       return makeWorkflowRecommendation({
-         destination: "board",
-
-         action: "move-to-board",
-
-         confidence: 86 + confidenceBump,
-
-         risk,
-
-         reason: "A saved Calendar review note indicates the work is ready for tracking. The Board is the best next layer for status and project movement.",
-
-         suggestedNextStep: "Prepare a Board movement through Workflow Control if the follow-up is ready to track.",
-
+         destination: "materials",
+         action: "save-material",
+         confidence: 84 + confidenceBump,
+         risk: "low",
+         reason: "The calendar note is useful project context. Project Materials can preserve it without cluttering Canvas.",
+         suggestedNextStep: "Save the calendar note as a project material, then reference it from Canvas when needed.",
          approvalRequired: true,
-
-         label: "Move to Board",
+         label: "Save as Material",
       });
    }
 
    return makeWorkflowRecommendation({
       destination: "canvas",
-
       action: "continue-in-canvas",
-
       confidence: 84 + confidenceBump,
-
       risk: "low",
-
-      reason: "A saved Calendar review note is now the latest project context. Canvas is the safest place to continue refining the work before creating a new action.",
-
-      suggestedNextStep: "Continue in Canvas using the Calendar review note as the latest context, then create a follow-up Task when the next action is clear.",
-
-      approvalRequired: true,
-
+      reason: "The calendar note is now useful context for the active project. Canvas is the safest place to continue shaping the work.",
+      suggestedNextStep: "Continue in Canvas using the calendar note as context, then save the update back to the project.",
+      approvalRequired: false,
       label: "Continue from Calendar Note",
    });
 }
 
-function hasWorkflowScheduleSignal(text: string) {
-   return includesAny(text, ["schedule", "calendar", "meeting", "appointment", "deadline", "due date", "tomorrow", "today", "next week", "this week", "reminder", "block time", "time block"]);
-}
-
-function hasWorkflowTaskSignal(text: string) {
-   return includesAny(text, ["fix", "build", "implement", "implementation", "update", "complete", "finish", "patch", "resolve", "action item", "next step", "task", "todo", "to do"]);
-}
-
-function hasWorkflowBoardSignal(text: string) {
-   return includesAny(text, ["status", "lane", "backlog", "in progress", "review", "tracking", "track", "roadmap", "milestone", "progress", "board"]);
-}
-
-function hasWorkflowExportSignal(text: string) {
-   return includesAny(text, ["final", "polish", "export", "google doc", "google docs", "document-ready", "ready to share", "report", "summary", "brief", "proposal", "findings"]);
-}
-
-function hasExplicitDocumentExportIntent(text: string) {
-   return includesAny(text, [
-      "prepare export",
-      "export preview",
-      "google doc",
-      "google docs",
-      "document-ready",
-      "ready to export",
-      "final result",
-      "export the final result",
-      "polished document",
-      "project summary",
-      "current context",
-      "key progress",
-      "export notes",
-   ]);
-}
-
-function hasWorkflowResearchSignal(text: string) {
-   return countMatches(text, ["research", "source:", "evidence:", "citation", "question:", "finding", "insight:", "study", "analyze", "compare", "investigate", "confidence:"]) >= 2;
-}
-
-function hasWorkflowRecoverySignal(input: WorkflowRecommendationInput, text: string) {
-   const environment = normalizeText(input.currentEnvironment);
-   const location = normalizeText(input.currentLocation);
-   const stage = normalizeText(input.currentStage);
-   const source = normalizeText(input.source);
-
-   if (environment === "recovery" || location === "recovery" || source === "recovery" || stage === "paused") {
-      return true;
-   }
-
-   // Keep recovery intent strict.
-   // Phrases like "preserve Recovery memory" should not override a normal
-   // Canvas → Task or Task → Board recommendation.
-   const explicitRecoveryPhrases = [
-      "open recovery",
-      "review in recovery",
-      "thread recovery",
-      "recover thread",
-      "recover this thread",
-      "recover this project",
-      "resume from recovery",
-      "resume recovered",
-      "where i left off",
-      "where did i leave off",
-      "continue later",
-      "pick up later",
-   ];
-
-   return includesAny(text, explicitRecoveryPhrases);
-}
-
 export function recommendWorkflowMove(input: WorkflowRecommendationInput): WorkflowRecommendation {
    const text = getWorkflowText(input);
-
    const title = compactWorkflowText(input.title);
-
    const body = compactWorkflowText(input.body);
-
    const wordCount = getWorkflowWordCount(text);
-
    const risk = getRiskLevel({
       title: input.title,
       body: input.body,
-      source: "system",
       currentEnvironment: input.currentEnvironment,
       focusMode: input.focusMode,
    });
-
    const confidenceBump = getWorkflowConfidenceBump(input);
-
    const stage = normalizeText(input.currentStage);
-
    const location = normalizeText(input.currentLocation);
-
-   const status = normalizeText(input.status);
+   const source = normalizeText(input.source);
 
    if (input.hasPendingApproval) {
       return makeWorkflowRecommendation({
          destination: "standby",
-
          action: "standby",
-
          confidence: 88,
-
          risk: "low",
-
-         reason: "A workflow action is already waiting for approval. ALLEVIN should not recommend another movement until the user approves, cancels, or edits the pending action.",
-
-         suggestedNextStep: "Review the pending Workflow Control card before preparing a new movement.",
-
+         reason: "A change is already waiting for the user to review. ALLEVIN should not stack another action on top of it.",
+         suggestedNextStep: "Review the pending item first, then choose the next move.",
          approvalRequired: false,
-
-         label: "Review Pending Approval",
+         label: "Review Pending Item",
       });
    }
 
    if (!input.hasActiveThread && !title && !body) {
       return makeWorkflowRecommendation({
-         destination: "canvas",
-
-         action: "continue-in-canvas",
-
+         destination: "projects",
+         action: "save-to-projects",
          confidence: 72,
-
          risk: "low",
-
-         reason: "No active project thread is strong enough yet. Canvas is the safest place to start because it creates source content for ALLEVIN to track.",
-
-         suggestedNextStep: "Start in Canvas with a short project title and one paragraph of context.",
-
+         reason: "No active project is strong enough yet. Projects is the clearest starting point because it gives the work a home base.",
+         suggestedNextStep: "Create or open a project, then use Canvas for the active work.",
          approvalRequired: false,
-
-         label: "Start in Canvas",
+         label: "Start in Projects",
       });
    }
 
-   if (hasWorkflowRecoverySignal(input, text)) {
+   if (hasWorkflowGuidanceSignal(text)) {
       return makeWorkflowRecommendation({
-         destination: "recovery",
-
-         action: "recover-thread",
-
-         confidence: 78 + confidenceBump,
-
+         destination: "cognition",
+         action: "review-guidance",
+         confidence: 80 + confidenceBump,
          risk: "low",
-
-         reason: "The current state suggests the user is trying to resume or recover work. Recovery is the safest place to inspect the thread before moving it.",
-
-         suggestedNextStep: "Open Recovery, review the latest thread, then prepare Resume, Task, or Export through Workflow Control.",
-
+         reason: "The user is asking for structure, clarity, or direction. Guidance is the best first move before changing the workspace.",
+         suggestedNextStep: "Give a short structure: what this project is, what matters now, and the next useful move.",
          approvalRequired: false,
-
-         label: "Review in Recovery",
+         label: "Give Guidance",
       });
    }
 
@@ -854,237 +493,101 @@ export function recommendWorkflowMove(input: WorkflowRecommendationInput): Workf
       if (input.hasScheduledCalendarEvent) {
          return makeWorkflowRecommendation({
             destination: "canvas",
-
             action: "continue-in-canvas",
-
             confidence: 84 + confidenceBump,
-
             risk: "low",
-
-            reason: `A related Calendar event is already scheduled${input.calendarEventTime ? ` for ${input.calendarEventTime}` : ""}. ALLEVIN should not prepare another Calendar action unless the user asks for a new time block.`,
-
-            suggestedNextStep: "Use the scheduled Calendar block to review the work, capture notes, or create a follow-up task after the event.",
-
+            reason: `A related Calendar event is already scheduled${input.calendarEventTime ? ` for ${input.calendarEventTime}` : ""}. ALLEVIN should avoid creating duplicate schedule blocks.`,
+            suggestedNextStep: "Use the scheduled block as a reference, then continue the active work in Canvas.",
             approvalRequired: false,
-
-            label: "Continue with Scheduled Work",
+            label: "Use Scheduled Block",
          });
       }
 
       return makeWorkflowRecommendation({
          destination: "calendar",
-
          action: "prepare-calendar",
-
          confidence: 82 + confidenceBump,
-
          risk,
-
-         reason: "This work includes scheduling or deadline language. Calendar is the best next layer if the work needs time, a reminder, or a meeting follow-up.",
-
-         suggestedNextStep: "Prepare a Calendar action for approval if this needs time on the schedule.",
-
+         reason: "This work includes scheduling or deadline language. Calendar is the best internal layer if the work needs protected time or a reminder.",
+         suggestedNextStep: "Prepare a Calendar block only if this project needs time on the schedule.",
          approvalRequired: true,
-
          label: "Prepare Calendar",
       });
    }
 
-   if (location === "canvas" || stage === "drafting") {
-      if (hasWorkflowExportSignal(text) && wordCount > 55) {
+   if (hasWorkflowMaterialSignal(text) || source === "materials" || source === "research") {
+      return makeWorkflowRecommendation({
+         destination: "materials",
+         action: "save-material",
+         confidence: 82 + confidenceBump,
+         risk: "low",
+         reason: "This looks like reference material, notes, research, feedback, or supporting context. Project Materials keeps it accessible without crowding Canvas.",
+         suggestedNextStep: "Save it as a project material and only pull it into Canvas when it directly supports the active work.",
+         approvalRequired: true,
+         label: "Save Material",
+      });
+   }
+
+   if (location === "canvas" || stage === "drafting" || source === "canvas") {
+      if (hasWorkflowActionSignal(text) && wordCount < 180) {
          return makeWorkflowRecommendation({
-            destination: "integrations",
-
-            action: "prepare-export",
-
-            confidence: 78 + confidenceBump,
-
-            risk,
-
-            reason: "The Canvas content looks structured enough for a polished document. Integrations can prepare the export while Workflow Control protects the final action.",
-
-            suggestedNextStep: "Prepare an export preview, polish it, then confirm only when the document is ready.",
-
-            approvalRequired: true,
-
-            label: "Prepare Export",
-         });
-      }
-
-      if (hasWorkflowTaskSignal(text)) {
-         return makeWorkflowRecommendation({
-            destination: "tasks",
-
-            action: "create-task",
-
+            destination: "projects",
+            action: "save-to-projects",
             confidence: 80 + confidenceBump,
-
             risk,
-
-            reason: "The current work contains clear action language. Task Vault is the best next move because the idea can become a concrete next action.",
-
-            suggestedNextStep: "Prepare a Task Vault action for approval.",
-
+            reason: "The active work contains a clear next action. Projects should hold that action with the rest of the project context.",
+            suggestedNextStep: "Save the next action to the project, then schedule it only if it needs protected time.",
             approvalRequired: true,
-
-            label: "Create Task",
-         });
-      }
-
-      if (hasWorkflowBoardSignal(text)) {
-         return makeWorkflowRecommendation({
-            destination: "board",
-
-            action: "move-to-board",
-
-            confidence: 76 + confidenceBump,
-
-            risk,
-
-            reason: "The work has project tracking language. The Board is the best next layer if the item needs lane/status tracking.",
-
-            suggestedNextStep: "Prepare a Board movement for approval.",
-
-            approvalRequired: true,
-
-            label: "Move to Board",
+            label: "Save Next Action",
          });
       }
 
       return makeWorkflowRecommendation({
          destination: "canvas",
-
          action: "continue-in-canvas",
-
-         confidence: 70 + confidenceBump,
-
+         confidence: 72 + confidenceBump,
          risk: "low",
-
-         reason: "The work is still in a development shape. Canvas is the safest place to refine the idea before turning it into a task, board item, or export.",
-
-         suggestedNextStep: "Continue in Canvas until the next concrete action or export shape becomes clear.",
-
+         reason: "The work is still in an active drafting or shaping state. Canvas is the cleanest place to keep developing it.",
+         suggestedNextStep: "Continue in Canvas, select any needed references, then save the cleaner update back to the project.",
          approvalRequired: false,
-
          label: "Continue in Canvas",
       });
    }
 
-   if (location === "task" || stage === "tasking") {
-      return makeWorkflowRecommendation({
-         destination: "board",
-
-         action: "move-to-board",
-
-         confidence: 82 + confidenceBump,
-
-         risk,
-
-         reason: "The work is already action-oriented. The Board is the right next layer when the task needs tracking, status, or project movement.",
-
-         suggestedNextStep: "Prepare a Board movement for approval.",
-
-         approvalRequired: true,
-
-         label: "Move to Board",
-      });
-   }
-
-   if (location === "board" || stage === "tracking") {
-      if (hasWorkflowExportSignal(text) || wordCount > 90) {
-         return makeWorkflowRecommendation({
-            destination: "integrations",
-
-            action: "prepare-export",
-
-            confidence: 80 + confidenceBump,
-
-            risk,
-
-            reason: "The Board item has enough project substance to become a clean external summary. Integrations is the best next layer for export prep.",
-
-            suggestedNextStep: "Prepare an export preview for approval, then polish before creating the final document.",
-
-            approvalRequired: true,
-
-            label: "Prepare Export",
-         });
-      }
-
+   if (location === "project" || location === "projects" || source === "project" || source === "projects") {
       return makeWorkflowRecommendation({
          destination: "canvas",
-
          action: "continue-in-canvas",
-
-         confidence: 76 + confidenceBump,
-
-         risk: "low",
-
-         reason: "The project is being tracked, but it may need more detail before export. Canvas is the best place to continue development.",
-
-         suggestedNextStep: "Resume the Board item in Canvas and refine the latest project content.",
-
-         approvalRequired: true,
-
-         label: "Resume in Canvas",
-      });
-   }
-
-   if (hasWorkflowResearchSignal(text)) {
-      return makeWorkflowRecommendation({
-         destination: "notes",
-
-         action: "save-note",
-
          confidence: 78 + confidenceBump,
-
          risk: "low",
-
-         reason: "The content looks like research or preserved context. Notes are the safest layer for memory before it becomes a task or formal document.",
-
-         suggestedNextStep: "Prepare a Notes action for approval if this should be preserved.",
-
-         approvalRequired: true,
-
-         label: "Save Note",
+         reason: "The project already has a home base. Canvas is the best place to shape the next active update.",
+         suggestedNextStep: "Open the project in Canvas and work from the latest saved context.",
+         approvalRequired: false,
+         label: "Open in Canvas",
       });
    }
 
-   if (wordCount > 120 || hasWorkflowExportSignal(text)) {
+   if (wordCount > 140) {
       return makeWorkflowRecommendation({
-         destination: "integrations",
-
-         action: "prepare-export",
-
+         destination: "canvas",
+         action: "continue-in-canvas",
          confidence: 74 + confidenceBump,
-
          risk,
-
-         reason: "The work has enough length or document structure to become an export preview.",
-
-         suggestedNextStep: "Prepare an export preview, then polish it before finalizing.",
-
-         approvalRequired: true,
-
-         label: "Prepare Export",
+         reason: "This content has enough substance to benefit from a focused Canvas pass before saving it as a final project update.",
+         suggestedNextStep: "Use Canvas to clean up the structure, then save the updated version under the project.",
+         approvalRequired: false,
+         label: "Shape in Canvas",
       });
    }
 
    return makeWorkflowRecommendation({
-      destination: "canvas",
-
-      action: "continue-in-canvas",
-
-      confidence: 68 + confidenceBump,
-
+      destination: "projects",
+      action: "save-to-projects",
+      confidence: 70 + confidenceBump,
       risk: "low",
-
-      reason: "The safest next move is to keep developing the current work in Canvas until the next action, board movement, or export path is clearer.",
-
-      suggestedNextStep: "Continue in Canvas and clarify the next useful action.",
-
+      reason: "The safest next move is to keep this connected to the project home base until it becomes active Canvas work, a material, or a calendar block.",
+      suggestedNextStep: "Save it to the project and keep the next action simple.",
       approvalRequired: false,
-
-      label: "Continue in Canvas",
+      label: "Save to Project",
    });
 }
