@@ -8,8 +8,6 @@ import AIDock from "@/ai/AIDock";
 
 import CommandPalette from "@/components/CommandPalette";
 
-import WorkflowStateEngine from "@/components/WorkflowStateEngine";
-
 import AdaptiveWorkCanvas from "@/components/AdaptiveWorkCanvas";
 
 import IntegrationAdapterLayer from "@/components/IntegrationAdapterLayer";
@@ -35,7 +33,7 @@ import { getAllevinDisplayName, hasAllevinUserProfile, saveAllevinUserProfile, r
 // Materials support it, and Calendar shows time blocks.
 // ========================================
 
-type ProductModuleId = "home" | "canvas" | "calendar" | "integrations" | "advanced";
+type ProductModuleId = "home" | "canvas" | "calendar" | "integrations";
 
 interface ProductModule {
    id: ProductModuleId;
@@ -71,12 +69,6 @@ const productModules: ProductModule[] = [
 
       label: "Calendar",
    },
-
-   {
-      id: "advanced",
-
-      label: "Insights",
-   },
 ];
 
 // ========================================
@@ -84,16 +76,12 @@ const productModules: ProductModule[] = [
 // ========================================
 
 function isProductModuleId(value?: string): value is ProductModuleId {
-   return value === "home" || value === "canvas" || value === "calendar" || value === "integrations" || value === "advanced";
+   return value === "home" || value === "canvas" || value === "calendar" || value === "integrations";
 }
 
 function getScrollTargetForModule(moduleId: ProductModuleId) {
    if (moduleId === "home") {
       return "overview";
-   }
-
-   if (moduleId === "advanced") {
-      return "cognition";
    }
 
    return "work-area";
@@ -808,7 +796,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
    }
 
    function handleTesterWorkspaceReset() {
-      const confirmed = window.confirm("Reset this test workspace? This clears saved Canvas, Projects, Calendar, and Insights data in this browser only.");
+      const confirmed = window.confirm("Reset this test workspace? This clears saved Canvas, Projects, Calendar, and response style data in this browser only.");
 
       if (!confirmed) {
          return;
@@ -1360,7 +1348,7 @@ export default function Home() {
                                  scroll-mt-24
                                  lg:scroll-mt-28
 
-                                 ${activeModule !== "home" && activeModule !== "advanced" ? "block" : "hidden"}
+                                 ${activeModule !== "home" ? "block" : "hidden"}
                               `}
                            >
                               {/* Main workspace modules stay mounted when active so product events route cleanly. */}
@@ -1376,22 +1364,6 @@ export default function Home() {
                               <div id="integrations" className={activeModule === "integrations" ? "block min-w-0" : "hidden"}>
                                  <IntegrationAdapterLayer />
                               </div>
-                           </section>
-
-                           {/* Cognition */}
-
-                           <section
-                              id="cognition"
-                              className={`
-                                 min-w-0
-                                 scroll-mt-24
-                                 space-y-6
-                                 lg:scroll-mt-28
-
-                                 ${activeModule === "advanced" ? "block" : "hidden"}
-                              `}
-                           >
-                              <WorkflowStateEngine />
                            </section>
                         </div>
                      </div>

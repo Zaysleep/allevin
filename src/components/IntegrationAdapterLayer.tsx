@@ -346,6 +346,113 @@ type ProjectMaterialFilter = "All" | ProjectMaterialType;
 
 const PROJECT_MATERIAL_FILTERS: ProjectMaterialFilter[] = ["All", "Note", "Document", "Image", "Research", "Feedback", "Reference"];
 
+type ProjectStructureTemplateId = "shape" | "steps" | "notes";
+
+interface ProjectStructureTemplate {
+   id: ProjectStructureTemplateId;
+
+   label: string;
+
+   helper: string;
+
+   title: string;
+
+   body: string;
+}
+
+const PROJECT_STRUCTURE_TEMPLATES: ProjectStructureTemplate[] = [
+   {
+      id: "shape",
+      label: "Shape your project",
+      helper: "Use this when you have a rough idea and need help turning it into a clear project.",
+      title: "New Project",
+      body: `Project Type:
+Write the kind of project this is, such as personal, school, work, creative, technical, or planning.
+
+Current Status:
+Write where this project stands right now. This can be one sentence.
+
+Main Idea:
+Describe the project in plain language. What is this about?
+
+Goal:
+Write what you want to finish, improve, decide, or understand.
+
+Important Details:
+Add any useful notes, dates, people, links, examples, limits, or reminders.
+
+Materials or References:
+List any files, notes, screenshots, websites, messages, or ideas that may help.
+
+What Success Looks Like:
+Describe how you will know this project is in a good place.
+
+Next Step:
+Write one small action you can take next.`,
+   },
+   {
+      id: "steps",
+      label: "Plan the steps",
+      helper: "Use this when you know the goal and need to break it into smaller actions.",
+      title: "New Project Plan",
+      body: `Project Type:
+Write the kind of project this is, such as personal, school, work, creative, technical, or planning.
+
+Goal:
+Write the main result you want.
+
+Current Status:
+Write what has already happened and what still needs attention.
+
+Steps:
+1. First useful step
+2. Next useful step
+3. Final check or finish step
+
+Things to Check:
+List anything that could block progress, needs review, or should not be forgotten.
+
+Materials or References:
+List anything that supports the project.
+
+Next Step:
+Choose the first step to work on.`,
+   },
+   {
+      id: "notes",
+      label: "Notes and research",
+      helper: "Use this when you are collecting information before deciding what to do next.",
+      title: "New Notes Project",
+      body: `Project Type:
+Write the kind of project this is, such as personal, school, work, creative, technical, or planning.
+
+Topic:
+Write the subject, question, or idea you are exploring.
+
+What I Know So Far:
+Write the information you already have.
+
+What I Need to Learn:
+List the main things you still need to understand.
+
+Useful Notes:
+Add important facts, examples, quotes, links, reminders, or observations.
+
+Sources or Materials:
+List where the information came from or what files support it.
+
+Open Questions:
+List anything that still feels unclear.
+
+Next Step:
+Write the next source, note, or decision to handle.`,
+   },
+];
+
+function getProjectStructureTemplate(templateId: ProjectStructureTemplateId) {
+   return PROJECT_STRUCTURE_TEMPLATES.find((template) => template.id === templateId) || PROJECT_STRUCTURE_TEMPLATES[0];
+}
+
 interface ProjectMaterial {
    id: string;
 
@@ -929,6 +1036,267 @@ function getShortProjectMaterialPreview(value?: string, limit = 180) {
    }
 
    return `${cleanValue.slice(0, limit).trim()}...`;
+}
+
+type ProjectDetailSection = {
+   title: string;
+
+   body: string;
+};
+
+const PROJECT_DETAIL_LABELS = [
+   // General project language
+   "Project Type",
+   "Project Goal",
+   "Goal",
+   "Current Status",
+   "Status",
+   "Core Idea",
+   "Primary Goal",
+   "Main Goal",
+   "Timeline",
+   "Target Date",
+   "Deadline",
+   "Next Step",
+   "Next Steps",
+   "Testing Notes",
+   "Notes",
+
+   // Software / portfolio language
+   "Live Portfolio",
+   "Live App",
+   "Live Link",
+   "GitHub Repo",
+   "Repository",
+   "Push Command for Future Updates",
+   "Push Command",
+   "Deployment Flow",
+   "Recommended Stack",
+   "Tech Stack",
+   "Stack",
+   "Features",
+   "MVP",
+   "Portfolio Direction",
+   "Core User Experience",
+   "Main Navigation",
+   "Navigation",
+
+   // School / research language
+   "Assignment",
+   "Requirements",
+   "Sources",
+   "Research Question",
+   "Draft Status",
+   "Deliverable",
+
+   // Vehicle / physical project language
+   "Upgrade Goal",
+   "Mods",
+   "Parts",
+   "Parts List",
+   "Budget",
+   "Color",
+   "Wrap",
+   "Maintenance",
+] as const;
+
+type ProjectDetailProfile = {
+   id: "software" | "portfolio" | "vehicle" | "school" | "research" | "content" | "home" | "general";
+
+   label: string;
+
+   primaryTitle: string;
+
+   notesTitle: string;
+
+   nextTitle: string;
+};
+
+function getProjectDetailProfile(project: ProjectLibraryItem): ProjectDetailProfile {
+   const body = compactText(`${project.title} ${project.latestSummary} ${project.notes[0]?.body || ""}`).toLowerCase();
+
+   if (["portfolio", "resume", "linkedin", "github pages", "vercel portfolio"].some((signal) => body.includes(signal))) {
+      return {
+         id: "portfolio",
+         label: "Portfolio project",
+         primaryTitle: "Portfolio Goal",
+         notesTitle: "Presentation Notes",
+         nextTitle: "Next Portfolio Step",
+      };
+   }
+
+   if (["app", "software", "next.js", "react", "typescript", "tailwind", "component", "api", "deploy", "vercel", "github", "code"].some((signal) => body.includes(signal))) {
+      return {
+         id: "software",
+         label: "Software project",
+         primaryTitle: "Build Goal",
+         notesTitle: "Build Notes",
+         nextTitle: "Next Build Step",
+      };
+   }
+
+   if (["car", "cayman", "nissan", "350z", "wrap", "mod", "mods", "upgrade", "spoiler", "wheels", "rims", "suspension", "exhaust", "paint"].some((signal) => body.includes(signal))) {
+      return {
+         id: "vehicle",
+         label: "Vehicle project",
+         primaryTitle: "Upgrade Goal",
+         notesTitle: "Upgrade Notes",
+         nextTitle: "Next Upgrade Step",
+      };
+   }
+
+   if (["assignment", "class", "course", "professor", "rubric", "due date", "essay", "presentation", "semester"].some((signal) => body.includes(signal))) {
+      return {
+         id: "school",
+         label: "School project",
+         primaryTitle: "Assignment Goal",
+         notesTitle: "Class Notes",
+         nextTitle: "Next School Step",
+      };
+   }
+
+   if (["research", "source", "article", "thesis", "study", "citation", "literature", "evidence"].some((signal) => body.includes(signal))) {
+      return {
+         id: "research",
+         label: "Research project",
+         primaryTitle: "Research Goal",
+         notesTitle: "Research Notes",
+         nextTitle: "Next Research Step",
+      };
+   }
+
+   if (["caption", "campaign", "flyer", "instagram", "content", "audience", "post", "creative"].some((signal) => body.includes(signal))) {
+      return {
+         id: "content",
+         label: "Content project",
+         primaryTitle: "Content Goal",
+         notesTitle: "Content Notes",
+         nextTitle: "Next Content Step",
+      };
+   }
+
+   if (["patio", "apartment", "room", "furniture", "plants", "backyard", "home", "clean", "organize"].some((signal) => body.includes(signal))) {
+      return {
+         id: "home",
+         label: "Home project",
+         primaryTitle: "Home Goal",
+         notesTitle: "Home Notes",
+         nextTitle: "Next Home Step",
+      };
+   }
+
+   return {
+      id: "general",
+      label: "Project",
+      primaryTitle: "Project Goal",
+      notesTitle: "Project Notes",
+      nextTitle: "Next Step",
+   };
+}
+
+function getProjectOpeningSectionTitle(profile: ProjectDetailProfile) {
+   return profile.primaryTitle;
+}
+
+function getProjectFallbackSections(project: ProjectLibraryItem, profile: ProjectDetailProfile) {
+   const body = sanitizeProjectBody(project.latestSummary || project.notes[0]?.body || project.title)
+      .replace(/\s+/g, " ")
+      .trim();
+
+   const firstSentence = body.match(/^(.+?[.!?])\s/)?.[1] || getShortProjectMaterialPreview(body, 280);
+
+   const sections: ProjectDetailSection[] = [];
+
+   if (firstSentence) {
+      sections.push({
+         title: profile.primaryTitle,
+         body: firstSentence,
+      });
+   }
+
+   if (body && body !== firstSentence) {
+      sections.push({
+         title: profile.notesTitle,
+         body,
+      });
+   }
+
+   const nextMove = getProjectTypeInsight(project).nextMove;
+
+   if (nextMove) {
+      sections.push({
+         title: profile.nextTitle,
+         body: nextMove,
+      });
+   }
+
+   return sections.slice(0, 6);
+}
+
+function getProjectDetailSections(value: string | undefined, profile: ProjectDetailProfile) {
+   const cleanValue = sanitizeProjectBody(value).replace(/\s+/g, " ").trim();
+
+   if (!cleanValue) {
+      return [] as ProjectDetailSection[];
+   }
+
+   const labelPattern = PROJECT_DETAIL_LABELS.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+
+   const matches = Array.from(cleanValue.matchAll(new RegExp(`\\b(${labelPattern})\\s*:`, "gi")));
+
+   if (!matches.length) {
+      return [] as ProjectDetailSection[];
+   }
+
+   const sections: ProjectDetailSection[] = [];
+
+   const opening = cleanValue.slice(0, matches[0].index).trim();
+
+   if (opening) {
+      sections.push({
+         title: getProjectOpeningSectionTitle(profile),
+         body: opening,
+      });
+   }
+
+   matches.forEach((match, index) => {
+      const label = sanitizeProjectTitle(match[1]) || "Project Detail";
+
+      const bodyStart = (match.index || 0) + match[0].length;
+
+      const bodyEnd = index + 1 < matches.length ? matches[index + 1].index || cleanValue.length : cleanValue.length;
+
+      const body = cleanValue.slice(bodyStart, bodyEnd).trim();
+
+      if (body) {
+         sections.push({
+            title: label,
+            body,
+         });
+      }
+   });
+
+   return sections.slice(0, 12);
+}
+
+function getAdaptiveProjectDetailSections(project: ProjectLibraryItem) {
+   const profile = getProjectDetailProfile(project);
+
+   const structuredSections = getProjectDetailSections(project.latestSummary || project.notes[0]?.body, profile);
+
+   if (structuredSections.length) {
+      return structuredSections;
+   }
+
+   return getProjectFallbackSections(project, profile);
+}
+
+function getProjectDetailPreview(section: ProjectDetailSection, expanded: boolean) {
+   if (expanded) {
+      return section.body;
+   }
+
+   return getShortProjectMaterialPreview(section.body, 170);
 }
 
 function inferProjectTrackingStatus(project: ProjectLibraryItem): ProjectTrackingStatus {
@@ -2087,6 +2455,8 @@ export default function IntegrationAdapterLayer() {
 
    const [manualBuilderOpen, setManualBuilderOpen] = useState(false);
 
+   const [selectedProjectStructureTemplateId, setSelectedProjectStructureTemplateId] = useState<ProjectStructureTemplateId>("shape");
+
    const [notice, setNotice] = useState("");
 
    const [activePolishId, setActivePolishId] = useState<string | null>(null);
@@ -2787,6 +3157,27 @@ export default function IntegrationAdapterLayer() {
       setManualBody("");
 
       void saveOutputToNotes(output);
+   }
+
+   function applyProjectStructureTemplate(templateId: ProjectStructureTemplateId) {
+      const template = getProjectStructureTemplate(templateId);
+
+      const currentTitle = sanitizeProjectTitle(manualTitle);
+
+      const currentBody = sanitizeProjectBody(manualBody);
+
+      const structuredBody = currentBody
+         ? `${template.body}
+
+Existing Notes:
+${currentBody}`
+         : template.body;
+
+      setManualTitle(currentTitle || template.title);
+
+      setManualBody(sanitizeLiveProjectBody(structuredBody));
+
+      showNotice(`${template.label} structure added`);
    }
 
    async function polishOutput(item: InternalOutputItem) {
@@ -3643,6 +4034,39 @@ export default function IntegrationAdapterLayer() {
 
                      <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Create the home base for a project. Add the goal here, then continue in Canvas when you are ready to work.</p>
 
+                     <div className="mt-4 rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
+                        <p className="text-sm font-medium">Structure starter</p>
+
+                        <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
+                           Choose the kind of start you need. Shape your project helps turn a rough idea into a clear project. Plan the steps helps break a known goal into smaller actions. Notes and research gives you a place to collect information before
+                           deciding what to do next.
+                        </p>
+
+                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
+                           <select
+                              value={selectedProjectStructureTemplateId}
+                              onChange={(event) => setSelectedProjectStructureTemplateId(event.target.value as ProjectStructureTemplateId)}
+                              className="rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-3 text-sm outline-none focus:border-[var(--color-primary)]"
+                           >
+                              {PROJECT_STRUCTURE_TEMPLATES.map((template) => (
+                                 <option key={template.id} value={template.id}>
+                                    {template.label}
+                                 </option>
+                              ))}
+                           </select>
+
+                           <button
+                              onClick={() => applyProjectStructureTemplate(selectedProjectStructureTemplateId)}
+                              className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-white px-5 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]"
+                           >
+                              <NotebookPen size={16} />
+                              Add structure
+                           </button>
+                        </div>
+
+                        <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">{getProjectStructureTemplate(selectedProjectStructureTemplateId).helper}</p>
+                     </div>
+
                      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
                         <input
                            value={manualTitle}
@@ -3746,6 +4170,14 @@ export default function IntegrationAdapterLayer() {
 
                         const projectTracking = getProjectTracking(activeProject);
 
+                        const projectDetailProfile = getProjectDetailProfile(activeProject);
+
+                        const projectDetailSections = getAdaptiveProjectDetailSections(activeProject);
+
+                        const visibleProjectDetailSections = expanded ? projectDetailSections : projectDetailSections.slice(0, 4);
+
+                        const hasMoreProjectDetail = projectDetailSections.length > 4 || compactText(activeProject.latestSummary).length > 700;
+
                         return (
                            <div className="min-w-0 rounded-[24px] border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4 sm:p-5 xl:rounded-[28px] xl:p-6">
                               <div className="mb-5 flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-5 xl:flex-row xl:items-start xl:justify-between">
@@ -3753,16 +4185,26 @@ export default function IntegrationAdapterLayer() {
                                     <div className="mb-3 flex flex-wrap items-center gap-2">
                                        <span className="rounded-full bg-[var(--color-primary)] px-3 py-1 text-xs font-medium text-[var(--color-cream)]">Current Project</span>
 
+                                       <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)]">{projectDetailProfile.label}</span>
+
                                        <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)]">Updated {getReadableProjectDate(activeProject.updatedAt)}</span>
                                     </div>
 
                                     <h3 className="break-words text-xl leading-tight sm:text-2xl">{activeProject.title}</h3>
 
-                                    <p className="mt-3 max-w-3xl break-words text-sm leading-7 text-[var(--color-text-secondary)]">{expanded ? activeProject.latestSummary : getShortPreview(activeProject.latestSummary, 260)}</p>
+                                    <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                                       {visibleProjectDetailSections.map((section) => (
+                                          <div key={`${activeProject.id}-${section.title}`} className="rounded-2xl border border-[var(--border-subtle)] bg-white p-4">
+                                             <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">{section.title}</p>
 
-                                    {compactText(activeProject.latestSummary).length > 260 && (
+                                             <p className="mt-2 break-words text-sm leading-7 text-[var(--color-text-secondary)]">{getProjectDetailPreview(section, expanded)}</p>
+                                          </div>
+                                       ))}
+                                    </div>
+
+                                    {hasMoreProjectDetail && (
                                        <button onClick={() => toggleProjectExpanded(activeProject.id)} className="mt-3 rounded-xl bg-white px-3 py-2 text-sm font-medium text-[var(--color-primary)] transition-colors hover:bg-[var(--color-surface)]">
-                                          {expanded ? "Show less" : "Read more"}
+                                          {expanded ? "Show less" : "Show full project notes"}
                                        </button>
                                     )}
                                  </div>

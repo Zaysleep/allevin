@@ -218,11 +218,15 @@ function sanitizeCalendarPlainText(value?: string, maxLength: number = CALENDAR_
 }
 
 function sanitizeLiveCalendarTitle(value?: string) {
-   return sanitizeCalendarPlainText(value, CALENDAR_SANITIZE_LIMITS.title, { preserveEdges: true }).replace(/\n+/g, " ");
+   return sanitizeCalendarPlainText(value, CALENDAR_SANITIZE_LIMITS.title, {
+      preserveEdges: true,
+   }).replace(/\n+/g, " ");
 }
 
 function sanitizeLiveCalendarLocation(value?: string) {
-   return sanitizeCalendarPlainText(value, CALENDAR_SANITIZE_LIMITS.location, { preserveEdges: true }).replace(/\n+/g, " ");
+   return sanitizeCalendarPlainText(value, CALENDAR_SANITIZE_LIMITS.location, {
+      preserveEdges: true,
+   }).replace(/\n+/g, " ");
 }
 
 function sanitizeLiveCalendarDescription(value?: string) {
@@ -230,7 +234,9 @@ function sanitizeLiveCalendarDescription(value?: string) {
 }
 
 function sanitizeLiveCalendarNote(value?: string) {
-   return sanitizeCalendarPlainText(value, CALENDAR_SANITIZE_LIMITS.note, { preserveEdges: true });
+   return sanitizeCalendarPlainText(value, CALENDAR_SANITIZE_LIMITS.note, {
+      preserveEdges: true,
+   });
 }
 
 function sanitizeCalendarTitle(value?: string) {
@@ -557,6 +563,20 @@ function getMonthLabel(timestamp: number) {
 
       year: "numeric",
    });
+}
+
+const CALENDAR_MONTH_OPTIONS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"] as const;
+
+function getCalendarYearOptions(timestamp: number) {
+   const currentYear = new Date().getFullYear();
+
+   const visibleYear = new Date(timestamp).getFullYear();
+
+   const startYear = Math.min(currentYear, visibleYear) - 2;
+
+   const endYear = Math.max(currentYear, visibleYear) + 3;
+
+   return Array.from({ length: endYear - startYear + 1 }, (_, index) => startYear + index);
 }
 
 function getShortDayNumber(timestamp: number) {
@@ -1211,6 +1231,8 @@ export default function CalendarIntegrationPanel() {
       return date.getTime();
    });
 
+   const [monthJumpOpen, setMonthJumpOpen] = useState(false);
+
    const [selectedDayDate, setSelectedDayDate] = useState(() => {
       const date = new Date();
 
@@ -1272,6 +1294,14 @@ export default function CalendarIntegrationPanel() {
    const selectedDayEvents = useMemo(() => getEventsForDay(hydratedEvents, selectedDayDate), [hydratedEvents, selectedDayDate]);
 
    const visibleMonthLabel = getMonthLabel(visibleMonthDate);
+
+   const visibleMonthObject = new Date(visibleMonthDate);
+
+   const visibleMonthIndex = visibleMonthObject.getMonth();
+
+   const visibleYear = visibleMonthObject.getFullYear();
+
+   const calendarYearOptions = useMemo(() => getCalendarYearOptions(visibleMonthDate), [visibleMonthDate]);
 
    // ========================================
    // Mount
@@ -2166,6 +2196,18 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
       date.setHours(0, 0, 0, 0);
 
       setVisibleMonthDate(date.getTime());
+
+      setMonthJumpOpen(false);
+   }
+
+   function jumpToCalendarMonth(monthIndex: number, year: number) {
+      const date = new Date(year, monthIndex, 1);
+
+      date.setHours(0, 0, 0, 0);
+
+      setVisibleMonthDate(date.getTime());
+
+      setMonthJumpOpen(false);
    }
 
    function jumpToToday() {
@@ -2176,6 +2218,8 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
       setSelectedDayDate(today.getTime());
 
       setVisibleMonthDate(new Date(today.getFullYear(), today.getMonth(), 1).getTime());
+
+      setMonthJumpOpen(false);
    }
 
    function selectCalendarDay(timestamp: number) {
@@ -2220,7 +2264,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                   selected
                      ? `
                         border-[var(--color-primary)]
-                        bg-[rgba(48,92,222,0.08)]
+                        bg-[rgba(48,92,222,0.12)]
                      `
                      : `
                         border-[var(--border-subtle)]
@@ -2527,18 +2571,68 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                </div>
             </div>
 
-            <div className="mb-4 flex flex-col gap-3 rounded-2xl bg-[var(--color-bg)] p-4 sm:flex-row sm:items-center sm:justify-between">
-               <div>
-                  <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Month</p>
+            <div className="mb-4 rounded-2xl bg-[var(--color-bg)] p-4">
+               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="relative">
+                     <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Month</p>
 
-                  <h3 className="mt-1 text-xl sm:text-2xl">{visibleMonthLabel}</h3>
+                     <button
+                        onClick={() => setMonthJumpOpen((current) => !current)}
+                        className="mt-1 flex items-center gap-2 rounded-xl px-0 py-1 text-left text-xl font-medium transition-colors hover:text-[var(--color-primary)] sm:text-2xl"
+                        aria-expanded={monthJumpOpen}
+                     >
+                        {visibleMonthLabel}
+
+                        <ChevronDown size={18} className={`transition-transform ${monthJumpOpen ? "rotate-180" : ""}`} />
+                     </button>
+
+                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Tap the month to jump somewhere else.</p>
+                  </div>
+
+                  <div className="text-left sm:text-right">
+                     <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Selected day</p>
+
+                     <p className="mt-1 text-sm font-medium">{getDateLabel(selectedDayDate)}</p>
+                  </div>
                </div>
 
-               <div className="text-left sm:text-right">
-                  <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Selected day</p>
+               <AnimatePresence initial={false}>
+                  {monthJumpOpen && (
+                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
+                        <div className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-[var(--border-subtle)] bg-white p-3 sm:grid-cols-2">
+                           <label className="text-xs font-medium text-[var(--color-text-secondary)]">
+                              Month
+                              <select
+                                 value={visibleMonthIndex}
+                                 onChange={(event) => jumpToCalendarMonth(Number(event.target.value), visibleYear)}
+                                 className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-primary)] outline-none"
+                              >
+                                 {CALENDAR_MONTH_OPTIONS.map((month, index) => (
+                                    <option key={month} value={index}>
+                                       {month}
+                                    </option>
+                                 ))}
+                              </select>
+                           </label>
 
-                  <p className="mt-1 text-sm font-medium">{getDateLabel(selectedDayDate)}</p>
-               </div>
+                           <label className="text-xs font-medium text-[var(--color-text-secondary)]">
+                              Year
+                              <select
+                                 value={visibleYear}
+                                 onChange={(event) => jumpToCalendarMonth(visibleMonthIndex, Number(event.target.value))}
+                                 className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-primary)] outline-none"
+                              >
+                                 {calendarYearOptions.map((year) => (
+                                    <option key={year} value={year}>
+                                       {year}
+                                    </option>
+                                 ))}
+                              </select>
+                           </label>
+                        </div>
+                     </motion.div>
+                  )}
+               </AnimatePresence>
             </div>
 
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_0.9fr]">
@@ -2591,12 +2685,12 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                               <div className="mb-1 flex items-center justify-between gap-1 sm:mb-2 sm:gap-2">
                                  <span className={`text-xs font-medium sm:text-sm ${day.isToday ? "text-[var(--color-primary)]" : ""}`}>{getShortDayNumber(day.timestamp)}</span>
 
-                                 {dayEvents.length > 0 && <span className="rounded-full bg-[var(--color-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-text-secondary)] sm:px-2">{dayEvents.length}</span>}
+                                 {dayEvents.length > 0 && <span className="rounded-full bg-[var(--color-primary)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-cream)] shadow-sm sm:px-2">{dayEvents.length}</span>}
                               </div>
 
                               <div className="hidden space-y-1 sm:block">
                                  {dayEvents.slice(0, 2).map((event) => (
-                                    <div key={event.id} className="truncate rounded-lg bg-[var(--color-bg)] px-2 py-1 text-[10px] font-medium text-[var(--color-text-secondary)]">
+                                    <div key={event.id} className="truncate rounded-lg border border-[rgba(48,92,222,0.22)] bg-[rgba(48,92,222,0.12)] px-2 py-1 text-[10px] font-semibold text-[var(--color-primary)]">
                                        {event.allDay ? "All day" : getShortTimeLabel(event.startTime)} {event.title}
                                     </div>
                                  ))}
@@ -2618,7 +2712,8 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                      </div>
 
                      <span className="rounded-xl bg-white px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)]">
-                        {selectedDayEvents.length} event{selectedDayEvents.length === 1 ? "" : "s"}
+                        {selectedDayEvents.length} event
+                        {selectedDayEvents.length === 1 ? "" : "s"}
                      </span>
                   </div>
 

@@ -99,7 +99,7 @@ interface PendingWorkflowAction {
 
 type ProductModuleId = "home" | "canvas" | "calendar" | "integrations" | "advanced";
 
-type ProductModuleView = "home" | "focus" | "workspace" | "insights" | "integrations";
+type ProductModuleView = "home" | "focus" | "workspace" | "integrations";
 
 interface CalendarReadbackPayload {
    title?: string;
@@ -2637,9 +2637,19 @@ function getProjectMaterialConversationIntent(prompt: string): ProjectMaterialCo
       return "selected";
    }
 
-   // Use/recommendation questions need to win before list questions.
-   // Example: "What should I use from the project materials?" contains
-   // "project materials", but the user is asking for guidance, not inventory.
+   if (
+      lower.includes("what references do i have") ||
+      lower.includes("what reference do i have") ||
+      lower.includes("show references") ||
+      lower.includes("list references") ||
+      lower.includes("show materials") ||
+      lower.includes("list materials") ||
+      lower.includes("attached references") ||
+      lower.includes("attached materials")
+   ) {
+      return "list";
+   }
+
    if (
       lower.includes("what should i use") ||
       lower.includes("which should i use") ||
@@ -2657,29 +2667,6 @@ function getProjectMaterialConversationIntent(prompt: string): ProjectMaterialCo
       lower.includes("what resume details should i use")
    ) {
       return "recommend";
-   }
-
-   if (
-      lower.includes("what materials do i have") ||
-      lower.includes("what material do i have") ||
-      lower.includes("what project materials do i have") ||
-      lower.includes("what materials are attached") ||
-      lower.includes("what material is attached") ||
-      lower.includes("what references do i have") ||
-      lower.includes("what reference do i have") ||
-      lower.includes("what references are attached") ||
-      lower.includes("what reference is attached") ||
-      lower.includes("show references") ||
-      lower.includes("list references") ||
-      lower.includes("show materials") ||
-      lower.includes("list materials") ||
-      lower.includes("attached references") ||
-      lower.includes("attached materials") ||
-      lower.includes("materials attached to this project") ||
-      lower.includes("references attached to this project") ||
-      (lower.includes("project materials") && (lower.includes("show") || lower.includes("list") || lower.includes("how many")))
-   ) {
-      return "list";
    }
 
    if (lower.includes("focus on") || lower.includes("focus next") || lower.includes("what should i focus") || lower.includes("next for this") || lower.includes("next step") || lower.includes("where should i start") || lower.includes("start with")) {
@@ -2741,50 +2728,42 @@ function getConversationalMaterialLine(material: ProjectMaterial, index: number)
 
 function getMaterialUseRecommendation(materials: ProjectMaterial[]) {
    const interpreted = materials.find((material) => hasMaterialInterpretation(material));
+
+   if (interpreted) {
+      return `I’d start with ${getShortMaterialTitle(interpreted)} because ALLEVIN already read it and turned it into usable project context. ${usefulSentenceFromMaterial(interpreted)}`;
+   }
+
    const feedback = materials.find((material) => material.type === "Feedback");
    const document = materials.find((material) => material.type === "Document");
    const research = materials.find((material) => material.type === "Research");
-   const image = materials.find((material) => material.type === "Image");
-   const reference = materials.find((material) => material.type === "Reference");
+   const reference = materials.find((material) => material.type === "Reference" || material.type === "Image");
    const note = materials.find((material) => material.type === "Note");
 
-   if (materials.length > 1) {
-      const lines: string[] = [];
+   const projectText = compactText(materials.map((material) => `${material.title} ${material.summary} ${material.notes}`).join(" ")).toLowerCase();
 
-      const foundation = interpreted || document || image || reference || materials[0];
+   if (document && feedback) {
+      const detail = projectText.includes("navigation") || projectText.includes("label") ? "navigation labels" : projectText.includes("contrast") || projectText.includes("button") ? "button clarity and contrast" : "the review checklist";
 
-      if (foundation) {
-         lines.push(`Use ${getShortMaterialTitle(foundation)} for the main direction and starting context.`);
-      }
-
-      const decisionGuide = research || note;
-
-      if (decisionGuide && decisionGuide.id !== foundation?.id) {
-         lines.push(`Use ${getShortMaterialTitle(decisionGuide)} to keep the product choices focused and specific.`);
-      }
-
-      if (feedback && feedback.id !== foundation?.id && feedback.id !== decisionGuide?.id) {
-         lines.push(`Use ${getShortMaterialTitle(feedback)} to protect the user experience and avoid adding too much.`);
-      }
-
-      const remaining = materials.find((material) => ![foundation?.id, decisionGuide?.id, feedback?.id].includes(material.id));
-
-      if (remaining) {
-         lines.push(`Keep ${getShortMaterialTitle(remaining)} nearby as extra support if the project needs more detail.`);
-      }
-
-      return `I’d use the project materials this way:
-
-${lines.map((line, index) => `${index + 1}. ${line}`).join("\n")}`;
+      return `I’d use ${getShortMaterialTitle(document)} as the backbone and ${getShortMaterialTitle(feedback)} as the reality check. The checklist keeps the work tidy; the feedback keeps it from becoming a beautiful checklist that ignores actual humans. Start with ${detail}.`;
    }
 
-   const first = interpreted || document || research || feedback || image || reference || note || materials[0];
-
-   if (first) {
-      return `I’d start with ${getShortMaterialTitle(first)}. Use it as the main reference for this pass. ${usefulSentenceFromMaterial(first)}`;
+   if (research && document) {
+      return `I’d pair ${getShortMaterialTitle(document)} with ${getShortMaterialTitle(research)}. The checklist tells you what to inspect, and the research keeps the choices grounded. Clear and useful.`;
    }
 
-   return "I’d start with the clearest material and pull out 2–3 details that directly support the project.";
+   if (feedback && reference) {
+      return `I’d use ${getShortMaterialTitle(feedback)} to decide what needs fixing, then compare the design against ${getShortMaterialTitle(reference)} so the solution has a clean example to lean on.`;
+   }
+
+   const first = document || research || feedback || reference || note || materials[0];
+   const second = feedback && feedback.id !== first?.id ? feedback : reference && reference.id !== first?.id ? reference : materials.find((material) => material.id !== first?.id);
+
+   const parts = [
+      first ? `I’d start with ${getShortMaterialTitle(first)}. That feels like the most useful ${getMaterialTypeNoun(first.type)} for this pass.` : "",
+      second ? `Keep ${getShortMaterialTitle(second)} nearby so the project does not wander off wearing a fake mustache.` : "",
+   ].filter(Boolean);
+
+   return parts.join(" ");
 }
 
 function getMaterialFocusSuggestion(materials: ProjectMaterial[]) {
@@ -2829,7 +2808,7 @@ function buildProjectMaterialsReadbackResponse(prompt = "") {
    const usableMaterials = selectedMaterials.length ? selectedMaterials : materials;
 
    if (!materials.length) {
-      return `I do not see project materials attached to ${projectTitle} yet. Add a note, document, image, research item, feedback, or reference in Projects, and I’ll have more to work with.`;
+      return `I do not see project materials attached to ${projectTitle} yet. Add a note, document, image, research item, feedback, or reference in Projects, and I’ll have more to work with. No project materials are attached yet.`;
    }
 
    if (intent === "list") {
@@ -2838,7 +2817,7 @@ function buildProjectMaterialsReadbackResponse(prompt = "") {
          .map((material, index) => getConversationalMaterialLine(material, index))
          .join("\n");
 
-      return `You have ${materials.length} project material${materials.length === 1 ? "" : "s"} attached to ${projectTitle}:\n\n${materialList}\n\nThese are support materials for the project. Select one in Canvas when you want ALLEVIN to focus on a specific reference.`;
+      return `You have ${materials.length} reference${materials.length === 1 ? "" : "s"} attached to ${projectTitle}:\n\n${materialList}\n\nI’ll treat them as support material, not the draft itself. Boundaries. Very mature of us.`;
    }
 
    if (intent === "selected") {
@@ -2874,10 +2853,7 @@ Next move: add one small Canvas note for how this reference should shape the cur
    }
 
    if (intent === "recommend") {
-      const lowerPrompt = normalizeUserIntentPrompt(prompt);
-      const asksAcrossProjectMaterials = lowerPrompt.includes("project materials") || lowerPrompt.includes("materials") || lowerPrompt.includes("references");
-
-      if (selectedMaterials.length && !asksAcrossProjectMaterials) {
+      if (selectedMaterials.length) {
          const selected = selectedMaterials[0];
 
          const interpretedResponse = buildSelectedMaterialInterpretationResponse(selected, intent);
@@ -2898,18 +2874,18 @@ Next move: use it as the visual comparison point and write 2–3 checks in Canva
 Next move: pull 2–3 details from the document into a short Canvas checklist. Keep it simple and useful.`;
          }
 
-         return `I’d use ${getShortMaterialTitle(selected)} for this pass.
+         return `I’d use ${getShortMaterialTitle(selected)} for this pass. Since it is selected, I’ll treat it like the reference on your desk instead of dragging every folder into the room.
 
 The useful part: ${getMaterialPlainPreview(selected, 260) || "it gives you a cleaner way to guide the next update."}
 
 Next move: turn 2–3 details from that reference into a short Canvas checklist. Keep it simple and useful.`;
       }
 
-      const recommendation = getMaterialUseRecommendation(materials);
+      const recommendation = getMaterialUseRecommendation(usableMaterials);
 
-      return `${recommendation || "I’d use the clearest material first."}
+      return `${recommendation || "I’d use the clearest checklist or feedback note first."}
 
-Next move: pull 2–3 useful details into Canvas and turn them into a short checklist.`;
+Next move: pull out 2–3 items from the materials and turn them into a short Canvas checklist. Keep it simple and useful.`;
    }
 
    if (intent === "focus") {
@@ -3332,7 +3308,7 @@ function getInternalIntegrationIntent(prompt: string): InternalIntegrationIntent
       return {
          source: "cognition",
          target: "aidock",
-         label: "Insights → ALLEVIN",
+         label: "Response style → ALLEVIN",
          summary: `AIDock is currently using ${profile.label} as the response style.`,
          suggestedAction: profile.suggestion || "Keep responses aligned to the current cognition style.",
       };
@@ -3437,7 +3413,7 @@ function getInternalIntegrationDestinationModule(target: InternalIntegrationTarg
          return "calendar";
 
       case "cognition":
-         return "advanced";
+         return "integrations";
 
       case "projects":
       case "aidock":
@@ -3455,7 +3431,7 @@ function getInternalIntegrationDestinationView(target: InternalIntegrationTarget
          return "workspace";
 
       case "cognition":
-         return "insights";
+         return "home";
 
       case "projects":
       case "aidock":
@@ -3473,7 +3449,7 @@ function getInternalIntegrationDestinationAnchor(target: InternalIntegrationTarg
          return "calendar";
 
       case "cognition":
-         return "cognition";
+         return "overview";
 
       case "projects":
       case "aidock":
@@ -5301,6 +5277,8 @@ export default function ALLEVIN() {
 
    const [quickAccessOpen, setQuickAccessOpen] = useState(false);
 
+   const [responseStyleOpen, setResponseStyleOpen] = useState(false);
+
    const getStoredCognitionResetActive = () => {
       if (typeof window === "undefined") {
          return false;
@@ -5390,66 +5368,12 @@ export default function ALLEVIN() {
    }, []);
 
    useEffect(() => {
-      function handleAllevinChatNotice(event: Event) {
-         const customEvent = event as CustomEvent<{
-            message?: string;
-            type?: string;
-            title?: string;
-         }>;
-
-         const noticeKey = compactText(`${customEvent.detail?.type || "notice"}:${customEvent.detail?.title || ""}:${customEvent.detail?.message || ""}`).toLowerCase();
-
-         const dedupeKey = "allevin-chat-notice-dedupe";
-
-         if (noticeKey && typeof window !== "undefined") {
-            try {
-               const stored = sessionStorage.getItem(dedupeKey);
-
-               const parsed = stored ? JSON.parse(stored) : {};
-
-               const lastSeen = typeof parsed?.[noticeKey] === "number" ? parsed[noticeKey] : 0;
-
-               if (Date.now() - lastSeen < 1200) {
-                  return;
-               }
-
-               sessionStorage.setItem(
-                  dedupeKey,
-                  JSON.stringify({
-                     ...parsed,
-                     [noticeKey]: Date.now(),
-                  }),
-               );
-            } catch {
-               // Dedupe should never block notices.
-            }
-         }
-
-         const content = compactText(getAllevinNoticeMessage(customEvent.detail?.message, customEvent.detail?.type, customEvent.detail?.title));
-
-         if (!content) {
-            return;
-         }
-
-         setExpanded(true);
-
-         setChatOpen(true);
-
-         setMessages((current) => {
-            const lastMessage = current[current.length - 1];
-
-            if (lastMessage?.role === "assistant" && compactText(lastMessage.content) === content) {
-               return current;
-            }
-
-            return [
-               ...current,
-               {
-                  role: "assistant",
-                  content,
-               },
-            ];
-         });
+      function handleAllevinChatNotice(_event: Event) {
+         // MK VII polish:
+         // Routine page confirmations are intentionally quiet now.
+         // Ask ALLEVIN should only open when the user asks for help,
+         // not when Canvas, Projects, or Calendar finish a normal action.
+         return;
       }
 
       function handleProjectLibraryUpdate() {
@@ -5851,10 +5775,10 @@ export default function ALLEVIN() {
                ...parsed,
                state: "balanced",
                label: "Balanced",
-               mood: "Workspace steady",
+               mood: "Clear replies",
                momentum: "stable",
-               suggestion: "Continue the active project or ask ALLEVIN what to add to Canvas next.",
-               adapts: "Responses can be conversational, clear, and focused on the current project.",
+               suggestion: "Clear, helpful, and not too much.",
+               adapts: "ALLEVIN will keep responses balanced, useful, and easy to follow.",
             };
          }
 
@@ -6341,11 +6265,11 @@ export default function ALLEVIN() {
          case "deep-work":
             return {
                state: "deep-work",
-               label: "Deep Work",
-               mood: "Focused",
-               momentum: "protected",
-               suggestion: "Protect focus and keep the response to one clear move.",
-               adapts: "ALLEVIN will respond shorter, more directly, and with fewer branches.",
+               label: "Focused",
+               mood: "Direct replies",
+               momentum: "focused",
+               suggestion: "Use shorter answers with direct next steps.",
+               adapts: "ALLEVIN will keep responses shorter, clearer, and centered on the next useful move.",
             };
 
          case "context-switching":
@@ -6372,10 +6296,10 @@ export default function ALLEVIN() {
             return {
                state: "creative",
                label: "Creative",
-               mood: "Shaping",
+               mood: "Idea-friendly replies",
                momentum: "ideating",
-               suggestion: "Keep shaping the idea before over-organizing it.",
-               adapts: "ALLEVIN will support idea-shaping while still keeping the next move specific.",
+               suggestion: "Use more idea-friendly and exploratory guidance.",
+               adapts: "ALLEVIN will help explore ideas while still keeping the response useful.",
             };
 
          case "research":
@@ -6393,10 +6317,10 @@ export default function ALLEVIN() {
             return {
                state: "balanced",
                label: "Balanced",
-               mood: "Workspace steady",
+               mood: "Clear replies",
                momentum: "stable",
-               suggestion: "Continue the active project or ask ALLEVIN what to add to Canvas next.",
-               adapts: "Responses can be conversational, clear, and focused on the current project.",
+               suggestion: "Clear, helpful, and not too much.",
+               adapts: "ALLEVIN will keep responses balanced, useful, and easy to follow.",
             };
       }
    }
@@ -6536,7 +6460,7 @@ export default function ALLEVIN() {
          .replace(/ask ALLEVIN what to add to Canvas next/gi, "ask what should be added to Canvas")
          .replace(/ask ALLEVIN/gi, "ask me");
 
-      return `Insights is set to ${profile.label}. I’ll use that style in how I respond: ${suggestion.charAt(0).toLowerCase()}${suggestion.slice(1)}`;
+      return `Response style set to ${profile.label}. I’ll use that style in how I respond: ${suggestion.charAt(0).toLowerCase()}${suggestion.slice(1)}`;
    }
 
    function looksLikeCurrentTimeQuestion(prompt: string) {
@@ -9094,7 +9018,7 @@ The useful next move is ${polishWorkflowControlLanguage(recommendation.suggested
             return "Calendar";
 
          case "cognition":
-            return "Insights";
+            return "AI response style";
 
          case "standby":
          default:
@@ -10652,7 +10576,7 @@ Rules:
    function looksLikeBareModuleName(prompt: string) {
       const lower = normalizeUserIntentPrompt(prompt);
 
-      return /^(home|overview|canvas|projects|project hub|saved work|calendar|schedule|cognition|advanced)$/.test(lower);
+      return /^(home|overview|canvas|projects|project hub|saved work|calendar|schedule|response style|ai response style)$/.test(lower);
    }
 
    function looksLikeAmbiguousNavigationIntent(prompt: string) {
@@ -10662,7 +10586,7 @@ Rules:
    }
 
    function getAIDockNavigationClarifier() {
-      return "Which page should I open — Home, Canvas, Projects, Calendar, or Insights?";
+      return "Which page should I open — Home, Canvas, Projects, or Calendar?";
    }
 
    function getAIDockPageOpenIntent(prompt: string): AIDockPageOpenIntent | null {
@@ -10726,14 +10650,14 @@ Rules:
          };
       }
 
-      if (/\b(cognition|response mode|thinking mode|advanced|mode settings)\b/.test(lower)) {
+      if (/\b(response style|ai response style|response mode|reply style|mode settings)\b/.test(lower)) {
          return {
-            moduleId: "advanced",
-            targetId: "cognition",
-            targetView: "insights",
-            label: "Insights",
-            message: "Insights opened. Response style is ready to adjust.",
-            fallbackTargetId: "advanced",
+            moduleId: "home",
+            targetId: "overview",
+            targetView: "home",
+            label: "AI response style",
+            message: "AI response style is inside Ask ALLEVIN.",
+            fallbackTargetId: "overview",
          };
       }
 
@@ -10741,6 +10665,14 @@ Rules:
    }
 
    function runAIDockPageOpenIntent(intent: AIDockPageOpenIntent) {
+      if (intent.label === "AI response style") {
+         setExpanded(true);
+
+         setResponseStyleOpen(true);
+
+         return;
+      }
+
       openProductModule(intent.moduleId, intent.targetId, intent.targetView, intent.message, intent.fallbackTargetId);
    }
 
@@ -10764,7 +10696,7 @@ Rules:
       return false;
    }
 
-   function openModule(targetId: string, targetView: "home" | "focus" | "workspace" | "insights" | "integrations", message: string, fallbackTargetId?: string) {
+   function openModule(targetId: string, targetView: "home" | "focus" | "workspace" | "home" | "integrations", message: string, fallbackTargetId?: string) {
       workspace?.setActiveView(targetView as any);
 
       setExpanded(true);
@@ -10896,7 +10828,7 @@ Rules:
       }
 
       if (threadMemory.suggestedDestination === "notes") {
-         openProductModule("advanced", "cognition", "insights", "Opening Insights.", "internal-notes-vault");
+         openProductModule("integrations", "work-area", "integrations", "Opening Projects for saved notes.", "integrations");
 
          return;
       }
@@ -11133,6 +11065,28 @@ ${getSafeRecommendedNextAction()}
       openProductModule("canvas", "work-area", "focus", "Project Memory continuation sent to Canvas.", "canvas");
    }
 
+   const responseStyleOptions: Array<{
+      mode: AllevinCognitionMode;
+      label: string;
+      description: string;
+   }> = [
+      {
+         mode: "balanced",
+         label: "Balanced",
+         description: "Clear, helpful, and not too much.",
+      },
+      {
+         mode: "deep-work",
+         label: "Focused",
+         description: "Shorter answers with direct next steps.",
+      },
+      {
+         mode: "creative",
+         label: "Creative",
+         description: "More idea-friendly and exploratory.",
+      },
+   ];
+
    // ========================================
    // Quick Actions
    // ========================================
@@ -11166,16 +11120,6 @@ ${getSafeRecommendedNextAction()}
          icon: CalendarDays,
 
          action: () => openProductModule("calendar", "work-area", "workspace", "Opening Calendar.", "calendar"),
-      },
-
-      {
-         label: "Insights",
-
-         description: "Response style",
-
-         icon: Sparkles,
-
-         action: () => openProductModule("advanced", "cognition", "insights", "Opening Insights.", "cognition"),
       },
    ];
 
@@ -11590,7 +11534,7 @@ Try one of these:
 
       openProductModule(getInternalIntegrationDestinationModule(intent.target), getInternalIntegrationDestinationView(intent.target), "workspace", "", getInternalIntegrationDestinationAnchor(intent.target));
 
-      return `${intent.label} approved. I opened ${intent.target === "projects" ? "Projects" : intent.target === "cognition" ? "Insights" : intent.target === "calendar" ? "Calendar" : "Canvas"}. ${intent.suggestedAction}`;
+      return `${intent.label} approved. I opened ${intent.target === "projects" ? "Projects" : intent.target === "cognition" ? "response style" : intent.target === "calendar" ? "Calendar" : "Canvas"}. ${intent.suggestedAction}`;
    }
 
    function cancelPendingInternalIntegration() {
@@ -11674,7 +11618,7 @@ Try one of these:
       if (looksLikeContextPacketDebugCommand(prompt)) {
          const packet = buildAllevinInternalContextPacket(prompt);
 
-         return `MK VI context packet is online.\n\nProject: ${packet.currentProject.title || "None"}\nType: ${packet.currentProject.type}\nLocation: ${packet.currentProject.location}\nIntent: ${looksLikeContextPacketDebugCommand(prompt) ? "debug-context" : packet.userIntent.intentType}\nInsights: ${packet.cognition.label}\nStatus: ${packet.currentProject.status}\nCalendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
+         return `MK VI context packet is online.\n\nProject: ${packet.currentProject.title || "None"}\nType: ${packet.currentProject.type}\nLocation: ${packet.currentProject.location}\nIntent: ${looksLikeContextPacketDebugCommand(prompt) ? "debug-context" : packet.userIntent.intentType}\nResponse style: ${packet.cognition.label}\nStatus: ${packet.currentProject.status}\nCalendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
       }
 
       if (looksLikeCurrentTimeToolQuestion(prompt)) {
@@ -12428,7 +12372,7 @@ Try one of these:
    }
 
    function getALLEVINActionReminder() {
-      return "I can recommend moves and keep them simple. You stay in command through Canvas, Projects, Calendar, and Insights.";
+      return "I can recommend moves and keep them simple. You stay in command through Canvas, Projects, and Calendar.";
    }
 
    function getLatestAssistantMessage() {
@@ -12670,19 +12614,56 @@ Try one of these:
                      </div>
 
                      <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4">
-                        <div className="flex items-center gap-3">
-                           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-[var(--color-primary)]">
-                              <Sparkles size={18} />
+                        <button type="button" onClick={() => setResponseStyleOpen((current) => !current)} className="flex w-full items-center justify-between gap-3 text-left" aria-expanded={responseStyleOpen}>
+                           <div className="flex min-w-0 items-center gap-3">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-[var(--color-primary)]">
+                                 <Sparkles size={18} />
+                              </div>
+
+                              <div className="min-w-0">
+                                 <p className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">AI response style</p>
+
+                                 <p className="mt-1 truncate text-sm font-semibold">{cognitionDisplayLabel}</p>
+                              </div>
                            </div>
 
-                           <div className="min-w-0">
-                              <p className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">AI response style</p>
+                           <ChevronDown size={16} className={`shrink-0 transition-transform ${responseStyleOpen ? "rotate-180" : ""}`} />
+                        </button>
 
-                              <p className="mt-1 truncate text-sm font-semibold">{cognitionDisplayLabel}</p>
-                           </div>
-                        </div>
+                        <AnimatePresence initial={false}>
+                           {responseStyleOpen && (
+                              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
+                                 <div className="mt-4 rounded-2xl border border-[var(--border-subtle)] bg-white p-4">
+                                    <p className="text-sm font-semibold">Choose how ALLEVIN should respond.</p>
 
-                        <p className="mt-3 hidden text-xs leading-5 text-[var(--color-text-secondary)] sm:block">{cognitionDisplaySuggestion}</p>
+                                    <div className="mt-3 grid grid-cols-1 gap-2">
+                                       {responseStyleOptions.map((option) => {
+                                          const isActive = getActiveCognitionResponseMode() === option.mode;
+
+                                          return (
+                                             <button
+                                                key={option.mode}
+                                                type="button"
+                                                onClick={() => setCognitionResponseMode(option.mode)}
+                                                className={`rounded-2xl border px-4 py-3 text-left transition-colors ${
+                                                   isActive ? "border-[var(--color-primary)] bg-[rgba(48,92,222,0.08)]" : "border-[var(--border-subtle)] bg-[var(--color-bg)] hover:bg-white"
+                                                }`}
+                                             >
+                                                <div className="flex items-center justify-between gap-3">
+                                                   <p className="text-sm font-semibold">{option.label}</p>
+
+                                                   {isActive ? <CheckCircle2 size={16} className="text-[var(--color-primary)]" /> : null}
+                                                </div>
+
+                                                <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">{option.description}</p>
+                                             </button>
+                                          );
+                                       })}
+                                    </div>
+                                 </div>
+                              </motion.div>
+                           )}
+                        </AnimatePresence>
                      </div>
                   </div>
 

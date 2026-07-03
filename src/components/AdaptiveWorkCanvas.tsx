@@ -400,6 +400,113 @@ interface IntegrationSavePayload {
 
 type CanvasWorkflowMode = "balanced" | "planning" | "research" | "creative" | "deep-focus";
 
+type CanvasStructureTemplateId = "simple" | "plan" | "notes";
+
+interface CanvasStructureTemplate {
+   id: CanvasStructureTemplateId;
+
+   label: string;
+
+   helper: string;
+
+   title: string;
+
+   body: string;
+}
+
+const CANVAS_STRUCTURE_TEMPLATES: CanvasStructureTemplate[] = [
+   {
+      id: "simple",
+      label: "Shape your project",
+      helper: "Use this when you have a rough idea and need help turning it into a clear project.",
+      title: "New Project",
+      body: `Project Type:
+Write the kind of project this is, such as personal, school, work, creative, technical, or planning.
+
+Current Status:
+Write where this project stands right now. This can be one sentence.
+
+Main Idea:
+Describe the project in plain language. What is this about?
+
+Goal:
+Write what you want to finish, improve, decide, or understand.
+
+Important Details:
+Add any useful notes, dates, people, links, examples, limits, or reminders.
+
+Materials or References:
+List any files, notes, screenshots, websites, messages, or ideas that may help.
+
+What Success Looks Like:
+Describe how you will know this project is in a good place.
+
+Next Step:
+Write one small action you can take next.`,
+   },
+   {
+      id: "plan",
+      label: "Plan the steps",
+      helper: "Use this when you know the goal and need to break it into smaller actions.",
+      title: "New Step Plan",
+      body: `Project Type:
+Write the kind of project this is, such as personal, school, work, creative, technical, or planning.
+
+Goal:
+Write the main result you want.
+
+Current Status:
+Write what has already happened and what still needs attention.
+
+Steps:
+1. First useful step
+2. Next useful step
+3. Final check or finish step
+
+Things to Check:
+List anything that could block progress, needs review, or should not be forgotten.
+
+Materials or References:
+List anything that supports the project.
+
+Next Step:
+Choose the first step to work on.`,
+   },
+   {
+      id: "notes",
+      label: "Notes and research",
+      helper: "Use this when you are collecting information before deciding what to do next.",
+      title: "New Notes and Research",
+      body: `Project Type:
+Write the kind of project this is, such as personal, school, work, creative, technical, or planning.
+
+Topic:
+Write the subject, question, or idea you are exploring.
+
+What I Know So Far:
+Write the information you already have.
+
+What I Need to Learn:
+List the main things you still need to understand.
+
+Useful Notes:
+Add important facts, examples, quotes, links, reminders, or observations.
+
+Sources or Materials:
+List where the information came from or what files support it.
+
+Open Questions:
+List anything that still feels unclear.
+
+Next Step:
+Write the next source, note, or decision to handle.`,
+   },
+];
+
+function getCanvasStructureTemplate(templateId: CanvasStructureTemplateId) {
+   return CANVAS_STRUCTURE_TEMPLATES.find((template) => template.id === templateId) || CANVAS_STRUCTURE_TEMPLATES[0];
+}
+
 // ========================================
 // Initial Canvas
 // ========================================
@@ -1995,6 +2102,11 @@ function saveCanvasProjectToLibrary({ title, body, summary, workflowId, originBo
          },
       }),
    );
+
+   return {
+      title: cleanTitle,
+      updatedExistingProject: Boolean(matchingProject),
+   };
 }
 
 function buildCanonicalBody({
@@ -2131,6 +2243,12 @@ export default function AdaptiveWorkCanvas() {
 
    const [saveNotice, setSaveNotice] = useState(false);
 
+   const [projectSaveNoticeText, setProjectSaveNoticeText] = useState("");
+
+   const [structureNotice, setStructureNotice] = useState("");
+
+   const [selectedStructureTemplateId, setSelectedStructureTemplateId] = useState<CanvasStructureTemplateId>("simple");
+
    const [selectedReferenceIds, setSelectedReferenceIds] = useState<string[]>([]);
 
    const [expandedReferenceId, setExpandedReferenceId] = useState<string | null>(null);
@@ -2193,6 +2311,48 @@ export default function AdaptiveWorkCanvas() {
       setFullscreenReferenceImage(null);
 
       setFullscreenReferenceDocument(null);
+   }
+
+   function applyCanvasStructureTemplate(templateId: CanvasStructureTemplateId) {
+      const template = getCanvasStructureTemplate(templateId);
+
+      setCanvas((currentCanvas) => {
+         const currentContent = cleanText(currentCanvas.content);
+
+         const currentTitle = sanitizeCanvasTitle(normalizeProjectTitle(currentCanvas.title) || normalizeProjectTitle(currentCanvas.sourceTitle) || "");
+
+         const starterTitle = currentTitle || template.title;
+
+         const structuredContent = currentContent
+            ? `${template.body}
+
+Existing Notes:
+${currentContent}`
+            : template.body;
+
+         const updatedCanvas = sanitizeCanvasState({
+            ...currentCanvas,
+            title: starterTitle,
+            content: structuredContent,
+            sourceTitle: starterTitle,
+            sourceContent: structuredContent,
+            workingSummary: structuredContent,
+            source: currentCanvas.source === "project" ? "project" : "manual",
+            updatedAt: Date.now(),
+         });
+
+         liveCanvasRef.current = updatedCanvas;
+
+         return updatedCanvas;
+      });
+
+      syncCanvasStatus("focused-work-active");
+
+      setStructureNotice(`${template.label} structure added`);
+
+      window.setTimeout(() => {
+         setStructureNotice("");
+      }, 1600);
    }
 
    function syncCanvasStatus(status: "focused-work-active" | "integration-ready" | "workspace-stable" = "focused-work-active") {
@@ -2775,7 +2935,7 @@ export default function AdaptiveWorkCanvas() {
       });
 
       // Direct save first so the project exists in Projects before Canvas clears.
-      saveCanvasProjectToLibrary({
+      const projectSaveResult = saveCanvasProjectToLibrary({
          title: payload.sourceTitle || payload.title,
          body: payload.body || sourceContent || visibleContent,
          summary: payload.workingSummary || payload.body || sourceContent || visibleContent,
@@ -2783,25 +2943,19 @@ export default function AdaptiveWorkCanvas() {
          originBoardItemId: payload.originBoardItemId,
       });
 
+      const projectNoticeTitle = projectSaveResult?.title || payload.sourceTitle || payload.title || "Project";
+
+      const projectNoticeMessage = projectSaveResult?.updatedExistingProject ? `Updated "${projectNoticeTitle}" in Projects.` : `Saved "${projectNoticeTitle}" to Projects.`;
+
+      setProjectSaveNoticeText(projectNoticeMessage);
+
       window.setTimeout(() => {
          window.dispatchEvent(
             new CustomEvent("allevin-prepare-integration", {
                detail: {
                   ...payload,
                   alreadySavedToProjects: true,
-               },
-            }),
-         );
-
-         window.dispatchEvent(
-            new CustomEvent("allevin-chat-notice", {
-               detail: {
-                  message: `Saved "${payload.sourceTitle || payload.title}" to Projects.`,
-                  type: "project-saved",
-                  title: payload.sourceTitle || payload.title,
-                  workflowId,
-                  originBoardItemId: payload.originBoardItemId,
-                  createdAt: Date.now(),
+                  suppressChatNotice: true,
                },
             }),
          );
@@ -2819,7 +2973,9 @@ export default function AdaptiveWorkCanvas() {
 
       setTimeout(() => {
          setSaveNotice(false);
-      }, 1200);
+
+         setProjectSaveNoticeText("");
+      }, 2600);
    }
 
    // ========================================
@@ -3205,8 +3361,6 @@ export default function AdaptiveWorkCanvas() {
             <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:w-auto lg:flex-wrap lg:items-center lg:gap-3">
                {importNotice && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">Opened in Canvas</div>}
 
-               {saveNotice && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">Saved to Projects</div>}
-
                {resetNotice && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">Canvas reset</div>}
 
                {getCanvasSizeNotice(canvas.content) && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">{getCanvasSizeNotice(canvas.content)}</div>}
@@ -3293,6 +3447,36 @@ export default function AdaptiveWorkCanvas() {
             </div>
          </div>
 
+         {saveNotice && projectSaveNoticeText && (
+            <motion.div
+               initial={{ opacity: 0, y: -10, height: 0 }}
+               animate={{ opacity: 1, y: 0, height: "auto" }}
+               transition={{ duration: 0.2 }}
+               className="
+                  mb-5
+                  overflow-hidden
+                  rounded-[24px]
+                  border
+                  border-[rgba(48,92,222,0.18)]
+                  bg-white
+                  p-4
+                  shadow-[var(--shadow-soft)]
+               "
+            >
+               <div className="flex items-start gap-3">
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[rgba(48,92,222,0.1)] text-[var(--color-primary)]">
+                     <CheckCircle2 size={17} />
+                  </div>
+
+                  <div className="min-w-0">
+                     <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{projectSaveNoticeText}</p>
+
+                     <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">Projects is updated. You can open it from Projects when you are ready.</p>
+                  </div>
+               </div>
+            </motion.div>
+         )}
+
          {/* Canvas Grid */}
 
          <div className="grid min-w-0 gap-4 lg:grid-cols-12 lg:gap-6">
@@ -3332,6 +3516,80 @@ export default function AdaptiveWorkCanvas() {
 
                      <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Notes and materials available for this project.</p>
                   </div>
+               </div>
+
+               <div className="mb-4 rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                     <div>
+                        <p className="flex items-center gap-2 font-medium text-[var(--color-text-primary)]">
+                           <NotebookPen size={17} />
+                           Structure starter
+                        </p>
+
+                        <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">
+                           Choose the kind of start you need. Shape your project helps turn a rough idea into a clear project. Plan the steps helps break a known goal into smaller actions. Notes and research gives you a place to collect information before
+                           deciding what to do next.
+                        </p>
+                     </div>
+
+                     {structureNotice && <div className="rounded-2xl bg-[var(--color-bg)] px-3 py-2 text-xs font-medium text-[var(--color-text-secondary)]">{structureNotice}</div>}
+                  </div>
+
+                  <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                     <label className="sr-only" htmlFor="canvas-structure-template">
+                        Choose a Canvas structure
+                     </label>
+
+                     <select
+                        id="canvas-structure-template"
+                        value={selectedStructureTemplateId}
+                        onChange={(event) => setSelectedStructureTemplateId(event.target.value as CanvasStructureTemplateId)}
+                        className="
+                           min-h-11
+                           flex-1
+                           rounded-2xl
+                           border
+                           border-[var(--border-subtle)]
+                           bg-[var(--color-bg)]
+                           px-4
+                           py-3
+                           text-sm
+                           font-medium
+                           text-[var(--color-text-primary)]
+                           outline-none
+                           transition-colors
+                           focus:border-[var(--color-primary)]
+                           focus:bg-white
+                        "
+                     >
+                        {CANVAS_STRUCTURE_TEMPLATES.map((template) => (
+                           <option key={template.id} value={template.id}>
+                              {template.label}
+                           </option>
+                        ))}
+                     </select>
+
+                     <button
+                        type="button"
+                        onClick={() => applyCanvasStructureTemplate(selectedStructureTemplateId)}
+                        className="
+                           min-h-11
+                           rounded-2xl
+                           bg-[var(--color-primary)]
+                           px-5
+                           py-3
+                           text-sm
+                           font-semibold
+                           text-white
+                           transition-opacity
+                           hover:opacity-90
+                        "
+                     >
+                        Add structure
+                     </button>
+                  </div>
+
+                  <p className="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">{getCanvasStructureTemplate(selectedStructureTemplateId).helper}</p>
                </div>
 
                <div className="rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">

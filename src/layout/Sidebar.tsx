@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 
 import type { ElementType } from "react";
 
-import { House, NotebookPen, FolderKanban, CalendarDays, Sparkles } from "lucide-react";
+import { House, NotebookPen, FolderKanban, CalendarDays } from "lucide-react";
 
 import { useWorkspace, type WorkspaceSystemStatus } from "@/components/WorkspaceContext";
 
@@ -15,12 +15,12 @@ import { useWorkspace, type WorkspaceSystemStatus } from "@/components/Workspace
 // Purpose:
 // Main navigation for the project workspace.
 // Projects hold the work, Canvas is for active writing,
-// Calendar shows time blocks, and Insights keeps support available.
+// and Calendar shows time blocks. AI response style now lives in AIDock.
 // ========================================
 
-type ProductModuleId = "home" | "canvas" | "calendar" | "integrations" | "advanced";
+type ProductModuleId = "home" | "canvas" | "calendar" | "integrations";
 
-type WorkspaceView = "home" | "focus" | "workspace" | "insights" | "integrations";
+type WorkspaceView = "home" | "focus" | "workspace" | "integrations";
 
 interface NavItem {
    label: string;
@@ -175,22 +175,6 @@ const navItems: NavItem[] = [
 
       assistantCue: "Schedule reference",
    },
-
-   {
-      label: "Insights",
-
-      icon: Sparkles,
-
-      moduleId: "advanced",
-
-      targetId: "cognition",
-
-      workspaceView: "insights",
-
-      systemStatus: "system-observing",
-
-      assistantCue: "Workspace insights",
-   },
 ];
 
 // ========================================
@@ -200,7 +184,7 @@ const navItems: NavItem[] = [
 function isProductModuleId(value?: string): value is ProductModuleId {
    const cleanValue = sanitizeSidebarRouteValue(value);
 
-   return cleanValue === "home" || cleanValue === "canvas" || cleanValue === "calendar" || cleanValue === "integrations" || cleanValue === "advanced";
+   return cleanValue === "home" || cleanValue === "canvas" || cleanValue === "calendar" || cleanValue === "integrations";
 }
 
 function getNavItemByModule(moduleId?: string) {
@@ -253,7 +237,7 @@ function getModuleFromEventDetail(detail: unknown): ProductModuleId | null {
       }
 
       if (value === "cognition" || value === "advanced") {
-         return "advanced";
+         return "home";
       }
    }
 
@@ -287,7 +271,7 @@ function getModuleFromButtonText(value?: string | null): ProductModuleId | null 
    if (cleanValue.includes("recover")) return "integrations";
    if (cleanValue.includes("control") || cleanValue.includes("action") || cleanValue.includes("review")) return "integrations";
    if (cleanValue.includes("calendar") || cleanValue.includes("schedule")) return "calendar";
-   if (cleanValue.includes("insights") || cleanValue.includes("advanced") || cleanValue.includes("workflow history") || cleanValue.includes("overview")) return "advanced";
+   if (cleanValue.includes("overview")) return "home";
 
    return null;
 }
@@ -327,7 +311,7 @@ function getStoredActiveProductModule(): ProductModuleId | null {
          return "integrations";
 
       case "advanced":
-         return "advanced";
+         return "home";
 
       default:
          return null;
@@ -676,7 +660,7 @@ export default function Sidebar() {
             className="
                grid
                w-full
-               grid-cols-5
+               grid-cols-4
                items-center
                gap-1
                sm:gap-2
