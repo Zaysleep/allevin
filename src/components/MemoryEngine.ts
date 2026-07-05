@@ -1,3 +1,5 @@
+import { parseProjectDocument, type ParsedProjectDocument } from "@/lib/allevinProjectMemory";
+
 // ========================================
 // Memory Engine
 // Purpose:
@@ -308,6 +310,52 @@ export interface SourceAwareActiveProject {
    score: number;
 
    reason: string;
+
+   updatedAt: number;
+
+   // MK VII Project Awareness:
+   // Preserve the saved roadmap and current Canvas as separate signals.
+   projectBody?: string;
+
+   projectDocument?: ParsedProjectDocument;
+
+   projectUpdatedAt?: number;
+
+   canvasContent?: string;
+
+   canvasUpdatedAt?: number;
+}
+
+export interface ActiveProjectAwareness {
+   hasActiveProject: boolean;
+
+   source: SourceAwareProjectSource | "none";
+
+   title: string;
+
+   projectBody: string;
+
+   projectDocument: ParsedProjectDocument;
+
+   canvasContent: string;
+
+   canvasUpdatedAt: number;
+
+   projectUpdatedAt: number;
+
+   workflowId?: string;
+
+   originBoardItemId?: string;
+
+   lastKnownLocation: ThreadMemoryLocation;
+
+   currentStage: ThreadMemoryStage;
+
+   status: ThreadMemoryStatus;
+
+   latestMovement: string;
+
+   recommendedNextAction: string;
 
    updatedAt: number;
 }
@@ -2795,6 +2843,113 @@ function getCleanCandidateBody(...values: Array<string | undefined>) {
    return candidates[0] || "";
 }
 
+function getProjectDocumentAwarenessScore(value?: string) {
+   const body = sanitizeMemoryEngineText(value, MEMORY_ENGINE_SANITIZE_LIMITS.body);
+
+   if (!body) {
+      return -1;
+   }
+
+   const parsed = parseProjectDocument(body);
+
+   let score = Math.min(body.length / 100, 80);
+
+   if (parsed.projectType) score += 30;
+   if (parsed.currentState) score += 35;
+   if (parsed.goal) score += 35;
+   if (parsed.needsToAdd) score += 20;
+   if (parsed.immediateNextStep) score += 45;
+   if (parsed.buildOrder.length) score += 45 + Math.min(parsed.buildOrder.length * 4, 24);
+   if (parsed.completionCriteria.length) score += 20;
+   if (parsed.constraints.length) score += 20;
+   if (parsed.implementationPreferences.length) score += 25;
+
+   return score;
+}
+
+function getBestSavedProjectDocument(project: any) {
+   const notes = Array.isArray(project?.notes) ? project.notes : [];
+
+   const candidates = [project?.latestSummary, project?.body, project?.sourceContent, project?.workingSummary, ...notes.flatMap((note: any) => [note?.body, note?.summary])]
+      .map((value) => sanitizeMemoryEngineText(value, MEMORY_ENGINE_SANITIZE_LIMITS.body))
+      .filter(Boolean);
+
+   return (
+      candidates
+         .map((body) => ({
+            body,
+            score: getProjectDocumentAwarenessScore(body),
+         }))
+         .sort((a, b) => b.score - a.score || b.body.length - a.body.length)[0]?.body || ""
+   );
+}
+
+function getSourceAwareProjectLibraryRecords() {
+   return readArrayStorage<any>(PROJECT_LIBRARY_STORAGE_KEY)
+      .filter((project) => project && typeof project.title === "string")
+      .map((project) => {
+         const notes = Array.isArray(project.notes) ? project.notes : [];
+
+         const latestNote = [...notes].sort((a: any, b: any) => Number(b?.savedAt || 0) - Number(a?.savedAt || 0))[0] || null;
+
+         const title = getCanonicalProjectTitle(project.title);
+
+         const body = getBestSavedProjectDocument(project);
+
+         const updatedAt = typeof project.updatedAt === "number" ? project.updatedAt : typeof latestNote?.savedAt === "number" ? latestNote.savedAt : Date.now();
+
+         return {
+            project,
+            latestNote,
+            title,
+            body,
+            updatedAt,
+         };
+      })
+      .filter((record) => {
+         if (!record.title && !record.body) {
+            return false;
+         }
+
+         return !isDeletedProjectLike({
+            workflowId: record.project.workflowId,
+            originBoardItemId: record.project.originBoardItemId,
+            title: record.title,
+            summary: record.body || record.project.latestSummary,
+         });
+      });
+}
+
+function getMatchingProjectLibraryRecordForContext(input: { title?: string; workflowId?: string; originBoardItemId?: string }) {
+   const titleKey = getCanonicalProjectKey(input.title);
+
+   const records = getSourceAwareProjectLibraryRecords();
+
+   return (
+      records.find((record) => {
+         const project = record.project;
+
+         if (input.workflowId && (project.workflowId === input.workflowId || project.originBoardItemId === input.workflowId || project.id === input.workflowId || project.id === `workflow:${input.workflowId}`)) {
+            return true;
+         }
+
+         if (input.originBoardItemId && (project.originBoardItemId === input.originBoardItemId || project.workflowId === input.originBoardItemId || project.id === input.originBoardItemId || project.id === `origin:${input.originBoardItemId}`)) {
+            return true;
+         }
+
+         return Boolean(titleKey && getCanonicalProjectKey(record.title) === titleKey);
+      }) || null
+   );
+}
+
+function getEmptyParsedProjectDocument(): ParsedProjectDocument {
+   return parseProjectDocument("");
+}
+
+function getProjectDocumentRecommendation(parsedDocument: ParsedProjectDocument, fallback: string) {
+   return sanitizeMemoryEngineRecommendation(parsedDocument.immediateNextStep || parsedDocument.buildOrder[0] || fallback);
+}
+
 function getSourceAwareCanvasCandidate(): SourceAwareActiveProject | null {
    const canvas = readObjectStorageSafe<{
       title?: string;
@@ -2832,6 +2987,16 @@ function getSourceAwareCanvasCandidate(): SourceAwareActiveProject | null {
 
    const updatedAt = typeof canvas.updatedAt === "number" ? canvas.updatedAt : Date.now();
 
+   const matchingProject = getMatchingProjectLibraryRecordForContext({
+      title,
+      workflowId: canvas.workflowId,
+      originBoardItemId: canvas.originBoardItemId,
+   });
+
+   const projectBody = sanitizeMemoryEngineText(matchingProject?.body || "", MEMORY_ENGINE_SANITIZE_LIMITS.body);
+
+   const projectDocument = parseProjectDocument(projectBody);
+
    return {
       source: "canvas",
       title: sanitizeMemoryEngineTitle(title || "Canvas work"),
@@ -2842,61 +3007,47 @@ function getSourceAwareCanvasCandidate(): SourceAwareActiveProject | null {
       lastKnownLocation: "canvas",
       currentStage: "drafting",
       status: "active",
-      recommendedNextAction: "Continue in Canvas. The latest editable version is already open there.",
+      recommendedNextAction: getProjectDocumentRecommendation(projectDocument, "Continue in Canvas. The latest editable version is already open there."),
       score: 1000 + getSourceAwareTemporalBoost(updatedAt) + (isUsefulThreadContent(body) ? 80 : 0) + (isStrongTitle(title) ? 40 : 0),
-      reason: "Canvas is the current writing surface, so it has the strongest priority.",
+      reason: "Canvas is the current writing surface, while the saved project document remains available as roadmap context.",
       updatedAt,
+      projectBody,
+      projectDocument,
+      projectUpdatedAt: matchingProject?.updatedAt || 0,
+      canvasContent: sanitizeMemoryEngineText(body, MEMORY_ENGINE_SANITIZE_LIMITS.body),
+      canvasUpdatedAt: updatedAt,
    };
 }
 
 function getSourceAwareProjectLibraryCandidates(): SourceAwareActiveProject[] {
-   const projects = readArrayStorage<any>(PROJECT_LIBRARY_STORAGE_KEY);
+   return getSourceAwareProjectLibraryRecords()
+      .map((record) => {
+         const { project, title, body, updatedAt } = record;
 
-   return projects
-      .filter((project) => project && typeof project.title === "string")
-      .map((project) => {
-         const latestNote = Array.isArray(project.notes) ? project.notes[0] : null;
+         const projectBody = sanitizeMemoryEngineText(body || title, MEMORY_ENGINE_SANITIZE_LIMITS.body);
 
-         const title = getCanonicalProjectTitle(project.title);
-
-         const body = getCleanCandidateBody(latestNote?.body, project.latestSummary, latestNote?.summary);
-
-         const updatedAt = typeof project.updatedAt === "number" ? project.updatedAt : typeof latestNote?.savedAt === "number" ? latestNote.savedAt : Date.now();
+         const projectDocument = parseProjectDocument(projectBody);
 
          return {
             source: "projects" as const,
             title: sanitizeMemoryEngineTitle(title),
-            body: sanitizeMemoryEngineText(body || title, MEMORY_ENGINE_SANITIZE_LIMITS.body),
+            body: projectBody,
             summary: sanitizeMemoryEngineSummary(truncateText(body || project.latestSummary || title, 260)),
             workflowId: sanitizeMemoryEngineId(project.workflowId),
             originBoardItemId: sanitizeMemoryEngineId(project.originBoardItemId),
             lastKnownLocation: "integrations" as const,
             currentStage: "preserved" as const,
             status: "preserved" as const,
-            recommendedNextAction: "Open this from Projects when you want to continue the saved work in Canvas.",
+            recommendedNextAction: getProjectDocumentRecommendation(projectDocument, "Open this from Projects when you want to continue the saved work in Canvas."),
             score: 850 + getSourceAwareTemporalBoost(updatedAt) + (isUsefulThreadContent(body) ? 60 : 0) + (isStrongTitle(title) ? 35 : 0),
-            reason: "Projects stores saved long-term work and should outrank old timeline noise.",
+            reason: "Projects stores the saved roadmap and long-term project context.",
             updatedAt,
+            projectBody,
+            projectDocument,
+            projectUpdatedAt: updatedAt,
          } satisfies SourceAwareActiveProject;
       })
-      .filter((candidate) => {
-         if (!candidate.title && !candidate.body) {
-            return false;
-         }
-
-         if (
-            isDeletedProjectLike({
-               workflowId: candidate.workflowId,
-               originBoardItemId: candidate.originBoardItemId,
-               title: candidate.title,
-               summary: candidate.summary,
-            })
-         ) {
-            return false;
-         }
-
-         return isStrongTitle(candidate.title) || isUsefulThreadContent(candidate.body);
-      });
+      .filter((candidate) => isStrongTitle(candidate.title) || isUsefulThreadContent(candidate.body));
 }
 
 function getProjectMaterialsForMemory() {
@@ -3086,6 +3237,103 @@ export function getSourceAwareActiveProject() {
    const threads = dedupeThreadMemoryObjects([...generatedThreads, ...existingThreads]).filter((thread) => !isDeletedProjectThread(thread));
 
    return getSourceAwareActiveProjectFromThreads(threads);
+}
+
+export function getActiveProjectAwareness(): ActiveProjectAwareness {
+   const activeProject = getSourceAwareActiveProject();
+
+   if (!activeProject) {
+      return {
+         hasActiveProject: false,
+         source: "none",
+         title: "No active project detected",
+         projectBody: "",
+         projectDocument: getEmptyParsedProjectDocument(),
+         canvasContent: "",
+         canvasUpdatedAt: 0,
+         projectUpdatedAt: 0,
+         lastKnownLocation: "unknown",
+         currentStage: "unknown",
+         status: "unknown",
+         latestMovement: "No movement detected",
+         recommendedNextAction: "Start by creating a project or drafting in Canvas so ALLEVIN can understand what you are working on.",
+         updatedAt: Date.now(),
+      };
+   }
+
+   const matchingProject =
+      getMatchingProjectLibraryRecordForContext({
+         title: activeProject.title,
+         workflowId: activeProject.workflowId,
+         originBoardItemId: activeProject.originBoardItemId,
+      }) || null;
+
+   const projectBody = sanitizeMemoryEngineText(activeProject.projectBody || matchingProject?.body || (activeProject.source === "projects" ? activeProject.body : ""), MEMORY_ENGINE_SANITIZE_LIMITS.body);
+
+   const projectDocument = activeProject.projectDocument || parseProjectDocument(projectBody);
+
+   let canvasContent = sanitizeMemoryEngineText(activeProject.canvasContent || "", MEMORY_ENGINE_SANITIZE_LIMITS.body);
+
+   let canvasUpdatedAt = activeProject.canvasUpdatedAt || 0;
+
+   const canvas = readObjectStorageSafe<{
+      title?: string;
+      sourceTitle?: string;
+      content?: string;
+      sourceContent?: string;
+      workingSummary?: string;
+      workflowId?: string;
+      originBoardItemId?: string;
+      updatedAt?: number;
+   }>(CANVAS_STORAGE_KEY);
+
+   if (canvas) {
+      const canvasTitle = getCanonicalProjectTitle(canvas.sourceTitle || canvas.title);
+
+      const activeTitleKey = getCanonicalProjectKey(activeProject.title);
+
+      const canvasTitleKey = getCanonicalProjectKey(canvasTitle);
+
+      const sameWorkflow =
+         Boolean(activeProject.workflowId && (canvas.workflowId === activeProject.workflowId || canvas.originBoardItemId === activeProject.workflowId)) ||
+         Boolean(activeProject.originBoardItemId && (canvas.originBoardItemId === activeProject.originBoardItemId || canvas.workflowId === activeProject.originBoardItemId));
+
+      const sameTitle = Boolean(activeTitleKey && canvasTitleKey && activeTitleKey === canvasTitleKey);
+
+      if (sameWorkflow || sameTitle || activeProject.source === "canvas") {
+         canvasContent = sanitizeMemoryEngineText(getCleanCandidateBody(canvas.content, canvas.sourceContent, canvas.workingSummary), MEMORY_ENGINE_SANITIZE_LIMITS.body);
+
+         canvasUpdatedAt = typeof canvas.updatedAt === "number" ? canvas.updatedAt : canvasUpdatedAt;
+      }
+   }
+
+   const recommendedNextAction = getProjectDocumentRecommendation(projectDocument, activeProject.recommendedNextAction || "Choose the next useful project action.");
+
+   return {
+      hasActiveProject: true,
+      source: activeProject.source,
+      title: activeProject.title,
+      projectBody,
+      projectDocument,
+      canvasContent,
+      canvasUpdatedAt,
+      projectUpdatedAt: activeProject.projectUpdatedAt || matchingProject?.updatedAt || 0,
+      workflowId: activeProject.workflowId,
+      originBoardItemId: activeProject.originBoardItemId,
+      lastKnownLocation: activeProject.lastKnownLocation,
+      currentStage: activeProject.currentStage,
+      status: activeProject.status,
+      latestMovement:
+         activeProject.source === "canvas"
+            ? "Canvas is current"
+            : activeProject.source === "projects"
+              ? "Saved project context is current"
+              : activeProject.source === "materials"
+                ? "Project materials are available"
+                : "Source-aware project context selected",
+      recommendedNextAction,
+      updatedAt: Math.max(activeProject.updatedAt || 0, canvasUpdatedAt || 0, activeProject.projectUpdatedAt || matchingProject?.updatedAt || 0),
+   };
 }
 
 function buildThreadMemoryObjectFromSourceAwareCandidate(candidate: SourceAwareActiveProject, fallback?: ThreadMemoryObject): ThreadMemoryObject {

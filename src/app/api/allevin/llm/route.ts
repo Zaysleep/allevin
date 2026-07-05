@@ -39,8 +39,23 @@ type AllevinContextPacket = {
       location?: string;
       status?: string;
       priority?: string;
+
       body?: string;
+
+      // MK VII Project Awareness
+      currentState?: string;
+      goal?: string;
+      needsToAdd?: string;
+      immediateNextStep?: string;
+      buildOrder?: string[];
+      completionCriteria?: string[];
+      constraints?: string[];
+      implementationPreferences?: string[];
+
       canvasContent?: string;
+      canvasUpdatedAt?: number;
+      projectUpdatedAt?: number;
+
       latestProjectNote?: string;
       recommendedNextAction?: string;
    };
@@ -57,6 +72,12 @@ type AllevinContextPacket = {
       titles?: string[];
       summaries?: string[];
       usefulSignals?: string[];
+
+      // MK VII Project Awareness
+      selectedMaterialInsights?: string[];
+      selectedMaterialNextSteps?: string[];
+      recentMaterialInsights?: string[];
+      recentMaterialNextSteps?: string[];
    };
 
    calendar?: {
@@ -242,6 +263,10 @@ function clampRouteConfidence(value: unknown, fallback = 72) {
    return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : fallback;
 }
 
+function sanitizeRouteTimestamp(value?: number) {
+   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinContextPacket | undefined {
    if (!contextPacket) {
       return undefined;
@@ -260,8 +285,22 @@ function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinCon
          location: sanitizeRouteSmallText(contextPacket.currentProject?.location),
          status: sanitizeRouteSmallText(contextPacket.currentProject?.status),
          priority: sanitizeRouteSmallText(contextPacket.currentProject?.priority),
+
          body: sanitizeRouteBody(contextPacket.currentProject?.body),
+
+         currentState: sanitizeRouteSummary(contextPacket.currentProject?.currentState),
+         goal: sanitizeRouteSummary(contextPacket.currentProject?.goal),
+         needsToAdd: sanitizeRouteSummary(contextPacket.currentProject?.needsToAdd),
+         immediateNextStep: sanitizeRouteNextStep(contextPacket.currentProject?.immediateNextStep),
+         buildOrder: sanitizeRouteStringArray(contextPacket.currentProject?.buildOrder, 20, ROUTE_SANITIZE_LIMITS.material),
+         completionCriteria: sanitizeRouteStringArray(contextPacket.currentProject?.completionCriteria, 20, ROUTE_SANITIZE_LIMITS.material),
+         constraints: sanitizeRouteStringArray(contextPacket.currentProject?.constraints, 20, ROUTE_SANITIZE_LIMITS.material),
+         implementationPreferences: sanitizeRouteStringArray(contextPacket.currentProject?.implementationPreferences, 20, ROUTE_SANITIZE_LIMITS.material),
+
          canvasContent: sanitizeRouteBody(contextPacket.currentProject?.canvasContent),
+         canvasUpdatedAt: sanitizeRouteTimestamp(contextPacket.currentProject?.canvasUpdatedAt),
+         projectUpdatedAt: sanitizeRouteTimestamp(contextPacket.currentProject?.projectUpdatedAt),
+
          latestProjectNote: sanitizeRouteSummary(contextPacket.currentProject?.latestProjectNote),
          recommendedNextAction: sanitizeRouteNextStep(contextPacket.currentProject?.recommendedNextAction),
       },
@@ -276,6 +315,11 @@ function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinCon
          titles: sanitizeRouteStringArray(contextPacket.projectMaterials?.titles, 20, ROUTE_SANITIZE_LIMITS.title),
          summaries: sanitizeRouteStringArray(contextPacket.projectMaterials?.summaries, 12, ROUTE_SANITIZE_LIMITS.material),
          usefulSignals: sanitizeRouteStringArray(contextPacket.projectMaterials?.usefulSignals, 12, ROUTE_SANITIZE_LIMITS.material),
+
+         selectedMaterialInsights: sanitizeRouteStringArray(contextPacket.projectMaterials?.selectedMaterialInsights, 12, ROUTE_SANITIZE_LIMITS.material),
+         selectedMaterialNextSteps: sanitizeRouteStringArray(contextPacket.projectMaterials?.selectedMaterialNextSteps, 12, ROUTE_SANITIZE_LIMITS.nextStep),
+         recentMaterialInsights: sanitizeRouteStringArray(contextPacket.projectMaterials?.recentMaterialInsights, 12, ROUTE_SANITIZE_LIMITS.material),
+         recentMaterialNextSteps: sanitizeRouteStringArray(contextPacket.projectMaterials?.recentMaterialNextSteps, 12, ROUTE_SANITIZE_LIMITS.nextStep),
       },
       calendar: {
          hasUpcomingEvents: contextPacket.calendar?.hasUpcomingEvents === true,
@@ -356,12 +400,12 @@ function stringifyContextPacket(contextPacket?: AllevinContextPacket) {
    const safeContextPacket = sanitizeContextPacket(contextPacket);
 
    if (!safeContextPacket) {
-      return "No MK VI context packet provided.";
+      return "No MK VII context packet provided.";
    }
 
    return JSON.stringify(
       {
-         version: safeContextPacket.version || "MK VI",
+         version: safeContextPacket.version || "MK VII",
          userIntent: safeContextPacket.userIntent || {},
          currentProject: safeContextPacket.currentProject || {},
          projects: safeContextPacket.projects || {},
@@ -388,7 +432,19 @@ function getContextLocation(request: AllevinLLMRequestWithContext) {
 }
 
 function getContextNextAction(request: AllevinLLMRequestWithContext) {
-   return cleanText(request.contextPacket?.currentProject?.recommendedNextAction || request.nextStep || "Choose the next useful move.");
+   const currentProject = request.contextPacket?.currentProject;
+
+   const projectMaterials = request.contextPacket?.projectMaterials;
+
+   return cleanText(
+      currentProject?.immediateNextStep ||
+         projectMaterials?.selectedMaterialNextSteps?.[0] ||
+         currentProject?.buildOrder?.[0] ||
+         projectMaterials?.recentMaterialNextSteps?.[0] ||
+         currentProject?.recommendedNextAction ||
+         request.nextStep ||
+         "Choose the next useful move.",
+   );
 }
 
 function stringifyMaterialInterpretation(material?: MaterialInterpretationPayload) {
@@ -562,7 +618,9 @@ function buildFallbackResponse(request: AllevinLLMRequestWithContext, error?: st
 
    const title = sanitizeRouteTitle(getContextProjectTitle(safeRequest));
 
-   const focus = sanitizeRouteSummary(safeRequest.focus || focusFromRaw || safeRequest.contextPacket?.currentProject?.body || raw || "Review the current project content.");
+   const focus = sanitizeRouteSummary(
+      safeRequest.focus || focusFromRaw || safeRequest.contextPacket?.currentProject?.currentState || safeRequest.contextPacket?.currentProject?.goal || safeRequest.contextPacket?.currentProject?.body || raw || "Review the current project content.",
+   );
 
    const usefulContext =
       sanitizeRouteSummary(safeRequest.usefulContext || contextFromRaw) ||
@@ -571,13 +629,22 @@ function buildFallbackResponse(request: AllevinLLMRequestWithContext, error?: st
          `Project type: ${getContextProjectType(safeRequest)}`,
          `Location: ${getContextLocation(safeRequest)}`,
          safeRequest.priority ? `Priority: ${safeRequest.priority}` : "",
+         safeRequest.contextPacket?.currentProject?.goal ? `Goal: ${safeRequest.contextPacket.currentProject.goal}` : "",
+         safeRequest.contextPacket?.currentProject?.needsToAdd ? `Remaining work: ${safeRequest.contextPacket.currentProject.needsToAdd}` : "",
+         safeRequest.contextPacket?.currentProject?.buildOrder?.length ? `Build order: ${safeRequest.contextPacket.currentProject.buildOrder.join(" | ")}` : "",
+         safeRequest.contextPacket?.projectMaterials?.selectedMaterialInsights?.length ? `Selected material insight: ${safeRequest.contextPacket.projectMaterials.selectedMaterialInsights.join(" | ")}` : "",
          safeRequest.contextPacket?.cognition?.label ? `Cognition: ${safeRequest.contextPacket.cognition.label}` : "",
          safeRequest.contextPacket?.calendar?.nextEventSummary ? `Next calendar item: ${safeRequest.contextPacket.calendar.nextEventSummary}` : "",
       ]
          .filter(Boolean)
          .join("\n");
 
-   const nextStep = sanitizeRouteNextStep(safeRequest.nextStep || nextStepFromRaw || safeRequest.contextPacket?.currentProject?.recommendedNextAction || "Review the current work and choose the next useful move.");
+   const nextStep = sanitizeRouteNextStep(
+      getContextNextAction({
+         ...safeRequest,
+         nextStep: safeRequest.nextStep || nextStepFromRaw,
+      }),
+   );
 
    return {
       ok: !error,
@@ -615,7 +682,7 @@ function getModeInstruction(mode: AllevinLLMMode | undefined) {
       case "calendar-to-task":
          return "Turn calendar or event context into one clear scheduling/task suggestion.";
       case "aidock-guidance":
-         return "Respond as ALLEVIN in a natural, lightly witty, project-aware way using the MK VI context packet.";
+         return "Respond as ALLEVIN in a natural, lightly witty, project-aware way using the MK VII context packet.";
       case "general-knowledge":
          return "Answer the general question clearly while keeping ALLEVIN's calm, useful tone. Do not invent live or current information.";
       case "tool-guidance":
@@ -628,27 +695,39 @@ function getModeInstruction(mode: AllevinLLMMode | undefined) {
 function getProjectSpecificToneGuide(request: AllevinLLMRequestWithContext) {
    const projectType = getContextProjectType(request).toLowerCase();
 
+   const hasExplicitProjectContext = Boolean(
+      request.contextPacket?.currentProject?.currentState ||
+      request.contextPacket?.currentProject?.goal ||
+      request.contextPacket?.currentProject?.immediateNextStep ||
+      request.contextPacket?.currentProject?.buildOrder?.length ||
+      request.contextPacket?.currentProject?.canvasContent,
+   );
+
+   const baseRule = "Project type is a descriptive hint only. Explicit project state, goal, Canvas content, selected material insight, and saved roadmap always outrank type-based language.";
+
    if (projectType.includes("creative writing")) {
-      return "For creative writing projects, use story-aware language: characters, tone, conflict, pilot, scene, arc, or writing block. Avoid generic productivity language. Avoid Miami/neon/crime-drama styling unless the user specifically asks for that tone.";
+      return `${baseRule} When the explicit project context is genuinely creative writing, use story-aware language only when it is supported by the project itself. Do not invent characters, scenes, arcs, pilots, or relationships.`;
    }
 
    if (projectType.includes("home organization")) {
-      return "For home organization projects, keep guidance physical and simple: one shelf, one area, remove, group, reset, maintain. Avoid over-systemizing.";
+      return `${baseRule} When the explicit project context is genuinely home organization, keep guidance physical and simple, but do not invent shelves, bins, rooms, or cleanup tasks that are not in the project context.`;
    }
 
    if (projectType.includes("career")) {
-      return "For career projects, focus on roles, evidence, resume, portfolio proof, and interview examples.";
+      return `${baseRule} For career projects, focus on the specific roles, evidence, resume, portfolio proof, or interview work named in the project context.`;
    }
 
    if (projectType.includes("development") || projectType.includes("it")) {
-      return "For technical projects, focus on expected behavior, edge cases, implementation step, and test/checklist.";
+      return `${baseRule} For technical projects, use the actual implementation goal, current state, build order, constraints, and tests supplied in context.`;
    }
 
    if (projectType.includes("research")) {
-      return "For research projects, focus on question, sources, main claim, outline, and next source.";
+      return `${baseRule} For research projects, use the actual question, sources, evidence, outline, or next source supplied in context.`;
    }
 
-   return "For general projects, keep the next move specific and reduce ambiguity.";
+   return hasExplicitProjectContext
+      ? `${baseRule} Keep the answer specific to the explicit project context and do not fill gaps with themed examples.`
+      : `${baseRule} For general projects, keep the next move specific and reduce ambiguity without inventing domain details.`;
 }
 
 function buildPrompt(request: AllevinLLMRequestWithContext) {
@@ -656,7 +735,7 @@ function buildPrompt(request: AllevinLLMRequestWithContext) {
    const materialInterpretationText = stringifyMaterialInterpretation(request.materialInterpretation);
 
    return `
-You are ALLEVIN MK VI — Internal Project Guidance Layer.
+You are ALLEVIN MK VII — Internal Project Guidance Layer.
 
 Identity:
 - ALLEVIN is a calm, useful, lightly witty project assistant inside a personal workspace.
@@ -681,14 +760,31 @@ Hard rules:
 - Do not use project-flavor hype words like "neon", "sizzle", "waves", "chaos", "vibrant", "thrill", "gritty", "dive", "magic", or "pedal to the metal" unless the user explicitly asks for that style.
 - Prefer calm precision over hype.
 - Keep wit subtle: one quiet, useful line is enough.
-- Use the MK VI context packet as the source of truth.
+- Use the MK VII context packet as the source of truth.
 - currentProject is the active project and must dominate the answer.
+- Project type is a descriptive hint only. Never let type-based wording override explicit project content.
+- The saved project document is the roadmap source for goals, constraints, planned order, and explicit next steps.
+- Canvas is the freshest working-state source when it contains newer or more specific progress.
+- If Canvas clearly says an older roadmap step is complete, do not repeat that old step.
+- Selected material insight outranks unselected or merely recent material insight.
+- Memory stage and latest movement explain workflow state; they do not override explicit project strategy.
+- Do not invent project-specific nouns, objects, people, scenes, features, tasks, or relationships that are not supported by the supplied context.
 - projectMaterials contains notes, documents, images, research, feedback, or references connected to the project. Use them when the user asks for references, materials, documents, notes, structure, or guidance.
 - projects.titles is background only. Do not borrow tone, objects, or actions from other saved projects.
 - If a current project exists, reference its type, location, status, materials if relevant, and recommended next action.
 - If currentProject.type is creative writing, do not use home organization language like clean house, pantry, shelf, declutter, reset, bins, labels, or shopping.
 - If currentProject.type is home organization, do not use creative writing language like characters, pilot, scene, arc, main duo, or conflict unless the user's project actually contains those words.
 - Return ONLY valid JSON.
+
+Project reasoning priority:
+1. Read current Canvas as the freshest description of active work.
+2. Read the saved project document for roadmap, goals, constraints, completion criteria, and planned order.
+3. Use selected material insights as high-priority supporting evidence.
+4. Use recent same-project material insights as secondary evidence.
+5. Use immediateNextStep when it is still current.
+6. If Canvas clearly shows the immediate step is complete or superseded, recommend the next unfinished item from buildOrder or the next specific action supported by Canvas.
+7. Use memory stage/status only as workflow context.
+8. Use project type only for vocabulary shaping after the recommendation is already grounded.
 
 Tone:
 - Calm, useful, lightly witty, project-aware.
@@ -709,7 +805,7 @@ ${getModeInstruction(request.mode)}
 Project-specific tone guide:
 ${getProjectSpecificToneGuide(request)}
 
-MK VI Context Packet:
+MK VII Context Packet:
 ${limitText(contextPacketText, 5000)}
 
 Selected material payload, when provided:
@@ -758,25 +854,19 @@ Return a JSON object where:
 
 Quality bar:
 Bad nextStep examples:
-- "Keep writing in Canvas."
-- "Continue refining your draft."
-- "Schedule some writing sessions."
-- "Brainstorm your ideas."
+- "Keep working on the project."
+- "Continue refining."
+- "Brainstorm more."
+- "Review your materials."
 
-Good nextStep examples for a creative writing project:
-For non-schedule questions:
-- "Define the main duo and write one sentence about their dynamic."
-- "Choose the pilot's first conflict before outlining the season."
-- "Write three tone words and one scene that proves the tone."
-
-For schedule questions only:
-- "Schedule 45 minutes to define the main duo and draft one sentence about their dynamic."
-- "Schedule 60 minutes to outline the pilot's first conflict and the scene that introduces it."
-
-Good nextStep examples for a home organization project:
-- "Pick one shelf, remove expired items, and stop there."
-- "Group what remains before buying bins or labels."
-- "Choose the first section and give it a 30-minute reset block."
+Better reasoning patterns:
+- Use the explicit project next step when Canvas does not show it as complete.
+- If Canvas shows the planned step is already complete, recommend the next unfinished build-order item.
+- When selected feedback or research changes the recommendation, name the specific issue it changes and the project action affected by it.
+- For implementation questions, use the supplied stack, constraints, and implementation preferences.
+- For project-overview questions, explain the goal and current state rather than reciting workflow location.
+- For priority questions, connect the current goal to one concrete next action.
+- Never copy domain-flavored examples into a project unless the project context itself supports that language.
    `.trim();
 }
 

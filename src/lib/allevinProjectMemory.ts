@@ -114,6 +114,18 @@ export interface ProjectContextSections {
    nextStep: string;
 }
 
+export interface ParsedProjectDocument {
+   projectType: string;
+   currentState: string;
+   goal: string;
+   needsToAdd: string;
+   immediateNextStep: string;
+   buildOrder: string[];
+   completionCriteria: string[];
+   constraints: string[];
+   implementationPreferences: string[];
+}
+
 interface ProjectSignalProfile {
    projectType: "project" | "draft" | "task" | "research" | "calendar" | "material" | "planning" | "general";
    intent: string;
@@ -392,6 +404,175 @@ function getSectionAfterLabel(text: string, label: string) {
    return cleanText(match?.[1]);
 }
 
+const PROJECT_DOCUMENT_SECTION_ALIASES = {
+   projectType: ["Project Type", "Type"],
+   currentState: ["Current State", "Current Status", "Status"],
+   goal: ["Goal", "Project Goal", "Primary Goal", "Main Goal", "MK II Goal", "MK III Goal", "MK IV Goal", "MK V Goal", "MK VI Goal", "MK VII Goal"],
+   needsToAdd: ["What I Need to Add", "What Needs Attention", "Needs To Add", "Remaining Work", "Still Needed"],
+   immediateNextStep: ["Next Immediate Step", "Immediate Next Step", "Next Step", "Next Action"],
+   buildOrder: ["Recommended Build Order", "Build Order", "Roadmap", "Steps"],
+   completionCriteria: ["Completion Criteria", "Success Criteria", "What Success Looks Like", "Definition of Done"],
+   constraints: ["Constraints", "Important Design Rules", "Design Rules", "Development Rules", "Important Rules"],
+   implementationPreferences: ["Preferred Implementation", "Preferred Implementation Style", "Implementation Preferences", "Development Preferences", "Build Preferences"],
+} as const;
+
+function normalizeProjectDocumentHeading(value?: string) {
+   return compactText(value)
+      .replace(/^\d+[.)]\s*/, "")
+      .replace(/^[-*•]\s*/, "")
+      .replace(/:$/, "")
+      .toLowerCase();
+}
+
+function getProjectDocumentHeadingLookup() {
+   const lookup = new Map<string, keyof ParsedProjectDocument>();
+
+   Object.entries(PROJECT_DOCUMENT_SECTION_ALIASES).forEach(([key, aliases]) => {
+      aliases.forEach((alias) => {
+         lookup.set(normalizeProjectDocumentHeading(alias), key as keyof ParsedProjectDocument);
+      });
+   });
+
+   return lookup;
+}
+
+function cleanProjectDocumentListItem(value?: string) {
+   return cleanText(value)
+      .replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "")
+      .trim();
+}
+
+function splitProjectDocumentList(value?: string) {
+   const lines = cleanText(value)
+      .split("\n")
+      .map((line) => cleanProjectDocumentListItem(line))
+      .filter(Boolean);
+
+   if (lines.length > 1) {
+      return lines;
+   }
+
+   const singleLine = lines[0] || "";
+
+   if (!singleLine) {
+      return [];
+   }
+
+   const semicolonParts = singleLine
+      .split(/\s*;\s*/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+   return semicolonParts.length > 1 ? semicolonParts : [singleLine];
+}
+
+export function parseProjectDocument(value?: string): ParsedProjectDocument {
+   const text = cleanText(value);
+
+   const empty: ParsedProjectDocument = {
+      projectType: "",
+      currentState: "",
+      goal: "",
+      needsToAdd: "",
+      immediateNextStep: "",
+      buildOrder: [],
+      completionCriteria: [],
+      constraints: [],
+      implementationPreferences: [],
+   };
+
+   if (!text) {
+      return empty;
+   }
+
+   const headingLookup = getProjectDocumentHeadingLookup();
+
+   const collected: Record<keyof ParsedProjectDocument, string[]> = {
+      projectType: [],
+      currentState: [],
+      goal: [],
+      needsToAdd: [],
+      immediateNextStep: [],
+      buildOrder: [],
+      completionCriteria: [],
+      constraints: [],
+      implementationPreferences: [],
+   };
+
+   let activeKey: keyof ParsedProjectDocument | null = null;
+
+   for (const rawLine of text.split("\n")) {
+      const line = rawLine.trim();
+
+      if (!line) {
+         if (activeKey && collected[activeKey].length) {
+            collected[activeKey].push("");
+         }
+
+         continue;
+      }
+
+      const inlineHeadingMatch = line.match(/^([^:]{2,80}):\s*(.*)$/);
+
+      if (inlineHeadingMatch) {
+         const headingKey = headingLookup.get(normalizeProjectDocumentHeading(inlineHeadingMatch[1]));
+
+         if (headingKey) {
+            activeKey = headingKey;
+
+            const inlineValue = cleanText(inlineHeadingMatch[2]);
+
+            if (inlineValue) {
+               collected[headingKey].push(inlineValue);
+            }
+
+            continue;
+         }
+      }
+
+      const directHeadingKey = headingLookup.get(normalizeProjectDocumentHeading(line));
+
+      if (directHeadingKey) {
+         activeKey = directHeadingKey;
+
+         continue;
+      }
+
+      if (activeKey) {
+         collected[activeKey].push(line);
+      }
+   }
+
+   const joinSection = (key: keyof ParsedProjectDocument) => cleanText(collected[key].join("\n").replace(/\n{3,}/g, "\n\n"));
+
+   return {
+      projectType: joinSection("projectType"),
+      currentState: joinSection("currentState"),
+      goal: joinSection("goal"),
+      needsToAdd: joinSection("needsToAdd"),
+      immediateNextStep: joinSection("immediateNextStep"),
+      buildOrder: splitProjectDocumentList(joinSection("buildOrder")),
+      completionCriteria: splitProjectDocumentList(joinSection("completionCriteria")),
+      constraints: splitProjectDocumentList(joinSection("constraints")),
+      implementationPreferences: splitProjectDocumentList(joinSection("implementationPreferences")),
+   };
+}
+
+function getProjectDocumentForParsing(input: ProjectMemoryInput) {
+   const candidates = [input.sourceContent, input.body, input.workingSummary]
+      .map((value) => cleanText(value))
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+
+   return candidates[0] || "";
+}
+
+function getExplicitProjectNextStep(input: ProjectMemoryInput) {
+   const parsed = parseProjectDocument(getProjectDocumentForParsing(input));
+
+   return sanitizeProjectMemoryNextAction(parsed.immediateNextStep);
+}
+
 function stripStructuredLabels(value?: string) {
    const text = cleanText(value);
    if (!text) return "";
@@ -475,6 +656,12 @@ export function getDefaultNextAction(stage?: AllevinProjectStage, destination?: 
 }
 
 function buildSmarterNextStep(input: ProjectMemoryInput, profile: ProjectSignalProfile, stage: AllevinProjectStage, destination: AllevinDestination) {
+   const explicitProjectNextStep = getExplicitProjectNextStep(input);
+
+   if (explicitProjectNextStep) {
+      return explicitProjectNextStep;
+   }
+
    const cleanRecommendedNextAction = sanitizeProjectMemoryNextAction(input.recommendedNextAction);
 
    if (cleanRecommendedNextAction) {
