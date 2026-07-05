@@ -17,7 +17,7 @@ import { rememberDeletedProjectMemorySignal } from "@/components/MemoryEngine";
 // ========================================
 // ALLEVIN Projects Workspace
 // Purpose:
-// MK VI project home base.
+// MK VII project home base.
 // Projects keeps each project organized with schedule planning and materials.
 // Canvas remains the active workbench where project updates are written and shaped.
 // ========================================
@@ -51,7 +51,7 @@ const PROJECT_MATERIAL_STORAGE_SAFE_LIMIT = 4500000;
 const APPROVED_INTERNAL_INTEGRATION_HANDLED_KEY = "allevin-approved-internal-integration-handled";
 
 // ========================================
-// MK VI — Projects Sanitization Parameters
+// MK VII — Projects Sanitization Parameters
 // Projects should preserve saved work, but every stored/displayed field is untrusted.
 // ========================================
 
@@ -3961,49 +3961,25 @@ ${currentBody}`
             duration: 0.35,
          }}
          className="
-            rounded-[24px]
-            border
-            border-[var(--border-subtle)]
-            bg-[var(--color-surface)]
-            p-4
-            shadow-[var(--shadow-soft)]
-            sm:p-5
-            lg:rounded-[32px]
-            lg:p-6
+            min-w-0
+            bg-transparent
+            pb-8
          "
       >
-         <div className="mb-5 flex flex-col gap-4 lg:mb-6 xl:flex-row xl:items-center xl:justify-between">
+         <div className="mb-6 flex flex-col gap-5 border-b border-[var(--border-subtle)] pb-5 xl:flex-row xl:items-end xl:justify-between">
             <div>
-               <h2 className="text-2xl sm:text-3xl">Projects</h2>
+               <p className="studio-eyebrow">Projects</p>
 
-               <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">Projects is the home base for each project. Canvas is where the work is written and updated; Projects keeps the schedule and materials easy to find.</p>
+               <h2 data-editorial-title="true" className="mt-2 text-4xl leading-tight sm:text-5xl">
+                  Your project library.
+               </h2>
             </div>
 
-            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:flex xl:w-auto xl:flex-wrap xl:items-center xl:gap-3">
-               {notice && <div className="w-full rounded-2xl bg-[var(--color-bg)] px-4 py-3 text-center text-sm font-medium text-[var(--color-text-secondary)] xl:w-auto">{notice}</div>}
+            <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center xl:w-auto">
+               {notice && <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-blue)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">{notice}</div>}
 
-               <button
-                  onClick={() => setManualBuilderOpen((current) => !current)}
-                  className="
-                     flex
-                     w-full
-                     items-center
-                     justify-center
-                     gap-2
-                     rounded-2xl
-                     border
-                     xl:w-auto
-                     border-[var(--border-subtle)]
-                     bg-white
-                     px-5
-                     py-3
-                     text-sm
-                     font-medium
-                     transition-colors
-                     hover:bg-[var(--color-bg)]
-                  "
-               >
-                  <ChevronDown size={16} className={`transition-transform ${manualBuilderOpen ? "rotate-180" : ""}`} />
+               <button onClick={() => setManualBuilderOpen((current) => !current)} className="studio-button-secondary w-full justify-center sm:w-auto">
+                  <ChevronDown size={16} strokeWidth={1.7} className={`transition-transform ${manualBuilderOpen ? "rotate-180" : ""}`} />
                   Add Project
                </button>
             </div>
@@ -4029,18 +4005,13 @@ ${currentBody}`
                   }}
                   className="mb-5 overflow-hidden lg:mb-6"
                >
-                  <div className="rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
-                     <p className="font-medium">Add Project</p>
+                  <div className="studio-paper p-4 sm:p-6">
+                     <p className="text-lg font-semibold">Add Project</p>
 
-                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Create the home base for a project. Add the goal here, then continue in Canvas when you are ready to work.</p>
-
-                     <div className="mt-4 rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
+                     <div className="mt-4 border-y border-[var(--border-subtle)] py-4">
                         <p className="text-sm font-medium">Structure starter</p>
 
-                        <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
-                           Choose the kind of start you need. Shape your project helps turn a rough idea into a clear project. Plan the steps helps break a known goal into smaller actions. Notes and research gives you a place to collect information before
-                           deciding what to do next.
-                        </p>
+                        <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Choose a starting structure only when the project needs one.</p>
 
                         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
                            <select
@@ -4092,10 +4063,10 @@ ${currentBody}`
             )}
          </AnimatePresence>
 
-         <div className="mb-6 rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-[28px]">
+         <div className="mb-6 min-w-0">
             {projectLibrary.length > 0 ? (
-               <div className="grid grid-cols-1 gap-5 lg:grid-cols-12 lg:gap-6">
-                  <div className="lg:col-span-4">
+               <div className="grid grid-cols-1 gap-6 xl:grid-cols-12 xl:gap-7">
+                  <div className="xl:col-span-4">
                      <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                            <p className="text-sm font-medium">Saved Projects</p>
@@ -4107,7 +4078,7 @@ ${currentBody}`
                         </div>
                      </div>
 
-                     <div className="max-h-none space-y-3 lg:max-h-[680px] lg:overflow-y-auto lg:pr-1">
+                     <div className="max-h-none divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] xl:max-h-[760px] xl:overflow-y-auto xl:pr-1">
                         {projectLibrary.map((project, index) => {
                            const selected = selectedProjectId ? selectedProjectId === project.id : projectLibrary[0]?.id === project.id;
 
@@ -4120,28 +4091,24 @@ ${currentBody}`
                                     relative
                                     w-full
                                     overflow-hidden
-                                    rounded-[22px]
-                                    border
-                                    px-4
-                                    py-3
-                                    sm:py-4
+                                    border-0
+                                    px-3
+                                    py-4
                                     text-left
-                                    transition-all
+                                    transition-colors
+                                    sm:px-4
+                                    sm:py-5
 
-                                    ${selected ? "border-[var(--color-primary)] bg-[var(--color-bg)] shadow-[var(--shadow-soft)]" : "border-[var(--border-subtle)] bg-white hover:border-[var(--color-primary)] hover:bg-[var(--color-bg)]"}
+                                    ${selected ? "bg-[var(--color-surface-blue)]" : "bg-transparent hover:bg-[rgba(255,255,255,0.52)]"}
                                  `}
                               >
-                                 {selected && <div className="absolute left-0 top-0 h-full w-1 bg-[var(--color-primary)]" />}
+                                 {selected && <div className="absolute left-0 top-0 h-full w-0.5 bg-[var(--color-primary)]" />}
 
                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                     <div className="min-w-0 flex-1">
-                                       <div className="flex min-w-0 flex-wrap items-start gap-2">
-                                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${selected ? "bg-[var(--color-primary)] text-[var(--color-cream)]" : "bg-[var(--color-bg)] text-[var(--color-text-secondary)]"}`}>
-                                             {selected ? "Current" : `Project ${index + 1}`}
-                                          </span>
-                                       </div>
+                                       {selected && <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Current</p>}
 
-                                       <p className="mt-3 truncate text-base font-semibold">{project.title}</p>
+                                       <p className={`${selected ? "mt-2" : ""} truncate text-base font-semibold`}>{project.title}</p>
                                     </div>
 
                                     <ChevronDown size={16} className={`mt-1 shrink-0 text-[var(--color-text-secondary)] transition-transform ${selected ? "-rotate-90 text-[var(--color-primary)]" : "opacity-50 group-hover:opacity-100"}`} />
@@ -4160,7 +4127,7 @@ ${currentBody}`
                      </div>
                   </div>
 
-                  <div className="lg:col-span-8">
+                  <div className="xl:col-span-8">
                      {(() => {
                         if (!activeProject) {
                            return null;
@@ -4179,25 +4146,27 @@ ${currentBody}`
                         const hasMoreProjectDetail = projectDetailSections.length > 4 || compactText(activeProject.latestSummary).length > 700;
 
                         return (
-                           <div className="min-w-0 rounded-[24px] border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4 sm:p-5 xl:rounded-[28px] xl:p-6">
+                           <div className="studio-paper min-w-0 p-4 sm:p-6 xl:p-8">
                               <div className="mb-5 flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-5 xl:flex-row xl:items-start xl:justify-between">
                                  <div className="min-w-0 flex-1">
-                                    <div className="mb-3 flex flex-wrap items-center gap-2">
-                                       <span className="rounded-full bg-[var(--color-primary)] px-3 py-1 text-xs font-medium text-[var(--color-cream)]">Current Project</span>
+                                    <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--color-text-secondary)]">
+                                       <span className="font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Current Project</span>
 
-                                       <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)]">{projectDetailProfile.label}</span>
+                                       <span>{projectDetailProfile.label}</span>
 
-                                       <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)]">Updated {getReadableProjectDate(activeProject.updatedAt)}</span>
+                                       <span>Updated {getReadableProjectDate(activeProject.updatedAt)}</span>
                                     </div>
 
-                                    <h3 className="break-words text-xl leading-tight sm:text-2xl">{activeProject.title}</h3>
+                                    <h3 data-editorial-title="true" className="break-words text-3xl leading-tight sm:text-4xl">
+                                       {activeProject.title}
+                                    </h3>
 
-                                    <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                                    <div className="mt-5 grid grid-cols-1 border-y border-[var(--border-subtle)] md:grid-cols-2">
                                        {visibleProjectDetailSections.map((section) => (
-                                          <div key={`${activeProject.id}-${section.title}`} className="rounded-2xl border border-[var(--border-subtle)] bg-white p-4">
-                                             <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">{section.title}</p>
+                                          <div key={`${activeProject.id}-${section.title}`} className="border-b border-[var(--border-subtle)] p-4 md:[&:nth-child(odd)]:border-r">
+                                             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">{section.title}</p>
 
-                                             <p className="mt-2 break-words text-sm leading-7 text-[var(--color-text-secondary)]">{getProjectDetailPreview(section, expanded)}</p>
+                                             <p className="mt-2 break-words text-sm leading-7 text-[var(--color-text-primary)]">{getProjectDetailPreview(section, expanded)}</p>
                                           </div>
                                        ))}
                                     </div>
@@ -4210,34 +4179,31 @@ ${currentBody}`
                                  </div>
 
                                  <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:w-[240px] xl:min-w-[240px] xl:shrink-0 xl:grid-cols-1">
-                                    <button onClick={() => continueProjectInCanvas(activeProject)} className="rounded-2xl bg-[var(--color-primary)] px-4 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
+                                    <button onClick={() => continueProjectInCanvas(activeProject)} className="studio-button-primary w-full justify-center">
                                        Continue in Canvas
                                     </button>
 
-                                    <button
-                                       onClick={() => deleteProject(activeProject)}
-                                       className="rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)]"
-                                    >
+                                    <button onClick={() => deleteProject(activeProject)} className="studio-button-secondary w-full justify-center text-[var(--color-text-secondary)]">
                                        Delete
                                     </button>
                                  </div>
                               </div>
 
-                              <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-                                 <div className="rounded-2xl bg-white p-4">
-                                    <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Schedule</p>
-                                    <p className="mt-2 text-2xl font-semibold">{activeProjectScheduledCount}</p>
+                              <div className="mb-5 grid grid-cols-1 border-y border-[var(--border-subtle)] md:grid-cols-2 md:divide-x md:divide-[var(--border-subtle)]">
+                                 <div className="px-1 py-4 md:px-5">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Schedule</p>
+                                    <p className="mt-2 text-xl font-semibold">{activeProjectScheduledCount}</p>
                                     <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">{activeProjectScheduledTaskLabel}</p>
                                  </div>
 
-                                 <div className="rounded-2xl bg-white p-4">
-                                    <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Materials</p>
-                                    <p className="mt-2 text-2xl font-semibold">{activeProjectMaterials.length}</p>
+                                 <div className="px-1 py-4 md:px-5">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Materials</p>
+                                    <p className="mt-2 text-xl font-semibold">{activeProjectMaterials.length}</p>
                                     <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">Project references</p>
                                  </div>
                               </div>
 
-                              <div className="mb-4 rounded-2xl bg-white p-4">
+                              <div className="mb-5 border-b border-[var(--border-subtle)] pb-5">
                                  <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                     <div>
                                        <div className="flex items-center gap-2">
@@ -4310,7 +4276,7 @@ ${currentBody}`
                                  </div>
                               </div>
 
-                              <div className="mb-4 rounded-2xl bg-white p-4">
+                              <div className="mb-5">
                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                     <div>
                                        <div className="flex items-center gap-2">
@@ -4322,10 +4288,7 @@ ${currentBody}`
                                        <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Keep references, feedback, notes, and documents connected to this project.</p>
                                     </div>
 
-                                    <button
-                                       onClick={() => setMaterialBuilderOpen((current) => !current)}
-                                       className="rounded-xl bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)]"
-                                    >
+                                    <button onClick={() => setMaterialBuilderOpen((current) => !current)} className="studio-button-secondary w-full justify-center sm:w-auto">
                                        {materialBuilderOpen ? "Close" : "Add Material"}
                                     </button>
                                  </div>
@@ -4481,7 +4444,7 @@ ${currentBody}`
                                  </AnimatePresence>
 
                                  {activeProjectMaterials.length > 0 && (
-                                    <div className="mt-4 rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
+                                    <div className="mt-4 border-y border-[var(--border-subtle)] py-4">
                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                           <p className="text-sm font-medium">Material view</p>
 
@@ -4504,13 +4467,13 @@ ${currentBody}`
                                     visibleProjectMaterials.length > 0 ? (
                                        <div className="mt-4 grid grid-cols-1 gap-4">
                                           {visibleProjectMaterials.map((material) => (
-                                             <div key={material.id} className="min-w-0 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
+                                             <div key={material.id} className="min-w-0 overflow-hidden border-b border-[var(--border-subtle)] bg-transparent py-5">
                                                 <div className="flex min-w-0 flex-col gap-4">
                                                    <div className="min-w-0 flex-1">
-                                                      <div className="flex min-w-0 flex-wrap items-start gap-2">
-                                                         <span className="max-w-full break-words rounded-full bg-white px-3 py-1 text-xs font-medium leading-5 text-[var(--color-text-secondary)]">{material.type}</span>
+                                                      <div className="flex min-w-0 flex-wrap items-start gap-x-4 gap-y-1 text-xs font-medium text-[var(--color-text-secondary)]">
+                                                         <span className="uppercase tracking-[0.1em]">{material.type}</span>
 
-                                                         {material.source && <span className="max-w-full break-words rounded-full bg-white px-3 py-1 text-xs font-medium leading-5 text-[var(--color-text-secondary)]">{material.source}</span>}
+                                                         {material.source && <span className="max-w-full break-words">{material.source}</span>}
                                                       </div>
 
                                                       <p className="mt-3 break-words font-medium leading-6">{material.title}</p>

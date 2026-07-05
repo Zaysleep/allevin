@@ -11,7 +11,7 @@ import { House, NotebookPen, FolderKanban, CalendarDays } from "lucide-react";
 import { useWorkspace, type WorkspaceSystemStatus } from "@/components/WorkspaceContext";
 
 // ========================================
-// ALLEVIN MK VI Sidebar
+// ALLEVIN MK VII Sidebar
 // Purpose:
 // Main navigation for the project workspace.
 // Projects hold the work, Canvas is for active writing,
@@ -45,7 +45,7 @@ interface NavItem {
 const ACTIVE_PRODUCT_MODULE_STORAGE_KEY = "allevin-active-product-module";
 
 // ========================================
-// MK VI — Sidebar Route Sanitization
+// MK VII — Sidebar Route Sanitization
 // ========================================
 
 const SIDEBAR_SANITIZE_LIMITS = {
@@ -585,16 +585,16 @@ export default function Sidebar() {
             min-h-14
             items-center
             justify-between
-
-            sm:min-h-16
-            rounded-[28px]
+            rounded-[20px]
             border
             border-[var(--border-subtle)]
-            bg-[rgba(255,255,255,0.88)]
-            px-3
+            bg-[rgba(255,253,249,0.94)]
+            px-2
             py-2
-            shadow-[var(--shadow-soft)]
+            shadow-[var(--shadow-floating)]
             backdrop-blur-xl
+
+            sm:min-h-16
 
             lg:bottom-auto
             lg:left-0
@@ -608,9 +608,9 @@ export default function Sidebar() {
             lg:border-y-0
             lg:border-l-0
             lg:border-r
-            lg:bg-[rgba(255,255,255,0.78)]
+            lg:bg-[rgba(255,253,249,0.92)]
             lg:px-3
-            lg:py-5
+            lg:py-4
             lg:shadow-none
          "
       >
@@ -628,14 +628,16 @@ export default function Sidebar() {
                shrink-0
                items-center
                justify-center
-               rounded-2xl
-               bg-white
+               rounded-[14px]
+               border
+               border-transparent
+               bg-transparent
                p-2
-               shadow-[var(--shadow-soft)]
-               transition-transform
-               hover:scale-105
+               transition-colors
+               hover:border-[var(--border-subtle)]
+               hover:bg-[var(--color-surface)]
 
-               lg:mb-5
+               lg:mb-6
                lg:flex
             "
          >
@@ -663,11 +665,13 @@ export default function Sidebar() {
                grid-cols-4
                items-center
                gap-1
+
                sm:gap-2
 
                lg:flex
                lg:flex-1
                lg:flex-col
+               lg:items-center
                lg:gap-2
                lg:overflow-y-auto
                lg:pb-2
@@ -698,16 +702,16 @@ export default function Sidebar() {
                         items-center
                         justify-center
                         gap-1
-                        rounded-2xl
+                        rounded-[14px]
                         border
                         px-2
                         py-2
                         text-[11px]
                         font-medium
-
-                        sm:min-h-14
                         transition-all
                         duration-200
+
+                        sm:min-h-14
 
                         lg:h-12
                         lg:w-12
@@ -719,46 +723,45 @@ export default function Sidebar() {
                         ${
                            isActive
                               ? `
-                                 border-transparent
-                                 bg-[var(--color-primary)]
-                                 text-[var(--color-cream)]
-                                 shadow-[var(--shadow-soft)]
+                                 border-[rgba(48,92,222,0.12)]
+                                 bg-[var(--color-surface-blue)]
+                                 text-[var(--color-primary)]
                               `
                               : `
                                  border-transparent
                                  bg-transparent
                                  text-[var(--color-text-secondary)]
                                  hover:border-[var(--border-subtle)]
-                                 hover:bg-white
+                                 hover:bg-[rgba(255,255,255,0.56)]
+                                 hover:text-[var(--color-text-primary)]
                               `
                         }
                      `}
                   >
-                     <Icon size={20} />
+                     <Icon size={20} strokeWidth={1.7} />
 
                      <span className="sr-only sm:not-sr-only sm:max-w-full sm:truncate lg:sr-only">{item.label}</span>
 
-                     <div
+                     <span
                         aria-hidden="true"
                         className={`
                            absolute
-                           -top-1
+                           bottom-0
                            left-1/2
-                           h-1.5
+                           h-0.5
                            w-6
                            -translate-x-1/2
                            rounded-full
                            bg-[var(--color-primary)]
                            transition-opacity
 
-                           lg:-right-1
-                           lg:left-auto
+                           lg:bottom-auto
+                           lg:left-0
                            lg:top-1/2
-                           lg:h-2
-                           lg:w-2
+                           lg:h-6
+                           lg:w-0.5
+                           lg:-translate-x-3
                            lg:-translate-y-1/2
-                           lg:translate-x-0
-                           lg:bg-[var(--color-cream)]
 
                            ${isActive ? "opacity-100" : "opacity-0"}
                         `}
@@ -768,20 +771,19 @@ export default function Sidebar() {
             })}
          </nav>
 
-         {/* System Status */}
+         {/* MK Version */}
 
          <div
             className="
-               mt-3
+               mt-4
                hidden
                flex-col
                items-center
                gap-2
-               rounded-2xl
-               bg-white
+               border-t
+               border-[var(--border-subtle)]
                px-2
-               py-3
-               shadow-[var(--shadow-soft)]
+               pt-4
 
                lg:flex
             "
@@ -789,8 +791,8 @@ export default function Sidebar() {
          >
             <span
                className="
-                  h-2
-                  w-2
+                  h-1.5
+                  w-1.5
                   rounded-full
                   bg-[var(--color-primary)]
                "
@@ -801,13 +803,13 @@ export default function Sidebar() {
                   rotate-180
                   [writing-mode:vertical-rl]
                   text-[10px]
-                  font-medium
+                  font-semibold
                   uppercase
-                  tracking-[0.16em]
-                  text-[var(--color-text-secondary)]
+                  tracking-[0.18em]
+                  text-[var(--color-text-tertiary)]
                "
             >
-               MK VI
+               MK VII
             </span>
          </div>
       </aside>

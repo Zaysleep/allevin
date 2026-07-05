@@ -3,7 +3,7 @@
 // Purpose:
 // Real workflow surface for notes, planning,
 // writing, and cognitive work inside ALLEVIN.
-// MK VI polish keeps Canvas clear,
+// MK VII polish keeps Canvas clear,
 // user-friendly, project-aware, and simple for
 // focused writing and saved work.
 // ========================================
@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { motion } from "framer-motion";
 
-import { FileText, Save, RotateCcw, CheckCircle2, NotebookPen, Layers, Clock3 } from "lucide-react";
+import { FileText, Save, RotateCcw, CheckCircle2, NotebookPen, Layers, Clock3, ChevronDown } from "lucide-react";
 
 import { useFocus } from "@/components/FocusContext";
 
@@ -43,7 +43,7 @@ const CANVAS_SELECTED_REFERENCES_STORAGE_KEY = "allevin-canvas-selected-referenc
 const APPROVED_INTERNAL_INTEGRATION_HANDLED_KEY = "allevin-canvas-approved-internal-integration-handled";
 
 // ========================================
-// MK VI — Canvas Sanitization Parameters
+// MK VII — Canvas Sanitization Parameters
 // Canvas should feel open, but stored/rendered text still needs guardrails.
 // ========================================
 
@@ -2247,6 +2247,8 @@ export default function AdaptiveWorkCanvas() {
 
    const [structureNotice, setStructureNotice] = useState("");
 
+   const [structureStarterOpen, setStructureStarterOpen] = useState(false);
+
    const [selectedStructureTemplateId, setSelectedStructureTemplateId] = useState<CanvasStructureTemplateId>("simple");
 
    const [selectedReferenceIds, setSelectedReferenceIds] = useState<string[]>([]);
@@ -3319,46 +3321,60 @@ ${currentContent}`
             duration: 0.35,
          }}
          className="
-            rounded-[24px]
-            border
-            border-[var(--border-subtle)]
-            bg-[var(--color-surface)]
-            p-4
-            shadow-[var(--shadow-soft)]
-            sm:p-5
-            lg:rounded-[32px]
-            lg:p-6
+            min-w-0
+            bg-transparent
+            pb-8
          "
       >
          {/* Header */}
 
-         <div className="mb-5 flex flex-col gap-4 lg:mb-6 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex items-start gap-3 sm:items-center sm:gap-4">
-               <div
+         <div
+            className="
+               mb-6
+               flex
+               flex-col
+               gap-5
+               border-b
+               border-[var(--border-subtle)]
+               pb-5
+
+               2xl:flex-row
+               2xl:items-end
+               2xl:justify-between
+            "
+         >
+            <div className="min-w-0">
+               <p className="studio-eyebrow">Canvas</p>
+
+               <h2
+                  data-editorial-title="true"
                   className="
-                     flex
-                     h-12
-                     w-12
-                     sm:h-14
-                     sm:w-14
-                     shrink-0
-                     items-center
-                     justify-center
-                     rounded-2xl
-                     bg-[var(--color-bg)]
+                     mt-2
+                     max-w-5xl
+                     text-3xl
+                     leading-tight
+
+                     sm:text-4xl
+                     xl:text-5xl
                   "
                >
-                  <FileText size={24} />
-               </div>
-
-               <div>
-                  <h2 className="text-2xl sm:text-3xl">Canvas</h2>
-
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">Start here to draft, update, or continue the selected project with notes and materials nearby.</p>
-               </div>
+                  {canvas.title || activeProjectRecord?.title || "Untitled Canvas"}
+               </h2>
             </div>
 
-            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:w-auto lg:flex-wrap lg:items-center lg:gap-3">
+            <div
+               className="
+                  grid
+                  w-full
+                  grid-cols-1
+                  gap-2
+
+                  sm:grid-cols-3
+                  sm:gap-3
+
+                  2xl:w-[560px]
+               "
+            >
                {importNotice && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">Opened in Canvas</div>}
 
                {resetNotice && <div className="w-full rounded-2xl text-center lg:w-auto bg-[var(--color-bg)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">Canvas reset</div>}
@@ -3375,21 +3391,14 @@ ${currentContent}`
                <button
                   onClick={saveCanvas}
                   className="
-                     flex
+                     studio-button-primary
+                     min-h-12
                      w-full
+                     flex-row
                      items-center
                      justify-center
                      gap-2
-                     rounded-2xl
-                     lg:w-auto
-                     bg-[var(--color-primary)]
-                     px-5
-                     py-3
-                     text-sm
-                     font-medium
-                     text-[var(--color-cream)]
-                     transition-opacity
-                     hover:opacity-90
+                     whitespace-nowrap
                   "
                >
                   <Save size={16} />
@@ -3398,22 +3407,14 @@ ${currentContent}`
                <button
                   onClick={prepareCanvasSave}
                   className="
-                     flex
+                     studio-button-secondary
+                     min-h-12
                      w-full
+                     flex-row
                      items-center
                      justify-center
                      gap-2
-                     rounded-2xl
-                     lg:w-auto
-                     border
-                     border-[var(--border-subtle)]
-                     bg-white
-                     px-5
-                     py-3
-                     text-sm
-                     font-medium
-                     transition-colors
-                     hover:bg-[var(--color-bg)]
+                     whitespace-nowrap
                   "
                >
                   <FileText size={16} />
@@ -3423,22 +3424,14 @@ ${currentContent}`
                <button
                   onClick={resetCanvas}
                   className="
-                     flex
+                     studio-button-secondary
+                     min-h-12
                      w-full
+                     flex-row
                      items-center
                      justify-center
                      gap-2
-                     rounded-2xl
-                     lg:w-auto
-                     border
-                     border-[var(--border-subtle)]
-                     bg-white
-                     px-5
-                     py-3
-                     text-sm
-                     font-medium
-                     transition-colors
-                     hover:bg-[var(--color-bg)]
+                     whitespace-nowrap
                   "
                >
                   <RotateCcw size={16} />
@@ -3455,12 +3448,11 @@ ${currentContent}`
                className="
                   mb-5
                   overflow-hidden
-                  rounded-[24px]
+                  rounded-[var(--radius-lg)]
                   border
-                  border-[rgba(48,92,222,0.18)]
-                  bg-white
+                  border-[rgba(48,92,222,0.16)]
+                  bg-[var(--color-surface-blue)]
                   p-4
-                  shadow-[var(--shadow-soft)]
                "
             >
                <div className="flex items-start gap-3">
@@ -3479,120 +3471,155 @@ ${currentContent}`
 
          {/* Canvas Grid */}
 
-         <div className="grid min-w-0 gap-4 lg:grid-cols-12 lg:gap-6">
+         <div className="grid min-w-0 gap-5 xl:grid-cols-12 xl:gap-6">
             {/* Main Editor */}
 
-            <div className="min-w-0 lg:col-span-8">
-               <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <div className="rounded-[20px] border border-[var(--border-subtle)] bg-white p-4">
-                     <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
-                        <Clock3 size={14} />
-                        Where you left off
+            <div className="min-w-0 xl:col-span-8">
+               <div
+                  className="
+                     mb-5
+                     grid
+                     grid-cols-1
+                     divide-y
+                     divide-[var(--border-subtle)]
+                     border-y
+                     border-[var(--border-subtle)]
+                     md:grid-cols-3
+                     md:divide-x
+                     md:divide-y-0
+                  "
+               >
+                  <div className="px-1 py-4 sm:px-4">
+                     <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                        <Clock3 size={14} strokeWidth={1.7} />
+                        Updated
                      </div>
 
-                     <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{canvas.title || activeProjectRecord?.title || "Untitled Canvas"}</p>
-
-                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Updated {getReadableCanvasUpdatedAt(canvas.updatedAt)}</p>
+                     <p className="mt-2 text-sm text-[var(--color-text-primary)]">{getReadableCanvasUpdatedAt(canvas.updatedAt)}</p>
                   </div>
 
-                  <div className="rounded-[20px] border border-[var(--border-subtle)] bg-white p-4">
-                     <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
-                        <NotebookPen size={14} />
+                  <div className="px-1 py-4 sm:px-4">
+                     <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                        <NotebookPen size={14} strokeWidth={1.7} />
                         Current work
                      </div>
 
-                     <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{getCanvasWordCount(canvas.content)} words</p>
-
-                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Use the editor for today’s draft, update, or plan.</p>
+                     <p className="mt-2 text-sm text-[var(--color-text-primary)]">{getCanvasWordCount(canvas.content)} words</p>
                   </div>
 
-                  <div className="rounded-[20px] border border-[var(--border-subtle)] bg-white p-4">
-                     <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
-                        <Layers size={14} />
+                  <div className="px-1 py-4 sm:px-4">
+                     <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                        <Layers size={14} strokeWidth={1.7} />
                         References
                      </div>
 
-                     <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{selectedReferenceItem ? "1 selected" : "None selected"}</p>
-
-                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Notes and materials available for this project.</p>
+                     <p className="mt-2 text-sm text-[var(--color-text-primary)]">{selectedReferenceItem ? "1 selected" : `${canvasReferenceItems.length} available`}</p>
                   </div>
                </div>
 
-               <div className="mb-4 rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                     <div>
-                        <p className="flex items-center gap-2 font-medium text-[var(--color-text-primary)]">
-                           <NotebookPen size={17} />
-                           Structure starter
-                        </p>
+               <div className="mb-5 border-b border-[var(--border-subtle)] pb-5">
+                  <button
+                     type="button"
+                     onClick={() => setStructureStarterOpen((current) => !current)}
+                     aria-expanded={structureStarterOpen}
+                     className="
+                        flex
+                        w-full
+                        items-center
+                        justify-between
+                        gap-4
+                        rounded-[var(--radius-md)]
+                        px-1
+                        py-2
+                        text-left
+                        hover:bg-[rgba(255,255,255,0.34)]
+                     "
+                  >
+                     <div className="flex min-w-0 items-center gap-3">
+                        <NotebookPen size={17} strokeWidth={1.7} />
 
-                        <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">
-                           Choose the kind of start you need. Shape your project helps turn a rough idea into a clear project. Plan the steps helps break a known goal into smaller actions. Notes and research gives you a place to collect information before
-                           deciding what to do next.
-                        </p>
+                        <div className="min-w-0">
+                           <p className="font-medium text-[var(--color-text-primary)]">Structure starter</p>
+
+                           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{getCanvasStructureTemplate(selectedStructureTemplateId).label}</p>
+                        </div>
                      </div>
 
-                     {structureNotice && <div className="rounded-2xl bg-[var(--color-bg)] px-3 py-2 text-xs font-medium text-[var(--color-text-secondary)]">{structureNotice}</div>}
-                  </div>
+                     <ChevronDown
+                        size={18}
+                        strokeWidth={1.7}
+                        className={`
+                           shrink-0
+                           text-[var(--color-text-secondary)]
+                           transition-transform
+                           duration-200
 
-                  <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-                     <label className="sr-only" htmlFor="canvas-structure-template">
-                        Choose a Canvas structure
-                     </label>
+                           ${structureStarterOpen ? "rotate-180" : "rotate-0"}
+                        `}
+                     />
+                  </button>
 
-                     <select
-                        id="canvas-structure-template"
-                        value={selectedStructureTemplateId}
-                        onChange={(event) => setSelectedStructureTemplateId(event.target.value as CanvasStructureTemplateId)}
+                  {structureStarterOpen && (
+                     <div
                         className="
-                           min-h-11
-                           flex-1
-                           rounded-2xl
+                           mt-3
+                           rounded-[var(--radius-lg)]
                            border
                            border-[var(--border-subtle)]
-                           bg-[var(--color-bg)]
-                           px-4
-                           py-3
-                           text-sm
-                           font-medium
-                           text-[var(--color-text-primary)]
-                           outline-none
-                           transition-colors
-                           focus:border-[var(--color-primary)]
-                           focus:bg-white
+                           bg-[var(--color-surface)]
+                           p-4
+                           shadow-[var(--shadow-soft)]
                         "
                      >
-                        {CANVAS_STRUCTURE_TEMPLATES.map((template) => (
-                           <option key={template.id} value={template.id}>
-                              {template.label}
-                           </option>
-                        ))}
-                     </select>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                           <label className="sr-only" htmlFor="canvas-structure-template">
+                              Choose a Canvas structure
+                           </label>
 
-                     <button
-                        type="button"
-                        onClick={() => applyCanvasStructureTemplate(selectedStructureTemplateId)}
-                        className="
-                           min-h-11
-                           rounded-2xl
-                           bg-[var(--color-primary)]
-                           px-5
-                           py-3
-                           text-sm
-                           font-semibold
-                           text-white
-                           transition-opacity
-                           hover:opacity-90
-                        "
-                     >
-                        Add structure
-                     </button>
-                  </div>
+                           <select
+                              id="canvas-structure-template"
+                              value={selectedStructureTemplateId}
+                              onChange={(event) => setSelectedStructureTemplateId(event.target.value as CanvasStructureTemplateId)}
+                              className="
+                                 min-h-11
+                                 flex-1
+                                 rounded-[var(--radius-md)]
+                                 border
+                                 border-[var(--border-subtle)]
+                                 bg-[var(--color-bg-soft)]
+                                 px-4
+                                 py-3
+                                 text-sm
+                                 font-medium
+                                 text-[var(--color-text-primary)]
+                                 outline-none
+                                 transition-colors
+                                 focus:border-[var(--color-primary)]
+                                 focus:bg-white
+                              "
+                           >
+                              {CANVAS_STRUCTURE_TEMPLATES.map((template) => (
+                                 <option key={template.id} value={template.id}>
+                                    {template.label}
+                                 </option>
+                              ))}
+                           </select>
 
-                  <p className="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">{getCanvasStructureTemplate(selectedStructureTemplateId).helper}</p>
+                           <button type="button" onClick={() => applyCanvasStructureTemplate(selectedStructureTemplateId)} className="studio-button-primary w-full justify-center sm:w-auto sm:min-w-[150px]">
+                              Add structure
+                           </button>
+                        </div>
+
+                        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                           <p className="max-w-2xl text-xs leading-5 text-[var(--color-text-secondary)]">{getCanvasStructureTemplate(selectedStructureTemplateId).helper}</p>
+
+                           {structureNotice && <p className="shrink-0 text-xs font-medium text-[var(--color-primary)]">{structureNotice}</p>}
+                        </div>
+                     </div>
+                  )}
                </div>
 
-               <div className="rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
+               <div className="studio-paper min-h-[620px] p-5 sm:p-7 lg:p-9">
                   <input
                      value={canvas.title}
                      onChange={(e) => {
@@ -3636,9 +3663,12 @@ ${currentContent}`
                         mb-4
                         w-full
                         bg-transparent
-                        text-2xl
-                        font-semibold
-                        sm:text-3xl
+                        font-[var(--font-editorial)]
+                        text-3xl
+                        font-medium
+                        leading-tight
+                        tracking-[-0.035em]
+                        sm:text-4xl
                         outline-none
                         placeholder:text-[var(--color-text-secondary)]
                      "
@@ -3708,16 +3738,32 @@ ${currentContent}`
 
             {/* Reference Panel */}
 
-            <aside className="min-w-0 lg:col-span-4">
-               <div className="rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:rounded-3xl">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between lg:flex-col xl:flex-row">
+            <aside className="min-w-0 xl:col-span-4">
+               <div
+                  className="
+                     rounded-[var(--radius-xl)]
+                     border
+                     border-[var(--border-subtle)]
+                     bg-[var(--color-surface)]
+                     p-4
+                     shadow-[var(--shadow-soft)]
+
+                     sm:p-5
+
+                     xl:sticky
+                     xl:top-4
+                     xl:max-h-[calc(100vh-2rem)]
+                     xl:overflow-y-auto
+                  "
+               >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                      <div>
                         <p className="flex items-center gap-2 font-medium">
                            <Layers size={17} />
                            Project References
                         </p>
 
-                        <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Choose a project note or material to keep beside your draft while you work.</p>
+                        <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Keep one useful note or material beside the draft.</p>
                      </div>
                   </div>
 
@@ -3743,7 +3789,7 @@ ${currentContent}`
                         </select>
 
                         {selectedReferenceItem && (
-                           <div className="rounded-2xl border border-[var(--color-primary)] bg-[var(--color-bg)] p-3">
+                           <div className="rounded-[var(--radius-lg)] border border-[rgba(48,92,222,0.18)] bg-[var(--color-surface-blue)] p-4">
                               <div className="flex min-w-0 flex-wrap items-center gap-2">
                                  <span className="max-w-full break-words rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-[var(--color-text-secondary)]">
                                     {selectedReferenceItem.kind === "material" ? selectedReferenceItem.label : "Note"}
@@ -3751,7 +3797,7 @@ ${currentContent}`
 
                                  {selectedReferenceItem.source && <span className="max-w-full break-words rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-[var(--color-text-secondary)]">{selectedReferenceItem.source}</span>}
 
-                                 <span className="max-w-full break-words rounded-full bg-[var(--color-primary)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-cream)]">Selected</span>
+                                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Selected</span>
                               </div>
 
                               <p className="mt-3 break-words text-sm font-semibold leading-5 text-[var(--color-text-primary)]">{selectedReferenceItem.title}</p>

@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 /* ========================================
-   ROOT DESIGN TOKENS
-   Global design system variables
+   ALLEVIN MK VII
+   CALM RESEARCH STUDIO DESIGN FOUNDATION
 ======================================== */
 
 :root {
@@ -11,36 +11,75 @@
    ========================= */
 
    --color-primary: #305cde;
-   --color-primary-soft: rgba(48, 92, 222, 0.1);
-   --color-primary-subtle: rgba(48, 92, 222, 0.16);
+   --color-primary-hover: #264fc6;
+   --color-primary-soft: rgba(48, 92, 222, 0.09);
+   --color-primary-subtle: rgba(48, 92, 222, 0.15);
 
    --color-cream: #fff8ee;
 
-   --color-bg: #f7f8fc;
-   --color-surface: #ffffff;
+   /* Warm studio-paper system */
+   --color-bg: #f7f5f0;
+   --color-bg-soft: #f2efe8;
+   --color-surface: #fffdf9;
+   --color-surface-strong: #ffffff;
+   --color-surface-blue: #eef3fc;
 
-   --color-text-primary: #111827;
-   --color-text-secondary: #5b6475;
+   /* Ink system */
+   --color-text-primary: #172033;
+   --color-text-secondary: #667085;
+   --color-text-tertiary: #8a918f;
+
+   /* Calm semantic accents */
+   --color-success: #567a63;
+   --color-success-soft: rgba(86, 122, 99, 0.1);
+
+   --color-warning: #a97835;
+   --color-warning-soft: rgba(169, 120, 53, 0.1);
+
+   --color-feedback: #7563a8;
+   --color-feedback-soft: rgba(117, 99, 168, 0.1);
+
+   /* =========================
+      TYPOGRAPHY
+   ========================= */
+
+   --font-interface: "Satoshi", sans-serif;
+   --font-editorial: "Newsreader", "Source Serif 4", Georgia, serif;
 
    /* =========================
       BORDERS + SHADOWS
    ========================= */
 
-   --border-subtle: rgba(17, 24, 39, 0.08);
+   --border-subtle: rgba(23, 32, 51, 0.09);
+   --border-muted: rgba(23, 32, 51, 0.06);
+   --border-strong: rgba(23, 32, 51, 0.14);
    --border-focus: rgba(48, 92, 222, 0.55);
 
-   --shadow-soft: 0px 4px 12px rgba(17, 24, 39, 0.04), 0px 1px 3px rgba(17, 24, 39, 0.08);
+   --shadow-soft: 0px 8px 24px rgba(23, 32, 51, 0.045), 0px 1px 3px rgba(23, 32, 51, 0.05);
 
-   --shadow-focus: 0 0 0 2px rgba(48, 92, 222, 0.1);
+   --shadow-paper: 0px 18px 50px rgba(23, 32, 51, 0.055), 0px 2px 8px rgba(23, 32, 51, 0.04);
+
+   --shadow-floating: 0px 24px 60px rgba(23, 32, 51, 0.09), 0px 4px 14px rgba(23, 32, 51, 0.05);
+
+   --shadow-focus: 0 0 0 3px rgba(48, 92, 222, 0.11);
 
    /* =========================
       RADIUS SYSTEM
    ========================= */
 
-   --radius-md: 12px;
-   --radius-lg: 16px;
-   --radius-xl: 20px;
-   --radius-2xl: 24px;
+   --radius-sm: 8px;
+   --radius-md: 10px;
+   --radius-lg: 14px;
+   --radius-xl: 18px;
+   --radius-2xl: 22px;
+
+   /* =========================
+      SPACING RHYTHM
+   ========================= */
+
+   --space-page-x: clamp(1rem, 2vw, 2rem);
+   --space-section: clamp(2rem, 4vw, 4rem);
+   --space-panel: clamp(1rem, 2vw, 1.5rem);
 }
 
 /* ========================================
@@ -53,43 +92,33 @@
 
 html {
    min-width: 0;
-
    width: 100%;
-
    max-width: 100%;
-
    overflow-x: hidden;
-
    scroll-behavior: smooth;
-
    background: var(--color-bg);
 }
 
 body {
    min-width: 0;
-
    min-height: 100vh;
    min-height: 100dvh;
-
    width: 100%;
-
    max-width: 100%;
-
    margin: 0;
-
    overflow-x: hidden;
 
-   background: var(--color-bg);
+   background: radial-gradient(circle at top left, rgba(48, 92, 222, 0.035), transparent 32rem), linear-gradient(180deg, #faf8f3 0%, var(--color-bg) 28%, var(--color-bg) 100%);
 
    color: var(--color-text-primary);
 
-   font-family: "Satoshi", sans-serif;
+   font-family: var(--font-interface);
 
    text-rendering: optimizeLegibility;
    -webkit-font-smoothing: antialiased;
+   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Prevent fixed/flex/grid children from forcing horizontal overflow. */
 #__next,
 main,
 section,
@@ -102,7 +131,6 @@ div {
    min-width: 0;
 }
 
-/* Keep media and form controls inside the viewport. */
 img,
 svg,
 video,
@@ -123,19 +151,83 @@ h5,
 h6 {
    margin: 0;
 
-   font-weight: 700;
+   color: var(--color-text-primary);
 
-   letter-spacing: -0.03em;
+   font-family: var(--font-interface);
+   font-weight: 650;
+
+   letter-spacing: -0.025em;
 
    overflow-wrap: anywhere;
+}
+
+h1 {
+   letter-spacing: -0.04em;
 }
 
 p {
    margin: 0;
 
-   line-height: 1.6;
+   line-height: 1.65;
 
    overflow-wrap: anywhere;
+}
+
+/* Use selectively for page titles, project titles,
+   and important studio moments. */
+.font-editorial,
+[data-editorial-title="true"] {
+   font-family: var(--font-editorial);
+   font-weight: 500;
+   letter-spacing: -0.035em;
+}
+
+/* Small uppercase labels for calm editorial hierarchy. */
+.studio-eyebrow {
+   color: var(--color-primary);
+
+   font-size: 0.72rem;
+   font-weight: 700;
+
+   letter-spacing: 0.14em;
+   line-height: 1.2;
+
+   text-transform: uppercase;
+}
+
+/* ========================================
+   STUDIO SURFACES
+======================================== */
+
+.studio-surface {
+   border: 1px solid var(--border-subtle);
+   border-radius: var(--radius-xl);
+
+   background: var(--color-surface);
+
+   box-shadow: var(--shadow-soft);
+}
+
+.studio-paper {
+   border: 1px solid var(--border-muted);
+   border-radius: var(--radius-xl);
+
+   background: linear-gradient(rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.22)), var(--color-surface);
+
+   box-shadow: var(--shadow-paper);
+}
+
+.studio-panel {
+   border-top: 1px solid var(--border-subtle);
+
+   padding-top: 1.25rem;
+}
+
+.studio-divider {
+   height: 1px;
+   width: 100%;
+
+   background: var(--border-subtle);
 }
 
 /* ========================================
@@ -164,6 +256,10 @@ select {
 
    border-color: var(--border-subtle);
 
+   border-radius: var(--radius-md);
+
+   background: rgba(255, 255, 255, 0.78);
+
    color: var(--color-text-primary);
 
    transition:
@@ -181,86 +277,8 @@ input::placeholder,
 textarea::placeholder {
    color: var(--color-text-secondary);
 
-   opacity: 0.72;
+   opacity: 0.68;
 }
-
-/* iOS zoom guard: keep form controls at least 16px on small screens. */
-@media (max-width: 767px) {
-   input,
-   textarea,
-   select {
-      font-size: 16px;
-   }
-
-   button {
-      touch-action: manipulation;
-   }
-}
-
-/* ========================================
-   CLEAN GLOBAL FOCUS SYSTEM
-   Purpose:
-   Prevent oversized blue focus rings from
-   visually exceeding the input/display box.
-======================================== */
-
-input:focus,
-textarea:focus,
-select:focus {
-   outline: none;
-
-   border-color: var(--border-focus) !important;
-
-   box-shadow: var(--shadow-focus) !important;
-}
-
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-   outline: none;
-
-   border-color: var(--border-focus) !important;
-
-   box-shadow: var(--shadow-focus) !important;
-}
-
-button:focus {
-   outline: none;
-}
-
-button:focus-visible,
-a:focus-visible {
-   outline: 2px solid var(--border-focus);
-
-   outline-offset: 3px;
-}
-
-/* ========================================
-   TAILWIND RING OVERRIDE
-   Purpose:
-   Calm down component-level classes like
-   focus:ring-4 and prevent large blue halos.
-======================================== */
-
-input[class*="focus:ring"]:focus,
-textarea[class*="focus:ring"]:focus,
-select[class*="focus:ring"]:focus {
-   --tw-ring-offset-width: 0px !important;
-   --tw-ring-offset-color: transparent !important;
-   --tw-ring-color: var(--color-primary-soft) !important;
-
-   box-shadow: var(--shadow-focus) !important;
-}
-
-input[class*="focus:ring-4"]:focus,
-textarea[class*="focus:ring-4"]:focus,
-select[class*="focus:ring-4"]:focus {
-   box-shadow: var(--shadow-focus) !important;
-}
-
-/* ========================================
-   INTERACTION POLISH
-======================================== */
 
 button,
 a {
@@ -282,6 +300,112 @@ select:disabled {
    opacity: 0.55;
 }
 
+/* Calm shared action classes.
+   Components can adopt these gradually during the visual refresh. */
+
+.studio-button-primary {
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   gap: 0.5rem;
+
+   min-height: 2.625rem;
+
+   border-radius: var(--radius-md);
+
+   background: var(--color-primary);
+
+   padding: 0.7rem 1rem;
+
+   color: var(--color-cream);
+
+   font-weight: 650;
+
+   box-shadow: 0 8px 20px rgba(48, 92, 222, 0.16);
+}
+
+.studio-button-primary:hover {
+   background: var(--color-primary-hover);
+
+   transform: translateY(-1px);
+}
+
+.studio-button-secondary {
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   gap: 0.5rem;
+
+   min-height: 2.625rem;
+
+   border: 1px solid var(--border-subtle);
+   border-radius: var(--radius-md);
+
+   background: rgba(255, 255, 255, 0.7);
+
+   padding: 0.7rem 1rem;
+
+   color: var(--color-text-primary);
+
+   font-weight: 600;
+}
+
+.studio-button-secondary:hover {
+   border-color: var(--border-strong);
+
+   background: var(--color-surface-strong);
+}
+
+/* ========================================
+   CLEAN GLOBAL FOCUS SYSTEM
+======================================== */
+
+input:focus,
+textarea:focus,
+select:focus,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+   outline: none;
+
+   border-color: var(--border-focus) !important;
+
+   box-shadow: var(--shadow-focus) !important;
+
+   background: var(--color-surface-strong);
+}
+
+button:focus {
+   outline: none;
+}
+
+button:focus-visible,
+a:focus-visible {
+   outline: 2px solid var(--border-focus);
+
+   outline-offset: 3px;
+}
+
+/* ========================================
+   TAILWIND RING OVERRIDE
+======================================== */
+
+input[class*="focus:ring"]:focus,
+textarea[class*="focus:ring"]:focus,
+select[class*="focus:ring"]:focus {
+   --tw-ring-offset-width: 0px !important;
+   --tw-ring-offset-color: transparent !important;
+   --tw-ring-color: var(--color-primary-soft) !important;
+
+   box-shadow: var(--shadow-focus) !important;
+}
+
+input[class*="focus:ring-4"]:focus,
+textarea[class*="focus:ring-4"]:focus,
+select[class*="focus:ring-4"]:focus {
+   box-shadow: var(--shadow-focus) !important;
+}
+
 /* ========================================
    SELECTION
 ======================================== */
@@ -299,7 +423,7 @@ select:disabled {
 * {
    scrollbar-width: thin;
 
-   scrollbar-color: rgba(91, 100, 117, 0.32) transparent;
+   scrollbar-color: rgba(102, 112, 133, 0.28) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -313,7 +437,7 @@ select:disabled {
 }
 
 ::-webkit-scrollbar-thumb {
-   background: rgba(91, 100, 117, 0.28);
+   background: rgba(102, 112, 133, 0.25);
 
    border: 3px solid transparent;
 
@@ -323,7 +447,7 @@ select:disabled {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-   background: rgba(91, 100, 117, 0.42);
+   background: rgba(102, 112, 133, 0.4);
 
    border: 3px solid transparent;
 
@@ -331,8 +455,20 @@ select:disabled {
 }
 
 /* ========================================
-   MOBILE SAFE AREA HELPERS
+   MOBILE POLISH + SAFE AREAS
 ======================================== */
+
+@media (max-width: 767px) {
+   input,
+   textarea,
+   select {
+      font-size: 16px;
+   }
+
+   button {
+      touch-action: manipulation;
+   }
+}
 
 @supports (padding: max(0px)) {
    body {

@@ -299,7 +299,7 @@ const COGNITION_ACTIVE_MODE_STORAGE_KEY = "allevin-cognition-active-response-mod
 const DIRECT_CALENDAR_APPROVAL_GUARD_KEY = "allevin-direct-calendar-approval-guard";
 
 // ========================================
-// MK VI Build 6 — Sanitization Parameters
+// MK VII — Sanitization Parameters
 // Canvas should feel open/infinite, but stored/rendered data still needs guardrails.
 // ========================================
 
@@ -8595,7 +8595,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
       }
 
       if (lower.includes("mk iii") || lower.includes("personality") || lower.includes("source-aware") || lower.includes("next-step") || lower.includes("test build")) {
-         return "testing and improving ALLEVIN MK VI";
+         return "testing and improving ALLEVIN MK VII";
       }
 
       return "the current project";
@@ -12912,13 +12912,13 @@ Try one of these:
                      max-w-full
                      items-center
                      gap-3
-                     rounded-2xl
+                     rounded-[18px]
                      border
                      border-[var(--border-subtle)]
-                     bg-[rgba(255,255,255,0.9)]
+                     bg-[rgba(255,253,249,0.96)]
                      px-4
                      py-3
-                     shadow-[var(--shadow-soft)]
+                     shadow-[var(--shadow-floating)]
                      backdrop-blur-xl
 
                      sm:px-5
@@ -12932,10 +12932,11 @@ Try one of these:
                         w-11
                         items-center
                         justify-center
-                        rounded-2xl
-                        bg-white
+                        rounded-[14px]
+                        border
+                        border-[var(--border-subtle)]
+                        bg-[var(--color-surface)]
                         p-2
-                        shadow-[var(--shadow-soft)]
                      "
                   >
                      <Image
@@ -12953,7 +12954,7 @@ Try one of these:
                   </div>
 
                   <div className="text-left">
-                     <p className="text-sm font-semibold">ALLEVIN MK VI</p>
+                     <p className="text-sm font-semibold">ALLEVIN MK VII</p>
 
                      <p className="max-w-[180px] truncate text-sm text-[var(--color-text-secondary)] sm:max-w-[220px]">{getSafeThreadTitle()}</p>
                   </div>
@@ -12990,17 +12991,17 @@ Try one of these:
                      max-w-[calc(100vw-1.5rem)]
                      flex-col
                      overflow-hidden
-                     rounded-[24px]
+                     rounded-[22px]
                      border
                      border-[var(--border-subtle)]
-                     bg-[rgba(255,255,255,0.96)]
-                     shadow-2xl
+                     bg-[rgba(255,253,249,0.98)]
+                     shadow-[var(--shadow-floating)]
                      backdrop-blur-2xl
 
                      sm:max-w-[520px]
                      lg:h-[min(760px,calc(100vh-2rem))]
                      lg:w-[520px]
-                     lg:rounded-[28px]
+                     lg:rounded-[24px]
                   "
                >
                   {/* Header */}
@@ -13010,11 +13011,11 @@ Try one of these:
                         shrink-0
                         border-b
                         border-[var(--border-subtle)]
-                        bg-white
+                        bg-[rgba(255,253,249,0.98)]
                         px-4
-                        py-3
+                        py-4
                         sm:px-5
-                        sm:py-4
+                        sm:py-5
                      "
                   >
                      <div className="flex items-center justify-between gap-4">
@@ -13027,8 +13028,10 @@ Try one of these:
                                  shrink-0
                                  items-center
                                  justify-center
-                                 rounded-2xl
-                                 bg-[var(--color-bg)]
+                                 rounded-[12px]
+                                 border
+                                 border-[var(--border-subtle)]
+                                 bg-[var(--color-surface)]
                                  p-2
                               "
                            >
@@ -13047,9 +13050,11 @@ Try one of these:
                            </div>
 
                            <div className="min-w-0">
-                              <p className="text-xs text-[var(--color-text-secondary)]">ALLEVIN MK VI</p>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN MK VII</p>
 
-                              <h2 className="truncate text-lg">{getSafeThreadTitle()}</h2>
+                              <h2 data-editorial-title="true" className="mt-1 truncate text-xl leading-tight">
+                                 {getSafeThreadTitle()}
+                              </h2>
                            </div>
                         </div>
 
@@ -13062,11 +13067,13 @@ Try one of these:
                               shrink-0
                               items-center
                               justify-center
-                              rounded-xl
+                              rounded-[var(--radius-md)]
                               border
                               border-[var(--border-subtle)]
-                              bg-white
-                              hover:bg-[var(--color-bg)]
+                              bg-transparent
+                              text-[var(--color-text-secondary)]
+                              hover:bg-[var(--color-bg-soft)]
+                              hover:text-[var(--color-text-primary)]
                            "
                            aria-label="Collapse ALLEVIN"
                         >
@@ -13074,17 +13081,15 @@ Try one of these:
                         </button>
                      </div>
 
-                     <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4">
+                     <div className="mt-4 border-t border-[var(--border-subtle)] pt-4">
                         <button type="button" onClick={() => setResponseStyleOpen((current) => !current)} className="flex w-full items-center justify-between gap-3 text-left" aria-expanded={responseStyleOpen}>
                            <div className="flex min-w-0 items-center gap-3">
-                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-[var(--color-primary)]">
-                                 <Sparkles size={18} />
-                              </div>
+                              <Sparkles size={17} strokeWidth={1.7} className="shrink-0 text-[var(--color-primary)]" />
 
                               <div className="min-w-0">
-                                 <p className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">AI response style</p>
+                                 <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Response style</p>
 
-                                 <p className="mt-1 truncate text-sm font-semibold">{cognitionDisplayLabel}</p>
+                                 <p className="mt-1 truncate text-sm font-medium">{cognitionDisplayLabel}</p>
                               </div>
                            </div>
 
@@ -13094,33 +13099,39 @@ Try one of these:
                         <AnimatePresence initial={false}>
                            {responseStyleOpen && (
                               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
-                                 <div className="mt-4 rounded-2xl border border-[var(--border-subtle)] bg-white p-4">
-                                    <p className="text-sm font-semibold">Choose how ALLEVIN should respond.</p>
+                                 <div className="mt-4 divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]">
+                                    {responseStyleOptions.map((option) => {
+                                       const isActive = getActiveCognitionResponseMode() === option.mode;
 
-                                    <div className="mt-3 grid grid-cols-1 gap-2">
-                                       {responseStyleOptions.map((option) => {
-                                          const isActive = getActiveCognitionResponseMode() === option.mode;
+                                       return (
+                                          <button
+                                             key={option.mode}
+                                             type="button"
+                                             onClick={() => setCognitionResponseMode(option.mode)}
+                                             className={`
+                                                flex
+                                                w-full
+                                                items-start
+                                                justify-between
+                                                gap-4
+                                                px-1
+                                                py-3
+                                                text-left
+                                                transition-colors
 
-                                          return (
-                                             <button
-                                                key={option.mode}
-                                                type="button"
-                                                onClick={() => setCognitionResponseMode(option.mode)}
-                                                className={`rounded-2xl border px-4 py-3 text-left transition-colors ${
-                                                   isActive ? "border-[var(--color-primary)] bg-[rgba(48,92,222,0.08)]" : "border-[var(--border-subtle)] bg-[var(--color-bg)] hover:bg-white"
-                                                }`}
-                                             >
-                                                <div className="flex items-center justify-between gap-3">
-                                                   <p className="text-sm font-semibold">{option.label}</p>
-
-                                                   {isActive ? <CheckCircle2 size={16} className="text-[var(--color-primary)]" /> : null}
-                                                </div>
+                                                ${isActive ? "bg-[var(--color-surface-blue)]" : "hover:bg-[rgba(255,255,255,0.48)]"}
+                                             `}
+                                          >
+                                             <div>
+                                                <p className="text-sm font-semibold">{option.label}</p>
 
                                                 <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">{option.description}</p>
-                                             </button>
-                                          );
-                                       })}
-                                    </div>
+                                             </div>
+
+                                             {isActive ? <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-[var(--color-primary)]" /> : null}
+                                          </button>
+                                       );
+                                    })}
                                  </div>
                               </motion.div>
                            )}
@@ -13131,7 +13142,7 @@ Try one of these:
                   <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                      {/* Quick Access */}
 
-                     <div className="border-b border-[var(--border-subtle)] bg-[rgba(255,255,255,0.72)] px-4 py-3 sm:px-5 sm:py-4">
+                     <div className="border-b border-[var(--border-subtle)] bg-transparent px-4 py-3 sm:px-5 sm:py-4">
                         <button
                            onClick={() => setQuickAccessOpen((current) => !current)}
                            className="
@@ -13140,21 +13151,17 @@ Try one of these:
                               items-center
                               justify-between
                               gap-3
-                              rounded-2xl
-                              border
-                              border-[var(--border-subtle)]
-                              bg-white
-                              px-4
-                              py-3
+                              px-1
+                              py-2
                               text-left
                               transition-colors
-                              hover:bg-[var(--color-bg)]
+                              hover:text-[var(--color-primary)]
                            "
                         >
                            <div>
-                              <p className="text-sm font-medium">Quick Access</p>
+                              <p className="text-sm font-medium">Quick access</p>
 
-                              <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Open a workspace</p>
+                              <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Move between the main work areas.</p>
                            </div>
 
                            <ChevronDown
@@ -13203,16 +13210,16 @@ Try one of these:
                                                 flex-col
                                                 items-center
                                                 justify-center
-                                                gap-1
-                                                rounded-2xl
+                                                gap-1.5
+                                                rounded-[var(--radius-md)]
                                                 border
                                                 border-[var(--border-subtle)]
-                                                bg-white
+                                                bg-[var(--color-surface)]
                                                 px-2
                                                 py-2
                                                 text-center
                                                 transition-colors
-                                                hover:bg-[var(--color-bg)]
+                                                hover:bg-[var(--color-surface-blue)]
                                              "
                                           >
                                              <Icon size={15} className="text-[var(--color-primary)]" />
@@ -13244,7 +13251,7 @@ Try one of these:
                                  }}
                                  className={`
                                     whitespace-pre-wrap
-                                    rounded-2xl
+                                    rounded-[var(--radius-md)]
                                     px-4
                                     py-3
                                     text-sm
@@ -13259,18 +13266,21 @@ Try one of these:
                                        message.role === "assistant"
                                           ? `
                                              mr-0
-                                             border
+                                             border-l-2
+                                             border-[var(--color-primary)]
+                                             bg-transparent
+                                             pl-4
+                                             text-[var(--color-text-primary)]
 
                                              sm:mr-8
-                                             border-[var(--border-subtle)]
-                                             bg-white
-                                             text-[var(--color-text-primary)]
                                           `
                                           : `
                                              ml-auto
                                              max-w-[82%]
-                                             bg-[var(--color-primary)]
-                                             text-[var(--color-cream)]
+                                             border
+                                             border-[rgba(48,92,222,0.14)]
+                                             bg-[var(--color-surface-blue)]
+                                             text-[var(--color-text-primary)]
                                           `
                                     }
                                  `}
@@ -13291,7 +13301,7 @@ Try one of these:
                         shrink-0
                         border-t
                         border-[var(--border-subtle)]
-                        bg-[rgba(255,255,255,0.95)]
+                        bg-[rgba(255,253,249,0.98)]
                         p-3
                         sm:p-4
                      "
@@ -13322,10 +13332,10 @@ Try one of these:
                               sm:min-h-[52px]
                               flex-1
                               resize-none
-                              rounded-2xl
+                              rounded-[var(--radius-lg)]
                               border
                               border-[var(--border-subtle)]
-                              bg-white
+                              bg-[var(--color-surface)]
                               px-4
                               py-3
                               text-left
@@ -13356,7 +13366,7 @@ Try one of these:
                               shrink-0
                               items-center
                               justify-center
-                              rounded-2xl
+                              rounded-[var(--radius-lg)]
                               bg-[var(--color-primary)]
                               text-[var(--color-cream)]
                               transition-opacity

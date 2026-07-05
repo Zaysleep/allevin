@@ -25,10 +25,10 @@ import { EnvironmentProvider } from "@/components/EnvironmentEngine";
 import { getAllevinDisplayName, hasAllevinUserProfile, saveAllevinUserProfile, resetAllevinTesterWorkspace } from "@/lib/allevinUserProfile";
 
 // ========================================
-// ALLEVIN MK VI Product Shell
+// ALLEVIN MK VII Product Shell
 // Purpose:
 // Beginner-friendly project workspace layout.
-// MK VI keeps the first-use path clear:
+// MK VII keeps the first-use path clear:
 // Projects hold the work, Canvas shapes it,
 // Materials support it, and Calendar shows time blocks.
 // ========================================
@@ -120,7 +120,7 @@ const LEGACY_PROJECT_MEMORY_STORAGE_KEY = "allevin-project-memory";
 const CALENDAR_EVENTS_STORAGE_KEY = "allevin-calendar-events-mki";
 
 // ========================================
-// MK VI — Page Shell Sanitization
+// MK VII — Page Shell Sanitization
 // Home reads stored Canvas, Projects, and Calendar data.
 // Treat stored text as untrusted before displaying it.
 // ========================================
@@ -851,22 +851,19 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
          >
             <div
                className="
-                  rounded-[24px]
-                  border
-                  border-[var(--border-subtle)]
-                  bg-[var(--color-surface)]
+                  studio-paper
                   p-5
-                  shadow-[var(--shadow-soft)]
-                  sm:p-6
-                  lg:rounded-[32px]
-                  lg:p-8
+                  sm:p-7
+                  lg:p-10
                "
             >
-               <p className="text-sm font-medium uppercase tracking-[0.18em] text-[var(--color-text-secondary)]">Welcome to ALLEVIN</p>
+               <p className="studio-eyebrow">Welcome to ALLEVIN</p>
 
-               <h1 className="mt-3 max-w-2xl text-3xl sm:text-4xl">Set up your workspace.</h1>
+               <h1 data-editorial-title="true" className="mt-4 max-w-3xl text-4xl leading-tight sm:text-5xl">
+                  Set up your studio.
+               </h1>
 
-               <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--color-text-secondary)]">ALLEVIN uses your name for greetings. In this test version, your projects, materials, and schedule are saved in this browser.</p>
+               <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--color-text-secondary)]">ALLEVIN uses your name for greetings. Your projects, references, active work, and schedule stay together in this browser.</p>
 
                <form onSubmit={handleTesterProfileSubmit} className="mt-6 max-w-xl space-y-4">
                   <label className="block">
@@ -895,23 +892,12 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                      />
                   </label>
 
-                  <div className="rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">Testing note: avoid highly sensitive information. This version saves your workspace in this browser.</div>
+                  <div className="rounded-[var(--radius-lg)] border border-[var(--border-muted)] bg-[var(--color-bg-soft)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">
+                     Testing note: avoid highly sensitive information. This version saves your workspace in this browser.
+                  </div>
 
-                  <button
-                     type="submit"
-                     className="
-                        rounded-2xl
-                        bg-[var(--color-primary)]
-                        px-5
-                        py-3
-                        text-sm
-                        font-medium
-                        text-[var(--color-cream)]
-                        transition-opacity
-                        hover:opacity-90
-                     "
-                  >
-                     Start Workspace
+                  <button type="submit" className="studio-button-primary">
+                     Enter Studio
                   </button>
                </form>
             </div>
@@ -959,149 +945,219 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
          id="overview"
          className="
             scroll-mt-24
-            space-y-5
-            pb-4
+            pb-6
             lg:scroll-mt-28
          "
       >
-         <div
-            className="
-               rounded-[24px]
-               border
-               border-[var(--border-subtle)]
-               bg-[var(--color-surface)]
-               p-4
-               shadow-[var(--shadow-soft)]
-               sm:p-5
-               lg:rounded-[32px]
-               lg:p-6
-            "
-         >
-            <div className="flex min-w-0 flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
-               <div className="min-w-0">
-                  <p className="text-sm font-medium uppercase tracking-[0.18em] text-[var(--color-text-secondary)]">Welcome back</p>
+         <div className="mx-auto w-full max-w-[1480px] space-y-6 sm:space-y-7">
+            {/* Studio introduction */}
 
-                  <h1 className="mt-2 text-3xl sm:text-4xl">
-                     {greeting}, {displayName}.
-                  </h1>
+            <header className="px-1 pt-0 sm:px-2 sm:pt-1">
+               <h1
+                  data-editorial-title="true"
+                  className="
+                     mt-3
+                     max-w-4xl
+                     text-4xl
+                     leading-[1.02]
+                     sm:text-5xl
+                     lg:text-6xl
+                  "
+               >
+                  {greeting}, {displayName}.
+               </h1>
 
-                  <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--color-text-secondary)]">{homeGreeting}</p>
+               <p className="mt-3 max-w-3xl text-base leading-7 text-[var(--color-text-secondary)] sm:text-lg">{homeGreeting}</p>
+            </header>
 
-                  <div className="mt-5 grid w-full max-w-5xl grid-cols-1 gap-3 lg:grid-cols-[1.35fr_1fr]">
-                     <div className="rounded-2xl bg-[var(--color-bg)] p-4">
-                        <p className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Latest Project</p>
+            {/* Active project desk */}
 
-                        <p className="mt-2 text-lg font-medium">{lastProject.title || "No project open yet"}</p>
+            <section
+               className="
+                  studio-paper
+                  overflow-hidden
+               "
+            >
+               <div className="grid min-w-0 grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.75fr)]">
+                  <div className="min-w-0 p-5 sm:p-7 lg:px-9 lg:pb-9 lg:pt-7">
+                     <div className="flex flex-wrap items-center gap-3">
+                        <span className="studio-eyebrow">Active Project</span>
+                     </div>
 
-                        <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{lastProject.source ? `Last opened in ${lastProject.source}` : "Start in Projects, then use Canvas when you are ready to work."}</p>
+                     <h2
+                        data-editorial-title="true"
+                        className="
+                           mt-4
+                           max-w-4xl
+                           text-3xl
+                           leading-tight
+                           sm:text-4xl
+                           lg:text-[2.8rem]
+                        "
+                     >
+                        {lastProject.title || "Your next project starts here."}
+                     </h2>
 
-                        <div className="mt-3 rounded-xl bg-white/70 p-3">
-                           <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Suggested Next Step</p>
+                     <div className="mt-7 grid grid-cols-1 gap-6 lg:grid-cols-2">
+                        <div className="studio-panel">
+                           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">You left off</p>
 
-                           <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">{homeSuggestion}</p>
+                           <p className="mt-3 text-base leading-7 text-[var(--color-text-primary)]">
+                              {lastProject.body ? compactText(lastProject.body).slice(0, 260) : "Create or open a project, then use Canvas when you are ready to shape the work."}
+                              {lastProject.body && compactText(lastProject.body).length > 260 ? "..." : ""}
+                           </p>
+                        </div>
+
+                        <div className="studio-panel">
+                           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Your next move</p>
+
+                           <p className="mt-3 text-base leading-7 text-[var(--color-text-primary)]">{homeSuggestion}</p>
                         </div>
                      </div>
 
-                     <div className="rounded-2xl bg-[var(--color-bg)] p-4">
-                        <p className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-text-secondary)]">Schedule at a Glance</p>
+                     <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
+                        <button onClick={handleContinueLatestProjectInCanvas} className="studio-button-primary w-full sm:w-auto sm:min-w-[168px]">
+                           Continue in Canvas
+                        </button>
 
-                        <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{calendarGlance}</p>
+                        <button onClick={() => setActiveModule("integrations")} className="studio-button-secondary w-full sm:w-auto sm:min-w-[148px]">
+                           Open Projects
+                        </button>
+
+                        <button
+                           onClick={handleTesterWorkspaceReset}
+                           className="
+                              inline-flex
+                              min-h-10
+                              items-center
+                              justify-center
+                              rounded-[var(--radius-md)]
+                              px-3
+                              py-2
+                              text-sm
+                              font-medium
+                              text-[var(--color-text-secondary)]
+                              hover:bg-[var(--color-bg-soft)]
+                              sm:ml-auto
+                           "
+                        >
+                           Reset test workspace
+                        </button>
                      </div>
+
+                     {resetNotice && <p className="mt-4 text-sm text-[var(--color-text-secondary)]">{resetNotice}</p>}
+                  </div>
+
+                  <aside
+                     className="
+                        border-t
+                        border-[var(--border-subtle)]
+                        bg-[var(--color-bg-soft)]
+                        p-5
+                        sm:p-7
+                        xl:border-l
+                        xl:border-t-0
+                        lg:p-8
+                     "
+                  >
+                     <p className="studio-eyebrow">Schedule at a glance</p>
+
+                     <p className="mt-4 text-base leading-7 text-[var(--color-text-primary)]">{calendarGlance}</p>
+
+                     <button
+                        onClick={() => setActiveModule("calendar")}
+                        className="
+                           mt-6
+                           inline-flex
+                           items-center
+                           gap-2
+                           text-sm
+                           font-semibold
+                           text-[var(--color-primary)]
+                           hover:opacity-80
+                        "
+                     >
+                        Open Calendar →
+                     </button>
+                  </aside>
+               </div>
+            </section>
+
+            {/* Studio tools */}
+
+            <section>
+               <div className="mb-4 flex items-end justify-between gap-4 px-1 sm:px-2">
+                  <div>
+                     <h2 data-editorial-title="true" className="text-3xl sm:text-4xl">
+                        Keep the work moving.
+                     </h2>
                   </div>
                </div>
 
-               <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap">
-                  <button
-                     onClick={() => setActiveModule("integrations")}
-                     className="
-                        w-full
-                        rounded-2xl
-                        bg-[var(--color-primary)]
-                        px-5
-                        py-3
-                        text-sm
-                        sm:w-auto
-                        font-medium
-                        text-[var(--color-cream)]
-                        transition-opacity
-                        hover:opacity-90
-                     "
-                  >
-                     Open Projects
-                  </button>
-
-                  <button
-                     onClick={handleContinueLatestProjectInCanvas}
-                     className="
-                        w-full
-                        rounded-2xl
-                        border
-                        border-[var(--border-subtle)]
-                        bg-white
-                        px-5
-                        py-3
-                        text-sm
-                        sm:w-auto
-                        font-medium
-                        transition-colors
-                        hover:bg-[var(--color-bg)]
-                     "
-                  >
-                     Continue in Canvas
-                  </button>
-
-                  <button
-                     onClick={handleTesterWorkspaceReset}
-                     className="
-                        w-full
-                        rounded-2xl
-                        border
-                        border-[var(--border-subtle)]
-                        bg-white
-                        px-5
-                        py-3
-                        text-sm
-                        sm:w-auto
-                        font-medium
-                        text-[var(--color-text-secondary)]
-                        transition-colors
-                        hover:bg-[var(--color-bg)]
-                     "
-                  >
-                     Reset Test Workspace
-                  </button>
-
-                  {resetNotice && <p className="w-full text-sm text-[var(--color-text-secondary)]">{resetNotice}</p>}
-               </div>
-            </div>
-         </div>
-
-         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {steps.map((step) => (
-               <button
-                  key={step.label}
-                  onClick={() => (step.module === "canvas" ? handleContinueLatestProjectInCanvas() : setActiveModule(step.module))}
+               <div
                   className="
-                     rounded-[22px]
-                     border
+                     divide-y
+                     divide-[var(--border-subtle)]
+                     border-y
                      border-[var(--border-subtle)]
-                     bg-white
-                     p-4
-                     sm:rounded-[28px]
-                     sm:p-5
-                     text-left
-                     shadow-[var(--shadow-soft)]
-                     transition-colors
-                     hover:bg-[var(--color-bg)]
+                     md:grid
+                     md:grid-cols-2
+                     md:divide-x
+                     md:divide-y-0
+                     xl:grid-cols-4
                   "
                >
-                  <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--color-bg)] text-sm font-semibold">{step.number}</div>
+                  {steps.map((step) => (
+                     <button
+                        key={step.label}
+                        onClick={() => (step.module === "canvas" ? handleContinueLatestProjectInCanvas() : setActiveModule(step.module))}
+                        className="
+                           group
+                           flex
+                           min-h-[170px]
+                           flex-col
+                           items-start
+                           justify-between
+                           gap-6
+                           bg-transparent
+                           p-5
+                           text-left
+                           hover:bg-[rgba(255,255,255,0.48)]
+                           sm:p-6
+                        "
+                     >
+                        <div className="flex w-full items-center justify-between gap-4">
+                           <span
+                              className="
+                                 flex
+                                 h-9
+                                 w-9
+                                 items-center
+                                 justify-center
+                                 rounded-full
+                                 border
+                                 border-[var(--border-subtle)]
+                                 bg-[var(--color-surface)]
+                                 text-sm
+                                 font-semibold
+                                 text-[var(--color-primary)]
+                              "
+                           >
+                              {step.number}
+                           </span>
 
-                  <p className="text-lg font-medium">{step.label}</p>
+                           <span className="text-lg text-[var(--color-text-tertiary)] transition-transform group-hover:translate-x-1">→</span>
+                        </div>
 
-                  <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{step.description}</p>
-               </button>
-            ))}
+                        <div>
+                           <p className="text-lg font-semibold text-[var(--color-text-primary)]">{step.label}</p>
+
+                           <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{step.description}</p>
+                        </div>
+                     </button>
+                  ))}
+               </div>
+            </section>
          </div>
       </section>
    );
@@ -1221,7 +1277,7 @@ export default function Home() {
                         min-w-0
                         w-full
                         overflow-x-hidden
-                        bg-[var(--color-bg)]
+                        bg-transparent
                         text-[var(--color-text-primary)]
                      "
                   >
@@ -1244,16 +1300,15 @@ export default function Home() {
                               scroll-smooth
                               overflow-x-hidden
                               overflow-y-auto
-                              p-4
+                              px-[var(--space-page-x)]
+                              pt-0
                               pb-44
-                              pl-4
-                              pr-4
-                              sm:p-5
+                              sm:pt-0
                               sm:pb-44
-                              lg:p-6
+                              lg:pt-0
                               lg:pl-28
-                              lg:pb-10
-                              xl:pr-6
+                              lg:pb-12
+                              xl:pr-8
                               2xl:pr-[520px]
                            "
                         >
@@ -1266,30 +1321,23 @@ export default function Home() {
                                  z-30
                                  mb-5
                                  hidden
-                                 max-w-full
-                                 overflow-x-auto
-                                 rounded-[24px]
-                                 overscroll-x-contain
-                                 border
+                                 border-b
                                  border-[var(--border-subtle)]
-                                 bg-[rgba(255,255,255,0.88)]
-                                 p-2
-                                 shadow-[var(--shadow-soft)]
+                                 bg-[rgba(247,245,240,0.94)]
                                  backdrop-blur-xl
                                  sm:block
-                                 lg:rounded-[28px]
-                                 lg:p-3
                               "
                            >
                               <div
                                  className="
+                                    mx-auto
                                     flex
-                                    min-w-max
+                                    max-w-[1480px]
                                     items-center
                                     justify-center
-                                    gap-2
-                                    sm:mx-auto
-                                    lg:flex-wrap
+                                    gap-7
+                                    overflow-x-auto
+                                    px-2
                                  "
                               >
                                  {productModules.map((module) => {
@@ -1300,33 +1348,43 @@ export default function Home() {
                                           key={module.id}
                                           onClick={() => activateModule(module.id)}
                                           className={`
-                                             rounded-2xl
-                                             border
-                                             px-3
-                                             py-2.5
+                                             relative
+                                             min-h-14
+                                             whitespace-nowrap
+                                             px-1
                                              text-sm
                                              font-medium
-                                             lg:px-4
-                                             lg:py-3
                                              transition-colors
 
                                              ${
                                                 active
                                                    ? `
-                                                      border-[var(--color-primary)]
-                                                      bg-[var(--color-primary)]
-                                                      text-[var(--color-cream)]
+                                                      text-[var(--color-text-primary)]
                                                    `
                                                    : `
-                                                      border-[var(--border-subtle)]
-                                                      bg-white
-                                                      text-[var(--color-text-primary)]
-                                                      hover:bg-[var(--color-bg)]
+                                                      text-[var(--color-text-secondary)]
+                                                      hover:text-[var(--color-text-primary)]
                                                    `
                                              }
                                           `}
                                        >
                                           {module.label}
+
+                                          <span
+                                             aria-hidden="true"
+                                             className={`
+                                                absolute
+                                                bottom-0
+                                                left-0
+                                                right-0
+                                                h-0.5
+                                                rounded-full
+                                                bg-[var(--color-primary)]
+                                                transition-opacity
+
+                                                ${active ? "opacity-100" : "opacity-0"}
+                                             `}
+                                          />
                                        </button>
                                     );
                                  })}

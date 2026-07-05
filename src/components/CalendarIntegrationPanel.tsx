@@ -2255,22 +2255,13 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
          <div
             key={event.id}
             className={`
-               rounded-2xl
-               border
-               p-4
+               border-b
+               border-[var(--border-subtle)]
+               px-1
+               py-4
                transition-colors
 
-               ${
-                  selected
-                     ? `
-                        border-[var(--color-primary)]
-                        bg-[rgba(48,92,222,0.12)]
-                     `
-                     : `
-                        border-[var(--border-subtle)]
-                        bg-[var(--color-bg)]
-                     `
-               }
+               ${selected ? "bg-[var(--color-surface-blue)]" : "bg-transparent"}
             `}
          >
             <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
@@ -2280,7 +2271,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                   <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{getDateLabel(event.startTime)}</p>
                </div>
 
-               <span className="rounded-xl bg-white px-2 py-1 text-[10px] font-medium capitalize text-[var(--color-text-secondary)]">{event.repeat && event.repeat !== "none" ? getRepeatLabel(event.repeat) : getEventStatus(event)}</span>
+               <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{event.repeat && event.repeat !== "none" ? getRepeatLabel(event.repeat) : getEventStatus(event)}</span>
             </div>
 
             <div className="space-y-2 text-xs text-[var(--color-text-secondary)]">
@@ -2306,7 +2297,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
             <AnimatePresence initial={false}>
                {expanded && hasDetails && (
                   <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
-                     <div className="mt-3 space-y-3 rounded-2xl bg-white/80 p-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+                     <div className="mt-3 space-y-3 border-t border-[var(--border-subtle)] pt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
                         {event.sourceContent && event.sourceContent !== event.description && (
                            <div>
                               <p className="font-medium text-[var(--color-text-primary)]">Project notes</p>
@@ -2328,12 +2319,12 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
             </AnimatePresence>
 
             <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-               <button onClick={() => toggleEventDetails(event.id)} className="flex items-center justify-center gap-1 rounded-xl bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-bg)]" disabled={!hasDetails}>
+               <button onClick={() => toggleEventDetails(event.id)} className="studio-button-secondary min-h-9 w-full justify-center px-3 py-2 text-xs" disabled={!hasDetails}>
                   <ChevronDown size={13} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
                   {expanded ? "Hide details" : "Show details"}
                </button>
 
-               <button onClick={() => deleteEvent(event.id)} className="flex items-center justify-center gap-1 rounded-xl bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-bg)]">
+               <button onClick={() => deleteEvent(event.id)} className="studio-button-secondary min-h-9 w-full justify-center px-3 py-2 text-xs">
                   <Trash2 size={13} />
                   Delete
                </button>
@@ -2358,40 +2349,28 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
          animate={{ opacity: 1, y: 0 }}
          transition={{ duration: 0.35 }}
          className="
-            rounded-[24px]
-            border
-            border-[var(--border-subtle)]
-            bg-[var(--color-surface)]
-            p-4
-            shadow-[var(--shadow-soft)]
-            sm:p-5
-            lg:rounded-[32px]
-            lg:p-6
+            min-w-0
+            bg-transparent
+            pb-8
          "
       >
          {/* Header */}
 
-         <div className="mb-5 flex flex-col gap-4 lg:mb-6 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex items-start gap-3 sm:items-center sm:gap-4">
-               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[var(--color-bg)] sm:h-14 sm:w-14">
-                  <CalendarDays size={24} />
-               </div>
+         <div className="mb-6 flex flex-col gap-5 border-b border-[var(--border-subtle)] pb-5 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+               <p className="studio-eyebrow">Calendar</p>
 
-               <div>
-                  <h2 className="text-2xl sm:text-3xl">Calendar</h2>
-
-                  <p className="mt-2 max-w-2xl text-sm text-[var(--color-text-secondary)]">Create events, browse the month, and keep project time blocks easy to find.</p>
-               </div>
+               <h2 data-editorial-title="true" className="mt-2 text-4xl leading-tight sm:text-5xl">
+                  Plan the time around the work.
+               </h2>
             </div>
 
-            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:flex xl:w-auto xl:flex-wrap xl:items-center xl:gap-3">
-               {notice && <div className="w-full rounded-2xl bg-[var(--color-bg)] px-4 py-3 text-center text-sm font-medium text-[var(--color-text-secondary)] xl:w-auto">{notice}</div>}
-            </div>
+            {notice && <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-blue)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">{notice}</div>}
          </div>
 
          {/* Add Event */}
 
-         <div className="mb-5 rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
+         <div className="mb-6 border-b border-[var(--border-subtle)] pb-5">
             <button onClick={() => setManualOpen((current) => !current)} className="flex w-full items-start justify-between gap-3 text-left sm:items-center">
                <div className="flex items-start gap-3 sm:items-center">
                   <Plus size={18} />
@@ -2399,7 +2378,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                   <div>
                      <p className="font-medium">Add Event</p>
 
-                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Add a time block, deadline, or event.</p>
+                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Add a time block, deadline, or event when the work needs a place on the schedule.</p>
                   </div>
                </div>
 
@@ -2409,7 +2388,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
             <AnimatePresence initial={false}>
                {manualOpen && (
                   <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
-                     <div className="mt-4 space-y-4">
+                     <div className="studio-paper mt-4 space-y-4 p-4 sm:p-6">
                         <input
                            value={newEventTitle}
                            onChange={(event) => setNewEventTitle(sanitizeLiveCalendarTitle(event.target.value))}
@@ -2531,7 +2510,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                         />
 
                         <div className="grid grid-cols-1 gap-3">
-                           <button onClick={addManualEvent} className="flex items-center justify-center gap-2 rounded-2xl bg-[var(--color-primary)] px-4 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
+                           <button onClick={addManualEvent} className="studio-button-primary w-full justify-center">
                               <Plus size={16} />
                               Add Event
                            </button>
@@ -2544,62 +2523,76 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
 
          {/* Month View */}
 
-         <div className="mb-5 rounded-[24px] border border-[var(--border-subtle)] bg-white p-4 sm:p-5 lg:rounded-3xl">
-            <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-               <div className="flex items-center gap-3">
-                  <CalendarDays size={18} />
+         <div className="studio-paper mb-5 p-4 sm:p-6">
+            <div className="mb-4 flex items-center justify-end gap-2">
+               <button
+                  type="button"
+                  onClick={() => moveVisibleMonth(-1)}
+                  aria-label="Previous month"
+                  title="Previous month"
+                  className="
+                     flex
+                     h-10
+                     w-10
+                     items-center
+                     justify-center
+                     rounded-[var(--radius-md)]
+                     border
+                     border-[var(--border-subtle)]
+                     bg-[var(--color-surface)]
+                     text-[var(--color-text-secondary)]
+                     transition-colors
+                     hover:bg-[var(--color-bg-soft)]
+                     hover:text-[var(--color-text-primary)]
+                  "
+               >
+                  <span aria-hidden="true" className="text-xl leading-none">
+                     ←
+                  </span>
+               </button>
 
-                  <div>
-                     <p className="font-medium">Month View</p>
-
-                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Browse the month and review your scheduled work.</p>
-                  </div>
-               </div>
-
-               <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:items-center">
-                  <button onClick={() => moveVisibleMonth(-1)} className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]">
-                     Previous
-                  </button>
-
-                  <button onClick={jumpToToday} className="rounded-xl bg-[var(--color-bg)] px-3 py-2 text-sm font-medium transition-colors hover:bg-white">
-                     Today
-                  </button>
-
-                  <button onClick={() => moveVisibleMonth(1)} className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]">
-                     Next
-                  </button>
-               </div>
+               <button
+                  type="button"
+                  onClick={() => moveVisibleMonth(1)}
+                  aria-label="Next month"
+                  title="Next month"
+                  className="
+                     flex
+                     h-10
+                     w-10
+                     items-center
+                     justify-center
+                     rounded-[var(--radius-md)]
+                     border
+                     border-[var(--border-subtle)]
+                     bg-[var(--color-surface)]
+                     text-[var(--color-text-secondary)]
+                     transition-colors
+                     hover:bg-[var(--color-bg-soft)]
+                     hover:text-[var(--color-text-primary)]
+                  "
+               >
+                  <span aria-hidden="true" className="text-xl leading-none">
+                     →
+                  </span>
+               </button>
             </div>
 
-            <div className="mb-4 rounded-2xl bg-[var(--color-bg)] p-4">
-               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="relative">
-                     <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Month</p>
-
-                     <button
-                        onClick={() => setMonthJumpOpen((current) => !current)}
-                        className="mt-1 flex items-center gap-2 rounded-xl px-0 py-1 text-left text-xl font-medium transition-colors hover:text-[var(--color-primary)] sm:text-2xl"
-                        aria-expanded={monthJumpOpen}
-                     >
+            <div className="mb-5 border-y border-[var(--border-subtle)] py-5">
+               <div className="relative">
+                  <button onClick={() => setMonthJumpOpen((current) => !current)} className="flex items-center gap-3 text-left transition-colors hover:text-[var(--color-primary)]" aria-expanded={monthJumpOpen}>
+                     <span data-editorial-title="true" className="text-3xl leading-tight sm:text-4xl">
                         {visibleMonthLabel}
+                     </span>
 
-                        <ChevronDown size={18} className={`transition-transform ${monthJumpOpen ? "rotate-180" : ""}`} />
-                     </button>
-
-                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Tap the month to jump somewhere else.</p>
-                  </div>
-
-                  <div className="text-left sm:text-right">
-                     <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Selected day</p>
-
-                     <p className="mt-1 text-sm font-medium">{getDateLabel(selectedDayDate)}</p>
-                  </div>
+                     <ChevronDown size={18} className={`transition-transform ${monthJumpOpen ? "rotate-180" : ""}`} />
+                  </button>
                </div>
 
                <AnimatePresence initial={false}>
                   {monthJumpOpen && (
                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
-                        <div className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-[var(--border-subtle)] bg-white p-3 sm:grid-cols-2">
+                        <div className="mt-4 grid grid-cols-1 gap-3 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--color-surface)] p-4 sm:grid-cols-2">
                            <label className="text-xs font-medium text-[var(--color-text-secondary)]">
                               Month
                               <select
@@ -2639,7 +2632,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                <div>
                   <div className="mb-2 grid grid-cols-7 gap-1 sm:gap-2">
                      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
-                        <div key={day} className="rounded-lg bg-[var(--color-bg)] px-1 py-2 text-center text-[10px] font-medium text-[var(--color-text-secondary)] sm:rounded-xl sm:px-2 sm:text-xs">
+                        <div key={day} className="border-b border-[var(--border-subtle)] px-1 py-2 text-center text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-secondary)] sm:px-2 sm:text-xs">
                            {day}
                         </div>
                      ))}
@@ -2657,9 +2650,8 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                               onClick={() => selectCalendarDay(day.timestamp)}
                               className={`
                                  min-h-[58px]
-                                 rounded-xl
+                                 rounded-[var(--radius-md)]
                                  sm:min-h-[92px]
-                                 sm:rounded-2xl
                                  border
                                  p-1.5
                                  text-left
@@ -2674,8 +2666,8 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                                        `
                                        : `
                                           border-[var(--border-subtle)]
-                                          bg-white
-                                          hover:bg-[var(--color-bg)]
+                                          bg-[var(--color-surface)]
+                                          hover:bg-[var(--color-bg-soft)]
                                        `
                                  }
 
@@ -2703,7 +2695,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                   </div>
                </div>
 
-               <div className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4 lg:rounded-3xl">
+               <div className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--color-surface)] p-4 shadow-[var(--shadow-soft)]">
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                      <div>
                         <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Day</p>
@@ -2711,14 +2703,18 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                         <h3 className="mt-1 text-xl">{getDateLabel(selectedDayDate)}</h3>
                      </div>
 
-                     <span className="rounded-xl bg-white px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)]">
+                     <span className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
                         {selectedDayEvents.length} event
                         {selectedDayEvents.length === 1 ? "" : "s"}
                      </span>
                   </div>
 
                   <div className="space-y-3">
-                     {selectedDayEvents.length === 0 ? <div className="rounded-2xl bg-white p-4 text-sm leading-6 text-[var(--color-text-secondary)]">No events scheduled for this day.</div> : selectedDayEvents.map((event) => renderEventCard(event))}
+                     {selectedDayEvents.length === 0 ? (
+                        <div className="border-y border-[var(--border-subtle)] py-5 text-sm leading-6 text-[var(--color-text-secondary)]">No events scheduled for this day.</div>
+                     ) : (
+                        selectedDayEvents.map((event) => renderEventCard(event))
+                     )}
                   </div>
                </div>
             </div>

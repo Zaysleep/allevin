@@ -1,7 +1,7 @@
 // ========================================
 // ALLEVIN Command Palette
 // Purpose:
-// Keyboard-first command layer for MK VI
+// Keyboard-first command layer for MK VII
 // project-first navigation, references, schedule,
 // and simple workspace guidance.
 // ========================================
@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState, type ElementType } from "react";
 
-import { Command, Search, NotebookPen, House, CalendarDays, FolderKanban, ArrowRight, X, Sparkles } from "lucide-react";
+import { Command, Search, NotebookPen, House, CalendarDays, FolderKanban, ArrowRight, X } from "lucide-react";
 
 import { useWorkspace, type WorkspaceSystemStatus } from "@/components/WorkspaceContext";
 
@@ -54,7 +54,7 @@ interface CommandItem {
 const commandGroupOrder: CommandGroup[] = ["Navigation"];
 
 // ========================================
-// MK VI — Command Palette Sanitization
+// MK VII — Command Palette Sanitization
 // ========================================
 
 const COMMAND_SANITIZE_LIMITS = {
@@ -163,19 +163,6 @@ const commands: CommandItem[] = [
       activeView: "workspace",
       systemStatus: "schedule-context-active",
       assistantCue: "Calendar opened.",
-   },
-
-   {
-      label: "Open Insights",
-      description: "Open workspace insights and guidance options.",
-      group: "Navigation",
-      keywords: ["insights", "guidance", "advanced", "focus", "response style", "mode"],
-      icon: Sparkles,
-      moduleId: "advanced",
-      targetId: "cognition",
-      activeView: "insights",
-      systemStatus: "system-observing",
-      assistantCue: "Insights opened.",
    },
 ];
 
@@ -441,7 +428,7 @@ export default function CommandPalette() {
             flex
             items-start
             justify-center
-            bg-black/20
+            bg-[rgba(23,32,51,0.16)]
             px-3
             py-4
             backdrop-blur-sm
@@ -465,8 +452,8 @@ export default function CommandPalette() {
                sm:rounded-[24px]
                border
                border-[var(--border-subtle)]
-               bg-white
-               shadow-2xl
+               bg-[rgba(255,253,249,0.98)]
+               shadow-[var(--shadow-floating)]
             "
          >
             {/* Header */}
@@ -482,11 +469,13 @@ export default function CommandPalette() {
             >
                <div className="mb-2 flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                     <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-secondary)] sm:text-xs">Quick Actions</p>
+                     <p className="studio-eyebrow">Command Palette</p>
 
-                     <h2 className="mt-1 text-base font-medium sm:text-lg">Where do you want to go?</h2>
+                     <h2 data-editorial-title="true" className="mt-2 text-2xl leading-tight sm:text-3xl">
+                        Where do you want to go?
+                     </h2>
 
-                     <p className="mt-1 hidden text-xs text-[var(--color-text-secondary)] sm:block">Jump between Home, Projects, Canvas, Calendar, and Insights.</p>
+                     <p className="mt-2 hidden text-xs text-[var(--color-text-secondary)] sm:block">Move between Home, Projects, Canvas, and Calendar.</p>
                   </div>
 
                   <button
@@ -497,10 +486,14 @@ export default function CommandPalette() {
                         w-9
                         items-center
                         justify-center
-                        rounded-xl
-                        bg-[var(--color-bg)]
+                        rounded-[var(--radius-md)]
+                        border
+                        border-[var(--border-subtle)]
+                        bg-transparent
+                        text-[var(--color-text-secondary)]
                         transition-colors
-                        hover:bg-white
+                        hover:bg-[var(--color-bg-soft)]
+                        hover:text-[var(--color-text-primary)]
                      "
                      aria-label="Close command palette"
                   >
@@ -513,10 +506,13 @@ export default function CommandPalette() {
                      flex
                      items-center
                      gap-3
-                     rounded-xl
-                     bg-[var(--color-bg)]
-                     px-3
-                     py-2.5
+                     rounded-[var(--radius-lg)]
+                     border
+                     border-[var(--border-subtle)]
+                     bg-[var(--color-surface)]
+                     px-4
+                     py-3
+                     shadow-[var(--shadow-soft)]
                   "
                >
                   <Search size={16} className="text-[var(--color-text-secondary)]" />
@@ -526,7 +522,7 @@ export default function CommandPalette() {
                      value={query}
                      onChange={(event) => setQuery(sanitizeLiveCommandQuery(event.target.value))}
                      type="text"
-                     placeholder="Search Home, Projects, Canvas, Calendar, or Insights..."
+                     placeholder="Search Home, Projects, Canvas, or Calendar..."
                      className="
                         flex-1
                         bg-transparent
@@ -542,8 +538,10 @@ export default function CommandPalette() {
                         flex
                         items-center
                         gap-1
-                        rounded-lg
-                        bg-white
+                        rounded-[var(--radius-sm)]
+                        border
+                        border-[var(--border-subtle)]
+                        bg-transparent
                         px-2
                         py-1
                         text-xs
@@ -556,12 +554,12 @@ export default function CommandPalette() {
                   </div>
                </div>
 
-               {notice && <div className="mt-2 rounded-xl bg-[var(--color-bg)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">{notice}</div>}
+               {notice && <div className="mt-3 rounded-[var(--radius-md)] bg-[var(--color-surface-blue)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">{notice}</div>}
             </div>
 
             {/* Command List */}
 
-            <div className="max-h-[min(380px,calc(100dvh-12rem))] overflow-y-auto p-2">
+            <div className="max-h-[min(420px,calc(100dvh-12rem))] overflow-y-auto px-3 py-2 sm:px-4">
                {displayCommands.length > 0 ? (
                   <div className="space-y-2">
                      {commandGroupOrder.map((group) => {
@@ -575,9 +573,11 @@ export default function CommandPalette() {
                            <div key={group}>
                               <p
                                  className="
-                                    mb-1
-                                    px-2
+                                    mb-2
+                                    px-1
+                                    pt-2
                                     text-[10px]
+                                    font-semibold
                                     uppercase
                                     tracking-[0.18em]
                                     text-[var(--color-text-secondary)]
@@ -586,7 +586,7 @@ export default function CommandPalette() {
                                  {group}
                               </p>
 
-                              <div className="space-y-1">
+                              <div className="divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]">
                                  {groupCommands.map((command) => {
                                     const Icon = command.icon;
 
@@ -604,17 +604,15 @@ export default function CommandPalette() {
                                              w-full
                                              items-center
                                              justify-between
-                                             gap-2
-                                             rounded-xl
-                                             px-2.5
-                                             py-2.5
-                                             sm:gap-3
+                                             gap-3
+                                             px-2
+                                             py-3
                                              sm:px-3
-                                             sm:py-3
+                                             sm:py-4
                                              text-left
                                              transition-colors
 
-                                             ${isSelected ? "bg-[var(--color-bg)]" : "hover:bg-[var(--color-bg)]"}
+                                             ${isSelected ? "bg-[var(--color-surface-blue)]" : "hover:bg-[rgba(255,255,255,0.48)]"}
                                           `}
                                        >
                                           <div className="flex min-w-0 items-center gap-3">
@@ -628,9 +626,10 @@ export default function CommandPalette() {
                                                    shrink-0
                                                    items-center
                                                    justify-center
-                                                   rounded-xl
-                                                   bg-white
-                                                   shadow-[var(--shadow-soft)]
+                                                   rounded-[var(--radius-md)]
+                                                   border
+                                                   border-[var(--border-subtle)]
+                                                   bg-[var(--color-surface)]
                                                 "
                                              >
                                                 <Icon size={18} className="text-[var(--color-primary)]" />
@@ -645,10 +644,10 @@ export default function CommandPalette() {
 
                                           <ArrowRight
                                              size={14}
-                                             className="
+                                             className={`
                                                 shrink-0
-                                                text-[var(--color-text-secondary)]
-                                             "
+                                                ${isSelected ? "text-[var(--color-primary)]" : "text-[var(--color-text-secondary)]"}
+                                             `}
                                           />
                                        </button>
                                     );
@@ -661,15 +660,17 @@ export default function CommandPalette() {
                ) : (
                   <div
                      className="
-                        rounded-2xl
-                        bg-[var(--color-bg)]
+                        rounded-[var(--radius-lg)]
+                        border
+                        border-[var(--border-subtle)]
+                        bg-[var(--color-surface)]
                         p-4
                         text-xs
                         leading-relaxed
                         text-[var(--color-text-secondary)]
                      "
                   >
-                     No command matched that search. Try “Projects,” “Canvas,” “Calendar,” “Insights,” or “Home.”
+                     No command matched that search. Try “Projects,” “Canvas,” “Calendar,” or “Home.”
                   </div>
                )}
             </div>
@@ -694,11 +695,11 @@ export default function CommandPalette() {
                "
             >
                <div className="hidden flex-wrap items-center gap-2 sm:flex">
-                  <span className="rounded-lg bg-[var(--color-bg)] px-2 py-1">↑↓ to move</span>
+                  <span>↑↓ Move</span>
 
-                  <span className="rounded-lg bg-[var(--color-bg)] px-2 py-1">Enter to open</span>
+                  <span>Enter Open</span>
 
-                  <span className="rounded-lg bg-[var(--color-bg)] px-2 py-1">Esc to close</span>
+                  <span>Esc Close</span>
                </div>
 
                <span>
