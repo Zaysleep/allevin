@@ -8,6 +8,8 @@ import AIDock from "@/ai/AIDock";
 
 import CommandPalette from "@/components/CommandPalette";
 
+import ClientHydrationGate from "@/components/ClientHydrationGate";
+
 import AdaptiveWorkCanvas from "@/components/AdaptiveWorkCanvas";
 
 import IntegrationAdapterLayer from "@/components/IntegrationAdapterLayer";
@@ -1094,6 +1096,144 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                   </div>
                </div>
 
+               {/* ALLEVIN Dock starter guide */}
+
+               <div
+                  className="
+                     mb-6
+                     overflow-hidden
+                     rounded-[var(--radius-xl)]
+                     border
+                     border-[var(--border-subtle)]
+                     bg-[var(--color-bg-soft)]
+                  "
+               >
+                  <div className="grid min-w-0 grid-cols-1 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.6fr)]">
+                     <div
+                        className="
+                           border-b
+                           border-[var(--border-subtle)]
+                           p-5
+                           sm:p-6
+                           xl:border-b-0
+                           xl:border-r
+                        "
+                     >
+                        <p className="studio-eyebrow">ALLEVIN Dock starter guide</p>
+
+                        <h3 data-editorial-title="true" className="mt-3 text-2xl leading-tight sm:text-3xl">
+                           Use the Dock to find your next move.
+                        </h3>
+
+                        <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">The ALLEVIN Dock works from your active project, Canvas, saved materials, and Calendar to understand the work and give you grounded guidance.</p>
+                     </div>
+
+                     <div className="p-5 sm:p-6">
+                        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+                           <div>
+                              <span
+                                 className="
+                                    flex
+                                    h-8
+                                    w-8
+                                    items-center
+                                    justify-center
+                                    rounded-full
+                                    border
+                                    border-[var(--border-subtle)]
+                                    bg-[var(--color-surface)]
+                                    text-sm
+                                    font-semibold
+                                    text-[var(--color-primary)]
+                                 "
+                              >
+                                 1
+                              </span>
+
+                              <p className="mt-3 text-sm font-semibold text-[var(--color-text-primary)]">Share the outcome</p>
+
+                              <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Start a project or explain what you want to finish, decide, research, write, or build.</p>
+                           </div>
+
+                           <div>
+                              <span
+                                 className="
+                                    flex
+                                    h-8
+                                    w-8
+                                    items-center
+                                    justify-center
+                                    rounded-full
+                                    border
+                                    border-[var(--border-subtle)]
+                                    bg-[var(--color-surface)]
+                                    text-sm
+                                    font-semibold
+                                    text-[var(--color-primary)]
+                                 "
+                              >
+                                 2
+                              </span>
+
+                              <p className="mt-3 text-sm font-semibold text-[var(--color-text-primary)]">Ask for direction</p>
+
+                              <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Ask what to work on next, what may be missing, or which option makes the most sense for the project.</p>
+                           </div>
+
+                           <div>
+                              <span
+                                 className="
+                                    flex
+                                    h-8
+                                    w-8
+                                    items-center
+                                    justify-center
+                                    rounded-full
+                                    border
+                                    border-[var(--border-subtle)]
+                                    bg-[var(--color-surface)]
+                                    text-sm
+                                    font-semibold
+                                    text-[var(--color-primary)]
+                                 "
+                              >
+                                 3
+                              </span>
+
+                              <p className="mt-3 text-sm font-semibold text-[var(--color-text-primary)]">Keep moving</p>
+
+                              <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Use the guidance in Canvas, add supporting materials, or schedule the next action when it needs dedicated time.</p>
+                           </div>
+                        </div>
+
+                        <div className="mt-6 border-t border-[var(--border-subtle)] pt-5">
+                           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Try asking</p>
+
+                           <div className="mt-3 flex flex-wrap gap-2">
+                              {["Start a new project.", "What should I work on next?", "What am I overlooking?", "Which option makes the most sense?", "Is this project ready to finish?"].map((prompt) => (
+                                 <span
+                                    key={prompt}
+                                    className="
+                                       rounded-full
+                                       border
+                                       border-[var(--border-subtle)]
+                                       bg-[var(--color-surface)]
+                                       px-3
+                                       py-2
+                                       text-xs
+                                       font-medium
+                                       text-[var(--color-text-primary)]
+                                    "
+                                 >
+                                    “{prompt}”
+                                 </span>
+                              ))}
+                           </div>
+                        </div>
+                     </div>
+                  </div>
+               </div>
+
                <div
                   className="
                      divide-y
@@ -1266,12 +1406,13 @@ export default function Home() {
    }, []);
 
    return (
-      <FocusProvider>
-         <WorkspaceProvider>
-            <EnvironmentProvider>
-               <AIProvider>
-                  <main
-                     className="
+      <ClientHydrationGate>
+         <FocusProvider>
+            <WorkspaceProvider>
+               <EnvironmentProvider>
+                  <AIProvider>
+                     <main
+                        className="
                         flex
                         min-h-screen
                         min-w-0
@@ -1280,20 +1421,20 @@ export default function Home() {
                         bg-transparent
                         text-[var(--color-text-primary)]
                      "
-                  >
-                     {/* Sidebar */}
+                     >
+                        {/* Sidebar */}
 
-                     <Sidebar />
+                        <Sidebar />
 
-                     {/* Command Palette */}
+                        {/* Command Palette */}
 
-                     <CommandPalette />
+                        <CommandPalette />
 
-                     {/* Main */}
+                        {/* Main */}
 
-                     <div className="relative z-0 flex min-w-0 flex-1 flex-col overflow-x-hidden">
-                        <div
-                           className="
+                        <div className="relative z-0 flex min-w-0 flex-1 flex-col overflow-x-hidden">
+                           <div
+                              className="
                               min-w-0
                               max-w-full
                               flex-1
@@ -1311,11 +1452,11 @@ export default function Home() {
                               xl:pr-8
                               2xl:pr-[520px]
                            "
-                        >
-                           {/* Product Navigation */}
+                           >
+                              {/* Product Navigation */}
 
-                           <div
-                              className="
+                              <div
+                                 className="
                                  sticky
                                  top-0
                                  z-30
@@ -1327,9 +1468,9 @@ export default function Home() {
                                  backdrop-blur-xl
                                  sm:block
                               "
-                           >
-                              <div
-                                 className="
+                              >
+                                 <div
+                                    className="
                                     mx-auto
                                     flex
                                     max-w-[1480px]
@@ -1339,15 +1480,15 @@ export default function Home() {
                                     overflow-x-auto
                                     px-2
                                  "
-                              >
-                                 {productModules.map((module) => {
-                                    const active = activeModule === module.id;
+                                 >
+                                    {productModules.map((module) => {
+                                       const active = activeModule === module.id;
 
-                                    return (
-                                       <button
-                                          key={module.id}
-                                          onClick={() => activateModule(module.id)}
-                                          className={`
+                                       return (
+                                          <button
+                                             key={module.id}
+                                             onClick={() => activateModule(module.id)}
+                                             className={`
                                              relative
                                              min-h-14
                                              whitespace-nowrap
@@ -1367,12 +1508,12 @@ export default function Home() {
                                                    `
                                              }
                                           `}
-                                       >
-                                          {module.label}
+                                          >
+                                             {module.label}
 
-                                          <span
-                                             aria-hidden="true"
-                                             className={`
+                                             <span
+                                                aria-hidden="true"
+                                                className={`
                                                 absolute
                                                 bottom-0
                                                 left-0
@@ -1384,55 +1525,56 @@ export default function Home() {
 
                                                 ${active ? "opacity-100" : "opacity-0"}
                                              `}
-                                          />
-                                       </button>
-                                    );
-                                 })}
+                                             />
+                                          </button>
+                                       );
+                                    })}
+                                 </div>
                               </div>
-                           </div>
 
-                           {/* Home */}
+                              {/* Home */}
 
-                           <div className={activeModule === "home" ? "block" : "hidden"}>
-                              <HomeStart setActiveModule={activateModule} />
-                           </div>
+                              <div className={activeModule === "home" ? "block" : "hidden"}>
+                                 <HomeStart setActiveModule={activateModule} />
+                              </div>
 
-                           {/* Main Work Area */}
+                              {/* Main Work Area */}
 
-                           <section
-                              id="work-area"
-                              className={`
+                              <section
+                                 id="work-area"
+                                 className={`
                                  min-w-0
                                  scroll-mt-24
                                  lg:scroll-mt-28
 
                                  ${activeModule !== "home" ? "block" : "hidden"}
                               `}
-                           >
-                              {/* Main workspace modules stay mounted when active so product events route cleanly. */}
+                              >
+                                 {/* Main workspace modules stay mounted when active so product events route cleanly. */}
 
-                              <div id="canvas" className={activeModule === "canvas" ? "block min-w-0" : "hidden"}>
-                                 <AdaptiveWorkCanvas />
-                              </div>
+                                 <div id="canvas" className={activeModule === "canvas" ? "block min-w-0" : "hidden"}>
+                                    <AdaptiveWorkCanvas />
+                                 </div>
 
-                              <div id="calendar" className={activeModule === "calendar" ? "block min-w-0" : "hidden"}>
-                                 <CalendarIntegrationPanel />
-                              </div>
+                                 <div id="calendar" className={activeModule === "calendar" ? "block min-w-0" : "hidden"}>
+                                    <CalendarIntegrationPanel />
+                                 </div>
 
-                              <div id="integrations" className={activeModule === "integrations" ? "block min-w-0" : "hidden"}>
-                                 <IntegrationAdapterLayer />
-                              </div>
-                           </section>
+                                 <div id="integrations" className={activeModule === "integrations" ? "block min-w-0" : "hidden"}>
+                                    <IntegrationAdapterLayer />
+                                 </div>
+                              </section>
+                           </div>
                         </div>
-                     </div>
 
-                     {/* ALLEVIN Dock */}
+                        {/* ALLEVIN Dock */}
 
-                     <AIDock />
-                  </main>
-               </AIProvider>
-            </EnvironmentProvider>
-         </WorkspaceProvider>
-      </FocusProvider>
+                        <AIDock />
+                     </main>
+                  </AIProvider>
+               </EnvironmentProvider>
+            </WorkspaceProvider>
+         </FocusProvider>
+      </ClientHydrationGate>
    );
 }

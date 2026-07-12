@@ -1,4 +1,6 @@
-import { parseProjectDocument, type ParsedProjectDocument } from "@/lib/allevinProjectMemory";
+import { parseProjectDocument, readProjectMemory, type ParsedProjectDocument } from "@/lib/allevinProjectMemory";
+
+import { buildProjectIntelligencePacket, getEmptyProjectIntelligencePacket, type ProjectIntelligencePacket, type ProjectMaterialInput } from "@/lib/projectIntelligenceEngine";
 
 // ========================================
 // Memory Engine
@@ -59,7 +61,7 @@ export interface CognitiveLoadState {
 }
 
 // ========================================
-// MK VI Session / Welcome Summary
+// MK VII Session / Welcome Summary
 // Purpose:
 // Lightweight system memory read for the
 // welcome layer, AIDock, and calm status UI.
@@ -358,6 +360,8 @@ export interface ActiveProjectAwareness {
    recommendedNextAction: string;
 
    updatedAt: number;
+
+   projectIntelligence: ProjectIntelligencePacket;
 }
 
 // ========================================
@@ -395,7 +399,7 @@ const PROJECT_LIBRARY_STORAGE_KEY = "allevin-project-library";
 const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
 
 // ========================================
-// MK VI Build — Memory Engine Sanitization
+// MK VII — Memory Engine Sanitization
 // MemoryEngine reads Canvas, Projects, Calendar, and Materials sources. Every stored field is treated as untrusted.
 // ========================================
 
@@ -604,6 +608,52 @@ function readStringArrayStorageSafe(key: string) {
 
       return [];
    }
+}
+
+function removeMemoryEngineStorageValues(key: string, values: string[]) {
+   if (typeof window === "undefined" || !values.length) {
+      return;
+   }
+
+   const valueSet = new Set(values.filter(Boolean));
+
+   const nextValues = readStringArrayStorageSafe(key).filter((value) => !valueSet.has(value));
+
+   if (nextValues.length) {
+      localStorage.setItem(key, JSON.stringify(nextValues));
+   } else {
+      localStorage.removeItem(key);
+   }
+}
+
+// MK VII — Live Canvas revival
+// A real project visibly open in Canvas is the current source of truth.
+// Clear stale deletion tombstones so a recreated project can immediately
+// rebuild its canonical project context and Project Intelligence Packet.
+function clearDeletedProjectMemorySignal(value: { id?: string; workflowId?: string; originBoardItemId?: string; title?: string; sourceTitle?: string }) {
+   if (typeof window === "undefined") {
+      return;
+   }
+
+   const titleKey = getNormalizedProjectTitleKey(value.sourceTitle || value.title);
+
+   const ids = [value.id, value.workflowId, value.originBoardItemId].filter(Boolean) as string[];
+
+   const keys = [
+      value.id ? `event:${value.id}` : "",
+      value.id ? `thread:${value.id}` : "",
+      value.id ? `project:${value.id}` : "",
+      value.workflowId ? `workflow:${value.workflowId}` : "",
+      value.originBoardItemId ? `origin:${value.originBoardItemId}` : "",
+      titleKey ? `title:${titleKey}` : "",
+   ].filter(Boolean);
+
+   removeMemoryEngineStorageValues(DELETED_THREADS_STORAGE_KEY, ids);
+   removeMemoryEngineStorageValues(DELETED_PROJECTS_STORAGE_KEY, ids);
+   removeMemoryEngineStorageValues(DELETED_CALENDAR_EVENTS_STORAGE_KEY, ids);
+   removeMemoryEngineStorageValues(DELETED_THREAD_KEYS_STORAGE_KEY, keys);
+   removeMemoryEngineStorageValues(DELETED_PROJECT_KEYS_STORAGE_KEY, keys);
+   removeMemoryEngineStorageValues(DELETED_CALENDAR_EVENT_KEYS_STORAGE_KEY, keys);
 }
 
 function isDeletedCalendarLike(value: { id?: string; workflowId?: string; originBoardItemId?: string; title?: string; sourceTitle?: string; summary?: string; latestMovement?: string }) {
@@ -2885,7 +2935,7 @@ function getBestSavedProjectDocument(project: any) {
 }
 
 function getSourceAwareProjectLibraryRecords() {
-   return readArrayStorage<any>(PROJECT_LIBRARY_STORAGE_KEY)
+   const records = readArrayStorage<any>(PROJECT_LIBRARY_STORAGE_KEY)
       .filter((project) => project && typeof project.title === "string")
       .map((project) => {
          const notes = Array.isArray(project.notes) ? project.notes : [];
@@ -2894,30 +2944,69 @@ function getSourceAwareProjectLibraryRecords() {
 
          const title = getCanonicalProjectTitle(project.title);
 
-         const body = getBestSavedProjectDocument(project);
+         const savedBody = getBestSavedProjectDocument(project);
 
-         const updatedAt = typeof project.updatedAt === "number" ? project.updatedAt : typeof latestNote?.savedAt === "number" ? latestNote.savedAt : Date.now();
+         const canonicalProject = getMatchingCanonicalProjectMemoryForContext({
+            title,
+            workflowId: project.workflowId,
+            originBoardItemId: project.originBoardItemId,
+         });
+
+         const body = getBestProjectDocumentCandidate(savedBody, canonicalProject?.body, canonicalProject?.sourceContent, canonicalProject?.workingSummary);
+
+         const updatedAt =
+            Math.max(typeof project.updatedAt === "number" ? project.updatedAt : 0, typeof latestNote?.savedAt === "number" ? latestNote.savedAt : 0, typeof canonicalProject?.updatedAt === "number" ? canonicalProject.updatedAt : 0) || Date.now();
 
          return {
             project,
+            canonicalProject,
             latestNote,
             title,
             body,
             updatedAt,
          };
-      })
-      .filter((record) => {
-         if (!record.title && !record.body) {
-            return false;
-         }
-
-         return !isDeletedProjectLike({
-            workflowId: record.project.workflowId,
-            originBoardItemId: record.project.originBoardItemId,
-            title: record.title,
-            summary: record.body || record.project.latestSummary,
-         });
       });
+
+   // A structured project that is visibly present in Projects is live again.
+   // Clear stale deletion tombstones before source-aware filtering so a recreated
+   // or newly saved project does not disappear as soon as Canvas is cleared.
+   records.forEach((record) => {
+      const hasLiveProjectShape = isStrongTitle(record.title) && isUsefulThreadContent(record.body);
+
+      if (!hasLiveProjectShape) {
+         return;
+      }
+
+      clearDeletedProjectMemorySignal({
+         id: record.project.id,
+         workflowId: record.project.workflowId || record.canonicalProject?.workflowId,
+         originBoardItemId: record.project.originBoardItemId || record.canonicalProject?.originBoardItemId,
+         title: record.title,
+         sourceTitle: record.title,
+      });
+   });
+
+   // Projects is the user-visible source of truth for saved work. If a record is
+   // still present there with a real title and meaningful body, it is active saved
+   // project context. A stale deletion tombstone must not hide a project the user
+   // can currently see and open.
+   return records.filter((record) => {
+      const hasLiveProjectShape = isStrongTitle(record.title) && isUsefulThreadContent(record.body);
+
+      if (!hasLiveProjectShape) {
+         return false;
+      }
+
+      clearDeletedProjectMemorySignal({
+         id: record.project.id,
+         workflowId: record.project.workflowId || record.canonicalProject?.workflowId,
+         originBoardItemId: record.project.originBoardItemId || record.canonicalProject?.originBoardItemId,
+         title: record.title,
+         sourceTitle: record.title,
+      });
+
+      return true;
+   });
 }
 
 function getMatchingProjectLibraryRecordForContext(input: { title?: string; workflowId?: string; originBoardItemId?: string }) {
@@ -2939,6 +3028,41 @@ function getMatchingProjectLibraryRecordForContext(input: { title?: string; work
 
          return Boolean(titleKey && getCanonicalProjectKey(record.title) === titleKey);
       }) || null
+   );
+}
+
+function getMatchingCanonicalProjectMemoryForContext(input: { title?: string; workflowId?: string; originBoardItemId?: string }) {
+   const titleKey = getCanonicalProjectKey(input.title);
+
+   try {
+      return (
+         readProjectMemory().find((project) => {
+            if (input.workflowId && (project.workflowId === input.workflowId || project.originBoardItemId === input.workflowId || project.id === input.workflowId)) {
+               return true;
+            }
+
+            if (input.originBoardItemId && (project.originBoardItemId === input.originBoardItemId || project.workflowId === input.originBoardItemId || project.id === input.originBoardItemId)) {
+               return true;
+            }
+
+            return Boolean(titleKey && getCanonicalProjectKey(project.cleanTitle || project.title) === titleKey);
+         }) || null
+      );
+   } catch {
+      return null;
+   }
+}
+
+function getBestProjectDocumentCandidate(...values: Array<string | undefined>) {
+   return (
+      values
+         .map((value) => sanitizeMemoryEngineText(value, MEMORY_ENGINE_SANITIZE_LIMITS.body))
+         .filter(Boolean)
+         .map((body) => ({
+            body,
+            score: getProjectDocumentAwarenessScore(body),
+         }))
+         .sort((a, b) => b.score - a.score || b.body.length - a.body.length)[0]?.body || ""
    );
 }
 
@@ -2974,17 +3098,16 @@ function getSourceAwareCanvasCandidate(): SourceAwareActiveProject | null {
       return null;
    }
 
-   if (
-      isDeletedProjectLike({
-         workflowId: canvas.workflowId,
-         originBoardItemId: canvas.originBoardItemId,
-         title,
-         summary: body,
-      })
-   ) {
-      return null;
-   }
+   clearDeletedProjectMemorySignal({
+      workflowId: canvas.workflowId,
+      originBoardItemId: canvas.originBoardItemId,
+      title,
+      sourceTitle: title,
+   });
 
+   // A strong, non-empty Canvas project is live work. Do not run it through
+   // deletion filtering again after clearing its tombstones; stale title or
+   // workflow keys would otherwise hide the same recreated project immediately.
    const updatedAt = typeof canvas.updatedAt === "number" ? canvas.updatedAt : Date.now();
 
    const matchingProject = getMatchingProjectLibraryRecordForContext({
@@ -2993,7 +3116,17 @@ function getSourceAwareCanvasCandidate(): SourceAwareActiveProject | null {
       originBoardItemId: canvas.originBoardItemId,
    });
 
-   const projectBody = sanitizeMemoryEngineText(matchingProject?.body || "", MEMORY_ENGINE_SANITIZE_LIMITS.body);
+   const matchingMemoryProject = getMatchingCanonicalProjectMemoryForContext({
+      title,
+      workflowId: canvas.workflowId,
+      originBoardItemId: canvas.originBoardItemId,
+   });
+
+   // Canvas can become active before the project is copied into the legacy
+   // project-library store. Preserve the structured starter itself as valid
+   // project context instead of replacing its explicit next action with a
+   // generic "Continue in Canvas" fallback.
+   const projectBody = getBestProjectDocumentCandidate(matchingProject?.body, matchingMemoryProject?.body, matchingMemoryProject?.sourceContent, body);
 
    const projectDocument = parseProjectDocument(projectBody);
 
@@ -3007,7 +3140,7 @@ function getSourceAwareCanvasCandidate(): SourceAwareActiveProject | null {
       lastKnownLocation: "canvas",
       currentStage: "drafting",
       status: "active",
-      recommendedNextAction: getProjectDocumentRecommendation(projectDocument, "Continue in Canvas. The latest editable version is already open there."),
+      recommendedNextAction: getProjectDocumentRecommendation(projectDocument, matchingMemoryProject?.recommendedNextAction || "Continue in Canvas. The latest editable version is already open there."),
       score: 1000 + getSourceAwareTemporalBoost(updatedAt) + (isUsefulThreadContent(body) ? 80 : 0) + (isStrongTitle(title) ? 40 : 0),
       reason: "Canvas is the current writing surface, while the saved project document remains available as roadmap context.",
       updatedAt,
@@ -3022,9 +3155,9 @@ function getSourceAwareCanvasCandidate(): SourceAwareActiveProject | null {
 function getSourceAwareProjectLibraryCandidates(): SourceAwareActiveProject[] {
    return getSourceAwareProjectLibraryRecords()
       .map((record) => {
-         const { project, title, body, updatedAt } = record;
+         const { project, canonicalProject, title, body, updatedAt } = record;
 
-         const projectBody = sanitizeMemoryEngineText(body || title, MEMORY_ENGINE_SANITIZE_LIMITS.body);
+         const projectBody = sanitizeMemoryEngineText(getBestProjectDocumentCandidate(body, canonicalProject?.body, canonicalProject?.sourceContent, canonicalProject?.workingSummary) || title, MEMORY_ENGINE_SANITIZE_LIMITS.body);
 
          const projectDocument = parseProjectDocument(projectBody);
 
@@ -3038,7 +3171,7 @@ function getSourceAwareProjectLibraryCandidates(): SourceAwareActiveProject[] {
             lastKnownLocation: "integrations" as const,
             currentStage: "preserved" as const,
             status: "preserved" as const,
-            recommendedNextAction: getProjectDocumentRecommendation(projectDocument, "Open this from Projects when you want to continue the saved work in Canvas."),
+            recommendedNextAction: getProjectDocumentRecommendation(projectDocument, canonicalProject?.recommendedNextAction || "Open this from Projects when you want to continue the saved work in Canvas."),
             score: 850 + getSourceAwareTemporalBoost(updatedAt) + (isUsefulThreadContent(body) ? 60 : 0) + (isStrongTitle(title) ? 35 : 0),
             reason: "Projects stores the saved roadmap and long-term project context.",
             updatedAt,
@@ -3258,6 +3391,7 @@ export function getActiveProjectAwareness(): ActiveProjectAwareness {
          latestMovement: "No movement detected",
          recommendedNextAction: "Start by creating a project or drafting in Canvas so ALLEVIN can understand what you are working on.",
          updatedAt: Date.now(),
+         projectIntelligence: getEmptyProjectIntelligencePacket(),
       };
    }
 
@@ -3309,6 +3443,16 @@ export function getActiveProjectAwareness(): ActiveProjectAwareness {
 
    const recommendedNextAction = getProjectDocumentRecommendation(projectDocument, activeProject.recommendedNextAction || "Choose the next useful project action.");
 
+   const projectMaterials = readArrayStorage<ProjectMaterialInput>(PROJECT_MATERIALS_STORAGE_KEY);
+
+   const projectIntelligence = buildProjectIntelligencePacket({
+      title: activeProject.title,
+      projectDocument,
+      projectBody,
+      canvasContent,
+      materials: projectMaterials,
+   });
+
    return {
       hasActiveProject: true,
       source: activeProject.source,
@@ -3333,7 +3477,12 @@ export function getActiveProjectAwareness(): ActiveProjectAwareness {
                 : "Source-aware project context selected",
       recommendedNextAction,
       updatedAt: Math.max(activeProject.updatedAt || 0, canvasUpdatedAt || 0, activeProject.projectUpdatedAt || matchingProject?.updatedAt || 0),
+      projectIntelligence,
    };
+}
+
+export function getProjectIntelligencePacket() {
+   return getActiveProjectAwareness().projectIntelligence;
 }
 
 function buildThreadMemoryObjectFromSourceAwareCandidate(candidate: SourceAwareActiveProject, fallback?: ThreadMemoryObject): ThreadMemoryObject {

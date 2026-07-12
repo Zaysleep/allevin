@@ -1,11 +1,10 @@
 // ========================================
-// ALLEVIN MK VI Project Memory Foundation
+// ALLEVIN MK VII Project Memory Foundation
 // Purpose: shared utility for clean project identity,
-// persistence, dedupe, merge behavior, and clearer
-// project/context handoffs across ALLEVIN modules.
-// Keeps legacy workflow values compatible while the
-// user-facing model stays focused on Projects, Canvas,
-// Materials, Project next actions, and Calendar.
+// persistence, dedupe, merge behavior, and stable
+// canonical project metadata across ALLEVIN modules.
+// Reasoning remains in the Project Intelligence and
+// Project Guidance Engines; this file stores durable facts.
 // ========================================
 
 import type { AllevinDestination, AllevinPriority, AllevinProject, AllevinProjectEvent, AllevinProjectStage, AllevinProjectStatus, AllevinSource } from "@/lib/allevinTypes";
@@ -24,6 +23,7 @@ const PROJECT_MEMORY_SANITIZE_LIMITS = {
    nextAction: 1000,
    movement: 300,
    id: 180,
+   metadataItem: 1000,
 } as const;
 
 function limitProjectMemoryTextLength(value: string, maxLength: number) {
@@ -91,6 +91,38 @@ function isValidProjectMemoryTimestamp(value?: number) {
    return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+export type ProjectMemoryProjectType = "software" | "research" | "writing" | "planning" | "checklist" | "general" | "unknown";
+
+export type ProjectMemoryProjectTypeSource = "explicit" | "document" | "legacy" | "unknown";
+
+export type ProjectRoadmapMemoryStatus = "not-started" | "in-progress" | "ready-for-review" | "blocked" | "completed" | "unknown";
+
+export interface ProjectRoadmapMemoryItem {
+   id: string;
+   order: number;
+   title: string;
+   status: ProjectRoadmapMemoryStatus;
+   dependencies: string[];
+   completionCriteria: string[];
+}
+
+export interface CanonicalProjectMetadata {
+   schemaVersion: "MK VII";
+   projectType: ProjectMemoryProjectType;
+   projectTypeSource: ProjectMemoryProjectTypeSource;
+   currentState: string;
+   goal: string;
+   roadmap: ProjectRoadmapMemoryItem[];
+   completionCriteria: string[];
+   constraints: string[];
+   implementationPreferences: string[];
+   updatedAt: number;
+}
+
+export type AllevinProjectMemoryRecord = AllevinProject & {
+   projectMetadata?: CanonicalProjectMetadata;
+};
+
 export interface ProjectMemoryInput {
    title?: string;
    body?: string;
@@ -106,6 +138,12 @@ export interface ProjectMemoryInput {
    priority?: AllevinPriority;
    recommendedNextAction?: string;
    latestMovement?: string;
+
+   // MK VII canonical metadata. These fields store durable project facts only.
+   // Readiness, risks, evidence quality, and recommendations remain derived.
+   projectType?: ProjectMemoryProjectType | string;
+   projectMetadata?: Partial<CanonicalProjectMetadata>;
+   roadmap?: ProjectRoadmapMemoryItem[];
 }
 
 export interface ProjectContextSections {
@@ -408,13 +446,34 @@ const PROJECT_DOCUMENT_SECTION_ALIASES = {
    projectType: ["Project Type", "Type"],
    currentState: ["Current State", "Current Status", "Status"],
    goal: ["Goal", "Project Goal", "Primary Goal", "Main Goal", "MK II Goal", "MK III Goal", "MK IV Goal", "MK V Goal", "MK VI Goal", "MK VII Goal"],
-   needsToAdd: ["What I Need to Add", "What Needs Attention", "Needs To Add", "Remaining Work", "Still Needed"],
+   needsToAdd: ["What I Need to Add", "What Needs Attention", "Needs To Add", "Remaining Work", "Still Needed", "Evidence Needed", "Open Questions", "Dependencies", "What I Need to Learn"],
    immediateNextStep: ["Next Immediate Step", "Immediate Next Step", "Next Step", "Next Action"],
-   buildOrder: ["Recommended Build Order", "Build Order", "Roadmap", "Steps"],
-   completionCriteria: ["Completion Criteria", "Success Criteria", "What Success Looks Like", "Definition of Done"],
+   buildOrder: ["Recommended Build Order", "Build Order", "Roadmap", "Steps", "Milestones"],
+   completionCriteria: ["Completion Criteria", "Success Criteria", "What Success Looks Like", "Definition of Done", "Finished Outcome", "Required Outcome", "Deliverable", "Verification"],
    constraints: ["Constraints", "Important Design Rules", "Design Rules", "Development Rules", "Important Rules"],
-   implementationPreferences: ["Preferred Implementation", "Preferred Implementation Style", "Implementation Preferences", "Development Preferences", "Build Preferences"],
+   implementationPreferences: ["Preferred Implementation", "Preferred Implementation Style", "Implementation Preferences", "Development Preferences", "Build Preferences", "Architecture / Technical Context"],
 } as const;
+
+const PROJECT_DOCUMENT_BOUNDARY_HEADINGS = [
+   "Primary User",
+   "Problem to Solve",
+   "First Useful Release",
+   "Research Question",
+   "Audience",
+   "Core Message",
+   "Decision or Finished Outcome",
+   "Known Options",
+   "Risks",
+   "Requirements",
+   "Order and Dependencies",
+   "Known Context",
+   "Topic",
+   "What I Know So Far",
+   "Useful Notes",
+   "Sources or Materials",
+   "Materials or References",
+   "Important Details",
+] as const;
 
 function normalizeProjectDocumentHeading(value?: string) {
    return compactText(value)
@@ -434,6 +493,15 @@ function getProjectDocumentHeadingLookup() {
    });
 
    return lookup;
+}
+
+function getProjectDocumentBoundaryHeadingLookup() {
+   return new Set<string>([
+      ...PROJECT_DOCUMENT_BOUNDARY_HEADINGS.map((heading) => normalizeProjectDocumentHeading(heading)),
+      ...Object.values(PROJECT_DOCUMENT_SECTION_ALIASES)
+         .flat()
+         .map((heading) => normalizeProjectDocumentHeading(heading)),
+   ]);
 }
 
 function cleanProjectDocumentListItem(value?: string) {
@@ -466,6 +534,273 @@ function splitProjectDocumentList(value?: string) {
    return semicolonParts.length > 1 ? semicolonParts : [singleLine];
 }
 
+function sanitizeProjectMemoryStringList(values?: unknown, limit = 24) {
+   if (!Array.isArray(values)) {
+      return [] as string[];
+   }
+
+   return values
+      .map((value) => sanitizeProjectMemoryText(typeof value === "string" ? value : "", PROJECT_MEMORY_SANITIZE_LIMITS.metadataItem))
+      .filter(Boolean)
+      .slice(0, limit);
+}
+
+export function normalizeProjectMemoryProjectType(value?: string): ProjectMemoryProjectType {
+   const normalized = compactText(value).toLowerCase();
+
+   if (!normalized) {
+      return "unknown";
+   }
+
+   // Keep this normalization conservative. It standardizes explicit type labels;
+   // it does not infer a reasoning profile from arbitrary project content.
+   if (normalized.includes("software") || normalized.includes("web app") || normalized.includes("application development") || normalized.includes("app development")) {
+      return "software";
+   }
+
+   if (normalized.includes("research") || normalized.includes("academic study") || normalized === "study") {
+      return "research";
+   }
+
+   if (normalized.includes("writing") || normalized.includes("essay") || normalized.includes("report") || normalized.includes("brief") || normalized.includes("document")) {
+      return "writing";
+   }
+
+   if (normalized.includes("planning") || normalized === "plan" || normalized.includes("project plan") || normalized.includes("event plan")) {
+      return "planning";
+   }
+
+   if (normalized.includes("checklist") || normalized.includes("check list")) {
+      return "checklist";
+   }
+
+   if (normalized === "general") {
+      return "general";
+   }
+
+   return "unknown";
+}
+
+function sanitizeProjectRoadmapMemoryStatus(value?: string): ProjectRoadmapMemoryStatus {
+   switch (compactText(value).toLowerCase()) {
+      case "not-started":
+      case "not started":
+      case "planned":
+      case "queued":
+         return "not-started";
+
+      case "in-progress":
+      case "in progress":
+      case "active":
+         return "in-progress";
+
+      case "ready-for-review":
+      case "ready for review":
+      case "in review":
+         return "ready-for-review";
+
+      case "blocked":
+         return "blocked";
+
+      case "completed":
+      case "complete":
+      case "done":
+         return "completed";
+
+      default:
+         return "unknown";
+   }
+}
+
+function createProjectRoadmapMemoryItem(value: Partial<ProjectRoadmapMemoryItem> & { title?: string }, fallbackOrder: number): ProjectRoadmapMemoryItem | null {
+   const title = sanitizeProjectMemoryText(value.title, PROJECT_MEMORY_SANITIZE_LIMITS.metadataItem);
+
+   if (!title) {
+      return null;
+   }
+
+   const order = typeof value.order === "number" && Number.isFinite(value.order) && value.order > 0 ? Math.floor(value.order) : fallbackOrder;
+
+   const id = sanitizeProjectMemoryId(value.id) || `roadmap-${order}-${normalizeProjectKey(title) || "item"}`;
+
+   return {
+      id,
+      order,
+      title,
+      status: sanitizeProjectRoadmapMemoryStatus(value.status),
+      dependencies: sanitizeProjectMemoryStringList(value.dependencies, 16),
+      completionCriteria: sanitizeProjectMemoryStringList(value.completionCriteria, 16),
+   };
+}
+
+function sanitizeProjectRoadmapMemoryItems(values?: unknown) {
+   if (!Array.isArray(values)) {
+      return [] as ProjectRoadmapMemoryItem[];
+   }
+
+   const seen = new Set<string>();
+
+   return values
+      .map((value, index) => {
+         if (typeof value === "string") {
+            return createProjectRoadmapMemoryItem(
+               {
+                  title: value,
+               },
+               index + 1,
+            );
+         }
+
+         if (!value || typeof value !== "object") {
+            return null;
+         }
+
+         return createProjectRoadmapMemoryItem(value as Partial<ProjectRoadmapMemoryItem>, index + 1);
+      })
+      .filter((item): item is ProjectRoadmapMemoryItem => Boolean(item))
+      .filter((item) => {
+         const key = normalizeProjectKey(item.title) || item.id;
+
+         if (seen.has(key)) {
+            return false;
+         }
+
+         seen.add(key);
+
+         return true;
+      })
+      .sort((a, b) => a.order - b.order)
+      .slice(0, 60);
+}
+
+function buildRoadmapFromParsedDocument(parsed: ParsedProjectDocument) {
+   return sanitizeProjectRoadmapMemoryItems(
+      parsed.buildOrder.map((title, index) => ({
+         id: `roadmap-${index + 1}-${normalizeProjectKey(title) || "item"}`,
+         order: index + 1,
+         title,
+         status: "unknown" as const,
+         dependencies: [],
+         completionCriteria: [],
+      })),
+   );
+}
+
+function mergeProjectRoadmapMetadata(existing: ProjectRoadmapMemoryItem[] = [], incoming: ProjectRoadmapMemoryItem[] = []) {
+   const existingByKey = new Map(existing.map((item) => [normalizeProjectKey(item.title) || item.id, item]));
+
+   return sanitizeProjectRoadmapMemoryItems(
+      incoming
+         .map((item) => {
+            const key = normalizeProjectKey(item.title) || item.id;
+            const previous = existingByKey.get(key);
+
+            if (!previous) {
+               return item;
+            }
+
+            return {
+               ...previous,
+               ...item,
+               status: item.status !== "unknown" ? item.status : previous.status,
+               dependencies: item.dependencies.length ? item.dependencies : previous.dependencies,
+               completionCriteria: item.completionCriteria.length ? item.completionCriteria : previous.completionCriteria,
+            };
+         })
+         .concat(
+            existing.filter((item) => {
+               const key = normalizeProjectKey(item.title) || item.id;
+
+               return !incoming.some((candidate) => (normalizeProjectKey(candidate.title) || candidate.id) === key);
+            }),
+         ),
+   );
+}
+
+function getCanonicalProjectMetadata(input: ProjectMemoryInput, existing?: CanonicalProjectMetadata, metadataUpdatedAt = Date.now()): CanonicalProjectMetadata {
+   const parsed = parseProjectDocument(getProjectDocumentForParsing(input));
+   const explicitMetadata = input.projectMetadata;
+
+   const directInputType = normalizeProjectMemoryProjectType(typeof input.projectType === "string" ? input.projectType : "");
+   const metadataType = normalizeProjectMemoryProjectType(typeof explicitMetadata?.projectType === "string" ? explicitMetadata.projectType : "");
+   const documentType = normalizeProjectMemoryProjectType(parsed.projectType);
+   const existingType = normalizeProjectMemoryProjectType(existing?.projectType);
+
+   const projectType = directInputType !== "unknown" ? directInputType : metadataType !== "unknown" ? metadataType : documentType !== "unknown" ? documentType : existingType;
+
+   const projectTypeSource: ProjectMemoryProjectTypeSource =
+      directInputType !== "unknown" ? "explicit" : metadataType !== "unknown" ? explicitMetadata?.projectTypeSource || "explicit" : documentType !== "unknown" ? "document" : existingType !== "unknown" ? existing?.projectTypeSource || "legacy" : "unknown";
+
+   const explicitRoadmap = sanitizeProjectRoadmapMemoryItems(explicitMetadata?.roadmap || input.roadmap);
+   const parsedRoadmap = buildRoadmapFromParsedDocument(parsed);
+   const roadmap = mergeProjectRoadmapMetadata(existing?.roadmap || [], explicitRoadmap.length ? explicitRoadmap : parsedRoadmap);
+
+   const completionCriteria = sanitizeProjectMemoryStringList(explicitMetadata?.completionCriteria, 40).length
+      ? sanitizeProjectMemoryStringList(explicitMetadata?.completionCriteria, 40)
+      : parsed.completionCriteria.length
+        ? sanitizeProjectMemoryStringList(parsed.completionCriteria, 40)
+        : sanitizeProjectMemoryStringList(existing?.completionCriteria, 40);
+
+   const constraints = sanitizeProjectMemoryStringList(explicitMetadata?.constraints, 40).length
+      ? sanitizeProjectMemoryStringList(explicitMetadata?.constraints, 40)
+      : parsed.constraints.length
+        ? sanitizeProjectMemoryStringList(parsed.constraints, 40)
+        : sanitizeProjectMemoryStringList(existing?.constraints, 40);
+
+   const implementationPreferences = sanitizeProjectMemoryStringList(explicitMetadata?.implementationPreferences, 40).length
+      ? sanitizeProjectMemoryStringList(explicitMetadata?.implementationPreferences, 40)
+      : parsed.implementationPreferences.length
+        ? sanitizeProjectMemoryStringList(parsed.implementationPreferences, 40)
+        : sanitizeProjectMemoryStringList(existing?.implementationPreferences, 40);
+
+   return {
+      schemaVersion: "MK VII",
+      projectType,
+      projectTypeSource,
+      currentState: sanitizeProjectMemorySummary(explicitMetadata?.currentState) || sanitizeProjectMemorySummary(parsed.currentState) || sanitizeProjectMemorySummary(existing?.currentState),
+      goal: sanitizeProjectMemorySummary(explicitMetadata?.goal) || sanitizeProjectMemorySummary(parsed.goal) || sanitizeProjectMemorySummary(existing?.goal),
+      roadmap,
+      completionCriteria,
+      constraints,
+      implementationPreferences,
+      updatedAt: isValidProjectMemoryTimestamp(metadataUpdatedAt) ? metadataUpdatedAt : Date.now(),
+   };
+}
+
+function sanitizeCanonicalProjectMetadata(value?: Partial<CanonicalProjectMetadata>): CanonicalProjectMetadata | undefined {
+   if (!value || typeof value !== "object") {
+      return undefined;
+   }
+
+   const projectType = normalizeProjectMemoryProjectType(value.projectType);
+
+   const projectTypeSource: ProjectMemoryProjectTypeSource = value.projectTypeSource === "explicit" || value.projectTypeSource === "document" || value.projectTypeSource === "legacy" ? value.projectTypeSource : "unknown";
+
+   const metadata: CanonicalProjectMetadata = {
+      schemaVersion: "MK VII",
+      projectType,
+      projectTypeSource,
+      currentState: sanitizeProjectMemorySummary(value.currentState),
+      goal: sanitizeProjectMemorySummary(value.goal),
+      roadmap: sanitizeProjectRoadmapMemoryItems(value.roadmap),
+      completionCriteria: sanitizeProjectMemoryStringList(value.completionCriteria, 40),
+      constraints: sanitizeProjectMemoryStringList(value.constraints, 40),
+      implementationPreferences: sanitizeProjectMemoryStringList(value.implementationPreferences, 40),
+      updatedAt: isValidProjectMemoryTimestamp(value.updatedAt) ? Number(value.updatedAt) : Date.now(),
+   };
+
+   const hasUsefulMetadata =
+      metadata.projectType !== "unknown" ||
+      Boolean(metadata.currentState) ||
+      Boolean(metadata.goal) ||
+      metadata.roadmap.length > 0 ||
+      metadata.completionCriteria.length > 0 ||
+      metadata.constraints.length > 0 ||
+      metadata.implementationPreferences.length > 0;
+
+   return hasUsefulMetadata ? metadata : undefined;
+}
+
 export function parseProjectDocument(value?: string): ParsedProjectDocument {
    const text = cleanText(value);
 
@@ -486,6 +821,7 @@ export function parseProjectDocument(value?: string): ParsedProjectDocument {
    }
 
    const headingLookup = getProjectDocumentHeadingLookup();
+   const boundaryHeadingLookup = getProjectDocumentBoundaryHeadingLookup();
 
    const collected: Record<keyof ParsedProjectDocument, string[]> = {
       projectType: [],
@@ -515,7 +851,8 @@ export function parseProjectDocument(value?: string): ParsedProjectDocument {
       const inlineHeadingMatch = line.match(/^([^:]{2,80}):\s*(.*)$/);
 
       if (inlineHeadingMatch) {
-         const headingKey = headingLookup.get(normalizeProjectDocumentHeading(inlineHeadingMatch[1]));
+         const normalizedHeading = normalizeProjectDocumentHeading(inlineHeadingMatch[1]);
+         const headingKey = headingLookup.get(normalizedHeading);
 
          if (headingKey) {
             activeKey = headingKey;
@@ -528,13 +865,24 @@ export function parseProjectDocument(value?: string): ParsedProjectDocument {
 
             continue;
          }
+
+         if (boundaryHeadingLookup.has(normalizedHeading)) {
+            activeKey = null;
+            continue;
+         }
       }
 
-      const directHeadingKey = headingLookup.get(normalizeProjectDocumentHeading(line));
+      const normalizedDirectHeading = normalizeProjectDocumentHeading(line);
+      const directHeadingKey = headingLookup.get(normalizedDirectHeading);
 
       if (directHeadingKey) {
          activeKey = directHeadingKey;
 
+         continue;
+      }
+
+      if (boundaryHeadingLookup.has(normalizedDirectHeading)) {
+         activeKey = null;
          continue;
       }
 
@@ -751,7 +1099,7 @@ export function buildStructuredHandoffBody(input: ProjectMemoryInput) {
    return sanitizeProjectMemoryBody([`Focus:\n${sections.focus}`, `Useful Context:\n${sections.usefulContext}`, `Next Step:\n${sections.nextStep}`].join("\n\n"));
 }
 
-export function readProjectMemory(): AllevinProject[] {
+export function readProjectMemory(): AllevinProjectMemoryRecord[] {
    if (typeof window === "undefined") return [];
    const stored = localStorage.getItem(ALLEVIN_PROJECT_MEMORY_STORAGE_KEY);
    if (!stored) return [];
@@ -776,6 +1124,19 @@ export function readProjectMemory(): AllevinProject[] {
             latestSummary: sanitizeProjectMemorySummary(project.latestSummary),
             latestMovement: sanitizeProjectMemoryMovement(project.latestMovement),
             recommendedNextAction: sanitizeProjectMemoryNextAction(project.recommendedNextAction),
+            projectMetadata:
+               sanitizeCanonicalProjectMetadata(project.projectMetadata) ||
+               getCanonicalProjectMetadata(
+                  {
+                     title: project.title,
+                     sourceTitle: project.sourceTitle || project.title,
+                     body: project.body,
+                     sourceContent: project.sourceContent,
+                     workingSummary: project.workingSummary,
+                  },
+                  undefined,
+                  isValidProjectMemoryTimestamp(project.updatedAt) ? Number(project.updatedAt) : Date.now(),
+               ),
             history: Array.isArray(project.history)
                ? project.history
                     .filter((event: any) => event && typeof event.id === "string")
@@ -802,7 +1163,7 @@ export function readProjectMemory(): AllevinProject[] {
    }
 }
 
-export function saveProjectMemory(projects: AllevinProject[]) {
+export function saveProjectMemory(projects: AllevinProjectMemoryRecord[]) {
    if (typeof window === "undefined") return;
    localStorage.setItem(
       ALLEVIN_PROJECT_MEMORY_STORAGE_KEY,
@@ -829,7 +1190,7 @@ export function createProjectEvent(input: { type: AllevinProjectEvent["type"]; t
    };
 }
 
-export function createProjectFromInput(input: ProjectMemoryInput): AllevinProject {
+export function createProjectFromInput(input: ProjectMemoryInput): AllevinProjectMemoryRecord {
    const identity = getProjectIdentity(input);
    const now = Date.now();
    const destination = input.destination || "canvas";
@@ -839,6 +1200,13 @@ export function createProjectFromInput(input: ProjectMemoryInput): AllevinProjec
    const recommendedNextAction = input.recommendedNextAction || context.nextStep;
    const latestMovement = input.latestMovement || `${getSourceLabel(input.source)} → ${getDestinationLabel(destination)}`;
    const profile = buildSignalProfile(input, body, stage, destination);
+   const projectMetadata = getCanonicalProjectMetadata({
+      ...input,
+      title: identity.title,
+      sourceTitle: identity.title,
+      body,
+      sourceContent: body,
+   });
 
    return {
       id: identity.workflowId,
@@ -860,6 +1228,7 @@ export function createProjectFromInput(input: ProjectMemoryInput): AllevinProjec
       confidence: profile.confidence,
       latestMovement: sanitizeProjectMemoryMovement(latestMovement),
       recommendedNextAction: sanitizeProjectMemoryNextAction(recommendedNextAction),
+      projectMetadata,
       originBoardItemId: sanitizeProjectMemoryId(input.originBoardItemId),
       createdAt: now,
       updatedAt: now,
@@ -877,7 +1246,7 @@ export function createProjectFromInput(input: ProjectMemoryInput): AllevinProjec
    };
 }
 
-export function mergeProject(existing: AllevinProject, input: ProjectMemoryInput): AllevinProject {
+export function mergeProject(existing: AllevinProjectMemoryRecord, input: ProjectMemoryInput): AllevinProjectMemoryRecord {
    const identity = getProjectIdentity({ ...input, title: input.title || existing.title, sourceTitle: input.sourceTitle || existing.sourceTitle, workflowId: input.workflowId || existing.workflowId });
    const destination = input.destination || existing.lastKnownLocation || "system";
    const stage = input.stage || getStageForDestination(destination) || existing.stage;
@@ -887,6 +1256,16 @@ export function mergeProject(existing: AllevinProject, input: ProjectMemoryInput
    const latestMovement = input.latestMovement || `${getSourceLabel(input.source)} → ${getDestinationLabel(destination)}`;
    const recommendedNextAction = input.recommendedNextAction || context.nextStep;
    const profile = buildSignalProfile(input, body, stage, destination);
+   const projectMetadata = getCanonicalProjectMetadata(
+      {
+         ...input,
+         title: identity.title,
+         sourceTitle: identity.title,
+         body,
+         sourceContent: body,
+      },
+      existing.projectMetadata,
+   );
    const event = createProjectEvent({
       type: "updated",
       title: identity.title,
@@ -917,13 +1296,14 @@ export function mergeProject(existing: AllevinProject, input: ProjectMemoryInput
       confidence: Math.min(95, Math.max(existing.confidence || 65, profile.confidence)),
       latestMovement: sanitizeProjectMemoryMovement(latestMovement),
       recommendedNextAction: sanitizeProjectMemoryNextAction(recommendedNextAction),
+      projectMetadata,
       originBoardItemId: sanitizeProjectMemoryId(input.originBoardItemId || existing.originBoardItemId),
       updatedAt: Date.now(),
       history: [event, ...(existing.history || [])].slice(0, 50),
    };
 }
 
-export function getProjectMatchKey(project: Partial<AllevinProject> | ProjectMemoryInput) {
+export function getProjectMatchKey(project: Partial<AllevinProjectMemoryRecord> | ProjectMemoryInput) {
    if ("projectKey" in project && project.projectKey) return `key:${project.projectKey}`;
    if (project.workflowId) return `workflow:${project.workflowId}`;
    if (project.originBoardItemId) return `board:${project.originBoardItemId}`;
@@ -931,8 +1311,8 @@ export function getProjectMatchKey(project: Partial<AllevinProject> | ProjectMem
    return key ? `title:${key}` : "";
 }
 
-export function dedupeProjects(projects: AllevinProject[]) {
-   const map = new Map<string, AllevinProject>();
+export function dedupeProjects(projects: AllevinProjectMemoryRecord[]) {
+   const map = new Map<string, AllevinProjectMemoryRecord>();
 
    for (const project of projects) {
       const key = getProjectMatchKey(project) || project.id;
@@ -966,6 +1346,16 @@ export function dedupeProjects(projects: AllevinProject[]) {
          workingSummary: sanitizeProjectMemorySummary(newer.workingSummary || mergedBody || older.workingSummary),
          latestSummary: sanitizeProjectMemorySummary(context.focus),
          recommendedNextAction: sanitizeProjectMemoryNextAction(newer.recommendedNextAction || context.nextStep),
+         projectMetadata: getCanonicalProjectMetadata(
+            {
+               title: newer.title || older.title,
+               sourceTitle: newer.sourceTitle || older.sourceTitle,
+               sourceContent: mergedBody,
+               body: mergedBody,
+               projectMetadata: newer.projectMetadata || older.projectMetadata,
+            },
+            older.projectMetadata,
+         ),
          history: [...(newer.history || []), ...(older.history || [])].slice(0, 50),
          createdAt: Math.min(older.createdAt || Date.now(), newer.createdAt || Date.now()),
          updatedAt: Math.max(older.updatedAt || 0, newer.updatedAt || 0),

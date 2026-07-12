@@ -25,13 +25,17 @@ import { useEnvironment } from "@/components/EnvironmentEngine";
 
 import { saveMemory, getActiveThreadMemoryV2, getSourceAwareActiveProject, getActiveProjectAwareness, type ThreadMemoryState } from "@/components/MemoryEngine";
 
-import { readProjectMemory, upsertProjectMemory } from "@/lib/allevinProjectMemory";
+import { parseProjectDocument, readProjectMemory, upsertProjectMemory } from "@/lib/allevinProjectMemory";
 
 import { requestAllevinLLM } from "@/lib/allevinLLMClient";
 
 import { getAllevinDisplayName } from "@/lib/allevinUserProfile";
 
 import { recommendWorkflowMove, type WorkflowRecommendation } from "@/lib/integrationRecommender";
+
+import { buildProjectGuidance, type ProjectGuidanceResult } from "@/lib/projectGuidanceEngine";
+
+import { buildProjectIntelligencePacket, getEmptyProjectIntelligencePacket, type ProjectIntelligencePacket } from "@/lib/projectIntelligenceEngine";
 
 // ========================================
 // Message Type
@@ -185,6 +189,23 @@ interface ProjectMaterial {
    updatedAt: number;
 }
 
+type ProjectStarterType = "software" | "research" | "writing" | "planning" | "checklist" | "general";
+
+interface ProjectStarterDraft {
+   title: string;
+   projectType: ProjectStarterType;
+   brief: string;
+   body: string;
+   immediateNextAction: string;
+   createdAt: number;
+}
+
+interface PendingProjectStarter {
+   stage: "awaiting-brief" | "review";
+   originalPrompt: string;
+   draft?: ProjectStarterDraft;
+}
+
 interface AllevinInternalContextPacket {
    version: "MK VII";
 
@@ -258,6 +279,8 @@ interface AllevinInternalContextPacket {
       suggestion: string;
       adapts: string;
    };
+
+   projectIntelligence: ProjectIntelligencePacket;
 
    responseRules: {
       tone: string;
@@ -531,6 +554,514 @@ function normalizeUserIntentPrompt(value?: string) {
 
 function promptIncludesAny(prompt: string, values: string[]) {
    return values.some((value) => prompt.includes(value));
+}
+
+function normalizeProjectStarterPrompt(value?: string) {
+   return normalizeUserIntentPrompt(value)
+      .replace(/[?!.,;:]+$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+}
+
+function cleanProjectStarterTitle(value?: string) {
+   const clean = sanitizePlainText(value, SANITIZE_LIMITS.title)
+      .replace(/^[“"'`]+|[”"'`]+$/g, "")
+      .replace(/[.!?,;:]+$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+   return clean;
+}
+
+function looksLikeNewProjectRequest(prompt: string) {
+   const lower = normalizeProjectStarterPrompt(prompt);
+
+   if (!lower) {
+      return false;
+   }
+
+   const directSignals = [
+      "start a new project",
+      "start new project",
+      "create a new project",
+      "create new project",
+      "make a new project",
+      "make new project",
+      "help me start a project",
+      "help me create a project",
+      "help me plan a project",
+      "i have a new project",
+      "new project idea",
+      "set up a new project",
+      "set up new project",
+   ];
+
+   if (directSignals.some((signal) => lower.includes(signal))) {
+      return true;
+   }
+
+   const typedProjectRequest =
+      /\b(?:start|create|make|set\s+up|plan|launch|open|build)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:new\s+)?(?:(?:software(?:\s+engineering)?|research|writing|planning|checklist|school|work|personal|creative|technical|design)\s+)?project\b/;
+
+   if (typedProjectRequest.test(lower)) {
+      return true;
+   }
+
+   const typedNewProject = /\bnew\s+(?:software(?:\s+engineering)?|research|writing|planning|checklist|school|work|personal|creative|technical|design)\s+project\b/;
+
+   if (typedNewProject.test(lower)) {
+      return true;
+   }
+
+   return /^(?:i\s+want\s+to\s+|i'?d\s+like\s+to\s+|help\s+me\s+)(?:build|create|make|plan|research|write|organize|launch|design)\b/.test(lower) && lower.includes("project");
+}
+
+function hasEnoughProjectStarterDetail(prompt: string) {
+   const lower = normalizeProjectStarterPrompt(prompt);
+   const words = lower.split(/\s+/).filter(Boolean);
+
+   const genericOnly = ["new project", "start a new project", "start new project", "create a new project", "create new project", "help me start a project", "help me create a project", "i have a new project", "set up a new project"];
+
+   if (genericOnly.includes(lower)) {
+      return false;
+   }
+
+   return words.length >= 8;
+}
+
+function detectProjectStarterType(prompt: string): ProjectStarterType {
+   const lower = normalizeProjectStarterPrompt(prompt);
+
+   const explicitTypes: Array<[ProjectStarterType, RegExp[]]> = [
+      ["software", [/\bsoftware(?:\s+engineering)?\s+project\b/, /\bproject\s+type\s*:\s*software/]],
+      ["research", [/\bresearch\s+project\b/, /\bproject\s+type\s*:\s*research/]],
+      ["writing", [/\bwriting\s+project\b/, /\bproject\s+type\s*:\s*writing/]],
+      ["planning", [/\bplanning\s+project\b/, /\bproject\s+type\s*:\s*planning/]],
+      ["checklist", [/\bchecklist\s+project\b/, /\bproject\s+type\s*:\s*checklist/]],
+   ];
+
+   for (const [projectType, patterns] of explicitTypes) {
+      if (patterns.some((pattern) => pattern.test(lower))) {
+         return projectType;
+      }
+   }
+
+   const softwareSignals = ["app", "application", "website", "web app", "browser-only", "software", "feature", "api", "database", "frontend", "backend", "code", "developer", "platform", "user flow", "product", "dashboard"];
+
+   if (promptIncludesAny(lower, softwareSignals)) {
+      return "software";
+   }
+
+   const researchSignals = ["research question", "credible source", "credible sources", "academic source", "academic sources", "literature review", "evidence requirement", "collect sources", "research brief", "research findings", "investigate"];
+
+   if (promptIncludesAny(lower, researchSignals) || /\bresearch\b/.test(lower)) {
+      return "research";
+   }
+
+   if (promptIncludesAny(lower, ["write", "writing", "essay", "article", "story", "script", "report", "proposal", "presentation copy", "speech", "manuscript"])) {
+      return "writing";
+   }
+
+   if (promptIncludesAny(lower, ["checklist", "requirements list", "inspection", "audit list", "launch list"])) {
+      return "checklist";
+   }
+
+   if (promptIncludesAny(lower, ["plan", "planning", "organize", "event", "trip", "move", "upgrade", "decision", "choose", "schedule", "roadmap"])) {
+      return "planning";
+   }
+
+   if (/\bstudy\b/.test(lower) && !/\b(?:planner|app|application|website|platform|software|product)\b/.test(lower)) {
+      return "research";
+   }
+
+   return "general";
+}
+
+function toProjectStarterTitleCase(value: string) {
+   const smallWords = new Set(["a", "an", "and", "as", "at", "for", "from", "in", "of", "on", "or", "the", "to", "with"]);
+
+   return value
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((word, index) => {
+         const lower = word.toLowerCase();
+
+         if (index > 0 && smallWords.has(lower)) {
+            return lower;
+         }
+
+         return `${lower.charAt(0).toUpperCase()}${lower.slice(1)}`;
+      })
+      .join(" ");
+}
+
+function buildProjectStarterTitle(prompt: string, projectType: ProjectStarterType) {
+   let candidate = sanitizePlainText(prompt, 260)
+      .replace(/^[“"'`]+|[”"'`]+$/g, "")
+      .replace(/^(?:i\s+want\s+to|i'?d\s+like\s+to|please|can\s+you|could\s+you|help\s+me)\s+/i, "")
+      .replace(
+         /^(?:start|create|make|set\s+up|plan|launch|open)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:new\s+)?(?:(?:software(?:\s+engineering)?|research|writing|planning|checklist|school|work|personal|creative|technical|design)\s+)?project\s+(?:to|for|about|on)?\s*/i,
+         "",
+      )
+      .replace(/^(?:build|create|make|design|plan|research|write|organize|launch)\s+(?:a|an|the)?\s*/i, "")
+      .replace(/\b(?:so that|because|with the goal of|for users who|for people who|that will|that helps|i need|it needs to|the deliverable|supported by)\b[\s\S]*$/i, "")
+      .replace(/[.!?][\s\S]*$/, "")
+      .replace(/^how\s+/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+   if (!candidate || candidate.split(/\s+/).length > 9) {
+      candidate = candidate
+         .split(/\s+/)
+         .filter((word) => !["project", "new", "want", "like", "help"].includes(word.toLowerCase()))
+         .slice(0, 8)
+         .join(" ");
+   }
+
+   if (!candidate) {
+      const fallbackByType: Record<ProjectStarterType, string> = {
+         software: "New Software Project",
+         research: "New Research Project",
+         writing: "New Writing Project",
+         planning: "New Planning Project",
+         checklist: "New Checklist Project",
+         general: "New Project",
+      };
+
+      return fallbackByType[projectType];
+   }
+
+   return cleanProjectStarterTitle(toProjectStarterTitleCase(candidate)) || "New Project";
+}
+
+function getProjectStarterTypeLabel(projectType: ProjectStarterType) {
+   switch (projectType) {
+      case "software":
+         return "Software Engineering";
+      case "research":
+         return "Research";
+      case "writing":
+         return "Writing";
+      case "planning":
+         return "Planning";
+      case "checklist":
+         return "Checklist";
+      default:
+         return "General";
+   }
+}
+
+function getProjectStarterImmediateAction(projectType: ProjectStarterType, brief: string) {
+   const lower = normalizeProjectStarterPrompt(brief);
+
+   switch (projectType) {
+      case "software": {
+         const isStudyPlanner = lower.includes("study planner") || (lower.includes("student") && lower.includes("assignment")) || (lower.includes("college") && lower.includes("assignment"));
+
+         if (isStudyPlanner) {
+            return "Define the smallest complete student flow: add an assignment, see its priority, and know what to work on next.";
+         }
+
+         if (lower.includes("planner")) {
+            return "Define the smallest complete planning flow from adding an item to receiving one clear next action.";
+         }
+
+         if (lower.includes("browser-only") || lower.includes("browser only")) {
+            return "Define the smallest browser-based user flow that creates value from start to finish before choosing secondary features.";
+         }
+
+         return "Define the smallest end-to-end user flow that would prove the project is useful.";
+      }
+
+      case "research": {
+         const question = getProjectStarterResearchQuestion(brief);
+         const sourceRequirement = getProjectStarterSourceRequirement(brief);
+         const hasDefinedQuestion = !question.toLowerCase().startsWith("what exact question");
+         const hasDefinedSourceRequirement = !sourceRequirement.toLowerCase().startsWith("define how many");
+
+         if (hasDefinedQuestion && hasDefinedSourceRequirement) {
+            return `Collect ${sourceRequirement.replace(/\.$/, "").toLowerCase()} that directly answer ${question.replace(/\?$/, "").toLowerCase()}.`;
+         }
+
+         return "Confirm the research question and source requirement before collecting evidence.";
+      }
+
+      case "writing":
+         return "Define the audience, purpose, and one idea the reader should leave with.";
+
+      case "planning":
+         return "Name the decision or finished outcome, then identify the first dependency that can change the plan.";
+
+      case "checklist":
+         return "Define what complete means, then order the requirements by dependency.";
+
+      default:
+         return "Describe the finished outcome and the first observable milestone that would prove the project has started.";
+   }
+}
+
+const PROJECT_STARTER_NUMBER_WORDS: Record<string, number> = {
+   one: 1,
+   two: 2,
+   three: 3,
+   four: 4,
+   five: 5,
+   six: 6,
+   seven: 7,
+   eight: 8,
+   nine: 9,
+   ten: 10,
+   eleven: 11,
+   twelve: 12,
+};
+
+function parseProjectStarterNumber(value?: string) {
+   const clean = compactText(value).toLowerCase();
+
+   if (!clean) {
+      return 0;
+   }
+
+   const numeric = Number(clean);
+
+   if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+   }
+
+   return PROJECT_STARTER_NUMBER_WORDS[clean] || 0;
+}
+
+function getProjectStarterSourceRequirement(brief: string) {
+   const match = brief.match(/\b(at\s+least\s+|minimum(?:\s+of)?\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)\s+(credible\s+|academic\s+|reliable\s+)?sources?\b/i);
+
+   if (!match) {
+      return "Define how many credible sources are required and what makes each source acceptable.";
+   }
+
+   const count = parseProjectStarterNumber(match[2]);
+   const qualifier = compactText(match[3]) || "credible";
+   const minimum = Boolean(compactText(match[1]));
+
+   return `${minimum ? "At least " : ""}${count || match[2]} ${qualifier} source${count === 1 ? "" : "s"}.`;
+}
+
+function getProjectStarterDeliverable(brief: string, projectType: ProjectStarterType) {
+   const pageMatch = brief.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)[-\s]+page\s+(brief|report|essay|paper|proposal|analysis)\b/i);
+
+   if (pageMatch) {
+      return `A ${compactText(pageMatch[0]).toLowerCase()}.`;
+   }
+
+   const deliverableMatch = brief.match(/\b(brief|report|essay|paper|proposal|presentation|prototype|application|app|website|plan|checklist)\b/i);
+
+   if (deliverableMatch) {
+      return `A completed ${deliverableMatch[1].toLowerCase()} that satisfies the project goal and success criteria.`;
+   }
+
+   if (projectType === "research") {
+      return "A completed research deliverable that answers the research question with supported findings.";
+   }
+
+   return "Define the finished artifact or outcome this project must produce.";
+}
+
+function getProjectStarterResearchQuestion(brief: string) {
+   const aboutMatch = brief.match(/\b(?:about|on|into)\s+((?:how|why|what|whether|which|when|where|who)\b[\s\S]*?)(?=\.|;|\bi\s+need\b|\bit\s+needs\b|$)/i);
+   let question = compactText(aboutMatch?.[1]);
+
+   if (!question) {
+      return "What exact question must the project answer?";
+   }
+
+   const improvesMatch = question.match(/^how\s+(.+?)\s+improves\s+(.+)$/i);
+
+   if (improvesMatch) {
+      question = `How does ${improvesMatch[1]} improve ${improvesMatch[2]}`;
+   }
+
+   question = `${question.charAt(0).toUpperCase()}${question.slice(1)}`.replace(/[?.!]+$/g, "");
+
+   return `${question}?`;
+}
+
+function buildProjectStarterBody(title: string, projectType: ProjectStarterType, brief: string, immediateNextAction: string) {
+   const cleanBrief = sanitizeLongText(brief, 6000);
+   const typeLabel = getProjectStarterTypeLabel(projectType);
+   const sourceRequirement = getProjectStarterSourceRequirement(cleanBrief);
+   const deliverable = getProjectStarterDeliverable(cleanBrief, projectType);
+   const researchQuestion = getProjectStarterResearchQuestion(cleanBrief);
+
+   const sharedOpening = [`Project Type: ${typeLabel}`, "", "Current Status:", "Starting point", "", "Project Goal:", cleanBrief];
+
+   const profileSections: Record<ProjectStarterType, string[]> = {
+      software: [
+         "",
+         "Primary User:",
+         "Who needs this, and what are they trying to accomplish?",
+         "",
+         "Problem to Solve:",
+         "What current friction or limitation should the product remove?",
+         "",
+         "First Useful Release:",
+         "Define the smallest complete user flow that creates real value.",
+         "",
+         "Architecture / Technical Context:",
+         "Record the confirmed stack, integrations, data needs, and constraints before implementation decisions are made.",
+         "",
+         "Milestones:",
+         "1. Define the user and core problem.",
+         "2. Choose the smallest end-to-end flow.",
+         "3. Confirm architecture and dependencies.",
+         "4. Build the core flow.",
+         "5. Test with real use and resolve failures.",
+      ],
+      research: [
+         "",
+         "Research Question:",
+         researchQuestion,
+         "",
+         "Evidence Needed:",
+         sourceRequirement,
+         "Use standards, findings, data, or credible examples that directly answer the research question.",
+         "",
+         "Deliverable:",
+         deliverable,
+         "",
+         "Milestones:",
+         "1. Confirm the research question and evidence requirement.",
+         "2. Collect and evaluate the required sources.",
+         "3. Assign each source a role in the argument.",
+         "4. Build the outline around findings, not source summaries.",
+         "5. Draft and review against the deliverable requirements.",
+      ],
+      writing: [
+         "",
+         "Audience:",
+         "Who is this for, and what do they need from it?",
+         "",
+         "Core Message:",
+         "What is the one idea the reader should understand or feel by the end?",
+         "",
+         "Deliverable:",
+         deliverable,
+         "",
+         "Milestones:",
+         "1. Confirm audience and purpose.",
+         "2. Build the outline.",
+         "3. Draft the complete piece.",
+         "4. Revise for clarity and missing information.",
+         "5. Finalize against the deliverable requirements.",
+      ],
+      planning: [
+         "",
+         "Decision or Finished Outcome:",
+         "What must be decided, organized, or completed?",
+         "",
+         "Known Options:",
+         "List the real alternatives without choosing prematurely.",
+         "",
+         "Dependencies:",
+         "Identify the facts, approvals, logistics, or resources that can change the plan.",
+         "",
+         "Risks:",
+         "Record what could create rework, delay, unnecessary cost, or a weak outcome.",
+         "",
+         "Milestones:",
+         "1. Confirm the outcome and decision gates.",
+         "2. Resolve the first dependency.",
+         "3. Choose the approach.",
+         "4. Execute the plan.",
+         "5. Validate the result.",
+      ],
+      checklist: [
+         "",
+         "Required Outcome:",
+         "What must be true when every item is complete?",
+         "",
+         "Requirements:",
+         "List the mandatory checks, approvals, materials, or actions.",
+         "",
+         "Order and Dependencies:",
+         "Place prerequisites before the items that depend on them.",
+         "",
+         "Verification:",
+         "Define how each important item will be confirmed rather than assumed.",
+         "",
+         "Milestones:",
+         "1. Capture all requirements.",
+         "2. Order them by dependency.",
+         "3. Complete the first unfinished requirement.",
+         "4. Verify the result.",
+         "5. Close the checklist only when the outcome is confirmed.",
+      ],
+      general: [
+         "",
+         "Finished Outcome:",
+         "What should exist, change, or be resolved when this project is complete?",
+         "",
+         "Known Context:",
+         "Record the facts already known and separate them from assumptions.",
+         "",
+         "Open Questions:",
+         "What information could change the direction or priority?",
+         "",
+         "Milestones:",
+         "1. Define the finished outcome.",
+         "2. Resolve the first important unknown.",
+         "3. Complete the first meaningful milestone.",
+         "4. Review the result and adjust.",
+      ],
+   };
+
+   return sanitizeCanvasBody(
+      [
+         ...sharedOpening,
+         ...profileSections[projectType],
+         "",
+         "Constraints:",
+         "Add budget, time, tools, rules, people, or quality limits that should shape decisions.",
+         "",
+         "Immediate Next Step:",
+         immediateNextAction,
+         "",
+         "Success Criteria:",
+         "Define observable checks that prove the project is finished and useful, not merely started.",
+      ].join("\n"),
+   );
+}
+
+function buildProjectStarterDraft(prompt: string): ProjectStarterDraft {
+   const brief = sanitizeLongText(prompt, 6000);
+   const projectType = detectProjectStarterType(brief);
+   const title = buildProjectStarterTitle(brief, projectType);
+   const immediateNextAction = getProjectStarterImmediateAction(projectType, brief);
+
+   return {
+      title,
+      projectType,
+      brief,
+      body: buildProjectStarterBody(title, projectType, brief, immediateNextAction),
+      immediateNextAction,
+      createdAt: Date.now(),
+   };
+}
+
+function looksLikeProjectStarterApproval(prompt: string) {
+   const lower = normalizeProjectStarterPrompt(prompt);
+
+   return ["yes", "yes open it", "open it", "open it in canvas", "use it", "create it", "start it", "looks good", "that works", "approve"].includes(lower);
+}
+
+function looksLikeProjectStarterRejection(prompt: string) {
+   const lower = normalizeProjectStarterPrompt(prompt);
+
+   return ["no", "cancel", "never mind", "nevermind", "stop", "discard it"].includes(lower);
+}
+
+function extractRequestedProjectStarterTitle(prompt: string) {
+   const match = sanitizePlainText(prompt, 240).match(/(?:change|rename|set)\s+(?:the\s+)?title\s+(?:to|as)\s+[“"']?([^”"']+)[”"']?/i);
+
+   return cleanProjectStarterTitle(match?.[1] || "");
 }
 
 function getDisplaySignalCount(value?: number) {
@@ -1437,7 +1968,13 @@ function getCalendarSafeProjectProfile() {
 
    const parsedProject = awareness.projectDocument;
 
-   const nextAction = compactText(parsedProject?.immediateNextStep) || compactText(parsedProject?.buildOrder?.[0]) || compactText(awareness.recommendedNextAction) || fallbackNextAction;
+   const projectGuidance = buildProjectGuidance({
+      prompt: "What should I do next on this project?",
+      packet: awareness.projectIntelligence,
+      fallbackNextAction: awareness.recommendedNextAction,
+   });
+
+   const nextAction = compactText(projectGuidance.nextAction) || compactText(parsedProject?.immediateNextStep) || compactText(parsedProject?.buildOrder?.[0]) || compactText(awareness.recommendedNextAction) || fallbackNextAction;
 
    return {
       title: sanitizeTitle(awareness.title),
@@ -3143,6 +3680,12 @@ async function buildProjectMaterialsHelperResponse(prompt: string, packet: Allev
       return localResponse;
    }
 
+   const projectGuidance = buildProjectGuidance({
+      prompt,
+      packet: packet.projectIntelligence,
+      fallbackNextAction: packet.currentProject.recommendedNextAction,
+   });
+
    try {
       const contextMaterials = selectedMaterials.length ? selectedMaterials : materials.slice(0, 6);
 
@@ -3155,6 +3698,10 @@ async function buildProjectMaterialsHelperResponse(prompt: string, packet: Allev
             `Active project: ${sanitizeTitle(awareness.title || "Active project")}`,
             packet.currentProject.currentState ? `Current state: ${packet.currentProject.currentState}` : "",
             packet.currentProject.goal ? `Goal: ${packet.currentProject.goal}` : "",
+            projectGuidance.currentUnderstanding ? `Project lead understanding: ${projectGuidance.currentUnderstanding}` : "",
+            projectGuidance.assessment ? `Project lead assessment: ${projectGuidance.assessment}` : "",
+            projectGuidance.nextAction ? `Project lead recommendation: ${projectGuidance.nextAction}` : "",
+            projectGuidance.reason ? `Recommendation reason: ${projectGuidance.reason}` : "",
             selectedMaterials.length ? `Selected references: ${selectedMaterials.map((material) => getMaterialPreviewLine(material, 260)).join("; ")}` : "",
             `Project materials:\n${contextMaterials
                .map(
@@ -3167,7 +3714,7 @@ async function buildProjectMaterialsHelperResponse(prompt: string, packet: Allev
          ]
             .filter(Boolean)
             .join("\n\n"),
-         nextStep: packet.currentProject.recommendedNextAction || "Give one conversational next move.",
+         nextStep: projectGuidance.nextAction || packet.currentProject.recommendedNextAction || "Give one conversational next move.",
          rawContent: contextMaterials
             .map(
                (material) =>
@@ -3187,7 +3734,7 @@ async function buildProjectMaterialsHelperResponse(prompt: string, packet: Allev
             usefulSignals: materialAwareness.packet.usefulSignals,
          },
          userInstruction:
-            "Answer like ALLEVIN: calm, natural, clear, lightly witty, and useful. Ground the answer in the active project state and selected material interpretations first. Mention at least one specific material title or one specific detail from the materials. Do not sound like an analytics report. Do not invent a project domain, character, object, feature, or task that is not in the supplied context. Keep the answer conversational and short.",
+            "Answer like ALLEVIN: calm, natural, clear, and useful. Treat the supplied Project Guidance Engine assessment and recommendation as the decision layer. Use the selected material to explain or support that reasoning, but do not replace the recommendation with generic advice. Mention at least one specific material title or one specific detail from the materials. Do not sound like an analytics report. Do not invent a project domain, character, object, feature, or task that is not in the supplied context. Avoid motivational filler, repeated conclusions, and visible reasoning labels. Keep the answer conversational and short.",
       });
 
       const candidate = cleanConversationalMaterialResponse(response.summary || response.focus || response.nextStep || "");
@@ -4577,6 +5124,20 @@ function looksLikeImplicitGeneralKnowledgeQuestion(prompt: string) {
 
    const workspacePhrases = [
       "what should i do next",
+      "what should i work on next",
+      "what should i work on",
+      "what is my next step",
+      "what's my next step",
+      "what is the next move",
+      "what's the next move",
+      "what is the smallest meaningful next action",
+      "what am i overlooking",
+      "what are we overlooking",
+      "is this project complete",
+      "am i ready",
+      "are we ready",
+      "which option looks strongest",
+      "has the best option changed",
       "what matters here",
       "summarize this project",
       "what do you remember",
@@ -4604,6 +5165,16 @@ function looksLikeImplicitGeneralKnowledgeQuestion(prompt: string) {
    const wordCount = lower.split(/\s+/).filter(Boolean).length;
 
    return wordCount <= 10 && implicitQuestionSignals.some((pattern) => pattern.test(lower));
+}
+
+function looksLikePersonalRecommendationQuestion(prompt: string) {
+   const lower = normalizeUserIntentPrompt(prompt);
+
+   return (
+      /\brecommend(?: me)?\s+(?:a|an|some)?\s*(?:movie|film|book|novel|show|series|tv show|game|album|podcast)\b/.test(lower) ||
+      /\bwhat (?:movie|film|book|show|series|game|album|podcast) should i (?:watch|read|play|listen to)\b/.test(lower) ||
+      /\b(?:movies|films|books|shows|series|games|albums|podcasts) (?:to|should i) (?:watch|read|play|listen to)\b/.test(lower)
+   );
 }
 
 function looksLikeGeneralKnowledgeQuestion(prompt: string) {
@@ -4655,6 +5226,20 @@ function looksLikeGeneralKnowledgeQuestion(prompt: string) {
       "what is stale",
       "what has momentum",
       "what should i do next",
+      "what should i work on next",
+      "what should i work on",
+      "what is my next step",
+      "what's my next step",
+      "what is the next move",
+      "what's the next move",
+      "what is the smallest meaningful next action",
+      "what am i overlooking",
+      "what are we overlooking",
+      "is this project complete",
+      "am i ready",
+      "are we ready",
+      "which option looks strongest",
+      "has the best option changed",
       "what matters here",
       "how should i build this",
       "how should i build it",
@@ -4702,7 +5287,7 @@ function looksLikeGeneralKnowledgeQuestion(prompt: string) {
       "help me understand",
    ];
 
-   return questionSignals.some((signal) => lower.includes(signal)) || prompt.trim().endsWith("?") || looksLikeImplicitGeneralKnowledgeQuestion(prompt);
+   return looksLikePersonalRecommendationQuestion(prompt) || questionSignals.some((signal) => lower.includes(signal)) || prompt.trim().endsWith("?") || looksLikeImplicitGeneralKnowledgeQuestion(prompt);
 }
 
 function looksLikeRecommendationQuestion(prompt: string) {
@@ -5407,6 +5992,8 @@ export default function ALLEVIN() {
    const [pendingInternalIntegration, setPendingInternalIntegration] = useState<InternalIntegrationIntent | null>(null);
 
    const [pendingDirectCalendarEvent, setPendingDirectCalendarEvent] = useState<PendingDirectCalendarEvent | null>(null);
+
+   const [pendingProjectStarter, setPendingProjectStarter] = useState<PendingProjectStarter | null>(null);
 
    const [messages, setMessages] = useState<Message[]>([
       {
@@ -6438,15 +7025,35 @@ export default function ALLEVIN() {
 
       const materialAwareness = buildUnifiedProjectMaterialsAwareness();
 
-      const parsedProject = awareness.projectDocument;
-
       const selectedMaterialNextSteps = materialAwareness.packet.selectedMaterialNextSteps;
-
-      const recommendedNextAction = awareness.hasActiveProject ? getUnifiedProjectNextAction(awareness, selectedMaterialNextSteps) : memoryProfile.nextAction || getSafeRecommendedNextAction();
 
       const projectTitle = awareness.hasActiveProject ? compactText(awareness.title) : compactText(memoryProfile.title);
 
-      const projectType = compactText(parsedProject.projectType || memoryProfile.type || "general project");
+      const fallbackProjectBody = sanitizeLongText(latestProject?.notes?.[0]?.body || latestProject?.notes?.[0]?.summary || latestProject?.latestSummary || memoryProfile.summary || "", SANITIZE_LIMITS.projectBody);
+
+      const fallbackParsedProject = parseProjectDocument(fallbackProjectBody);
+
+      const fallbackProjectIntelligence = projectTitle
+         ? buildProjectIntelligencePacket({
+              title: projectTitle,
+              projectDocument: fallbackParsedProject,
+              projectBody: fallbackProjectBody,
+              canvasContent: sanitizeLongText(memoryProfile.canvasContent || getCurrentCanvasContent(), SANITIZE_LIMITS.projectBody),
+              materials: materialAwareness.materials,
+           })
+         : getEmptyProjectIntelligencePacket();
+
+      // The unified MemoryEngine is authoritative when it resolves a project.
+      // During a temporary source-selection miss, rebuild the same intelligence
+      // packet from the visible Projects record instead of pairing a real title
+      // with an empty/general intelligence packet.
+      const parsedProject = awareness.hasActiveProject ? awareness.projectDocument : fallbackParsedProject;
+
+      const projectIntelligence = awareness.hasActiveProject ? awareness.projectIntelligence : fallbackProjectIntelligence;
+
+      const recommendedNextAction = awareness.hasActiveProject ? getUnifiedProjectNextAction(awareness, selectedMaterialNextSteps) : memoryProfile.nextAction || getSafeRecommendedNextAction();
+
+      const projectType = compactText(projectIntelligence.reasoningProfile || projectIntelligence.projectType || parsedProject.projectType || memoryProfile.type || "general");
 
       const projectLocation = awareness.hasActiveProject
          ? awareness.lastKnownLocation === "canvas"
@@ -6528,6 +7135,8 @@ export default function ALLEVIN() {
             suggestion: cognition?.suggestion || "Continue the active project or ask ALLEVIN what to work on next.",
             adapts: cognition?.adapts || "Responses can be conversational, clear, and focused on the current project.",
          },
+
+         projectIntelligence,
 
          responseRules: {
             tone: `ALLEVIN: calm, clear, useful, concise, project-aware, and adapted to ${cognition?.label || "Balanced"} cognition.`,
@@ -6873,7 +7482,37 @@ export default function ALLEVIN() {
    }
 
    function getShortProjectTypeFromText(project: { title?: string; latestSummary?: string; notes?: Array<{ body?: string; summary?: string }> }) {
-      const text = normalizeUserIntentPrompt(`${project.title || ""} ${project.notes?.[0]?.body || ""} ${project.notes?.[0]?.summary || ""} ${project.latestSummary || ""}`);
+      const rawText = `${project.title || ""}
+${project.notes?.[0]?.body || ""}
+${project.notes?.[0]?.summary || ""}
+${project.latestSummary || ""}`;
+
+      const text = normalizeUserIntentPrompt(rawText);
+
+      // Structured Project Type labels are canonical and must outrank loose
+      // keyword inference. This prevents phrases such as “source role” from
+      // turning a research project into a career project.
+      const explicitProjectType = compactText(rawText.match(/(?:^|\n)\s*project type\s*:\s*([^\n]+)/i)?.[1]).toLowerCase();
+
+      if (explicitProjectType.includes("software") || explicitProjectType.includes("development")) {
+         return "development";
+      }
+
+      if (explicitProjectType.includes("research")) {
+         return "research";
+      }
+
+      if (explicitProjectType.includes("writing")) {
+         return "writing";
+      }
+
+      if (explicitProjectType.includes("planning")) {
+         return "planning";
+      }
+
+      if (explicitProjectType.includes("checklist")) {
+         return "checklist";
+      }
 
       if (promptIncludesAny(text, ["reboot", "script", "pilot", "story", "episode", "character", "miami vice", "novel", "scene"])) {
          return "creative";
@@ -6883,7 +7522,11 @@ export default function ALLEVIN() {
          return "home";
       }
 
-      if (promptIncludesAny(text, ["resume", "interview", "job", "career", "portfolio", "role", "application"])) {
+      if (promptIncludesAny(text, ["research", "paper", "credible source", "credible sources", "research question", "thesis", "academic study"])) {
+         return "research";
+      }
+
+      if (promptIncludesAny(text, ["resume", "interview", "job search", "career", "portfolio", "target role", "target roles", "job application"])) {
          return "career";
       }
 
@@ -6893,10 +7536,6 @@ export default function ALLEVIN() {
 
       if (promptIncludesAny(text, ["code", "build", "component", "api", "bug", "deploy", "technical test"])) {
          return "development";
-      }
-
-      if (promptIncludesAny(text, ["research", "paper", "source", "thesis", "study"])) {
-         return "research";
       }
 
       return "general";
@@ -10064,11 +10703,24 @@ I could not turn this recommendation into a clean action yet.
          lower.includes("keep writing in canvas") ||
          lower.includes("schedule the clearest next action") ||
          lower.includes("open it in canvas when you are ready to keep working") ||
-         lower.includes("continue the active project in canvas")
+         lower.includes("continue the active project in canvas") ||
+         lower.includes("continue in canvas. the latest editable version is already open there")
       );
    }
 
    function getBestLiveProjectNextAction(packet: AllevinInternalContextPacket) {
+      const projectGuidance = buildProjectGuidance({
+         prompt: "What should I do next on this project?",
+         packet: packet.projectIntelligence,
+         fallbackNextAction: packet.currentProject.recommendedNextAction,
+      });
+
+      const guidedAction = compactText(projectGuidance.nextAction);
+
+      if (projectGuidance.handled && !isGenericProjectNextAction(guidedAction)) {
+         return sanitizePlainText(guidedAction, 1000);
+      }
+
       const canvas = compactText(packet.currentProject.canvasContent);
 
       const explicitCanvasNext = canvas.match(/(?:^|\n)\s*(?:next|next step|next action|what's next)\s*:?\s*\n?([^\n]+)/i)?.[1] || canvas.match(/\b(bookmarks?\s+(?:and|&)\s+comments?|comments?\s+(?:and|&)\s+bookmarks?)\b/i)?.[0] || "";
@@ -10135,8 +10787,369 @@ I could not turn this recommendation into a clean action yet.
       return guidanceParts.join(" ");
    }
 
+   function buildGeneralKnowledgeContextPacket(prompt = ""): AllevinInternalContextPacket {
+      const packet = buildAllevinInternalContextPacket(prompt);
+
+      return {
+         ...packet,
+         currentProject: {
+            ...packet.currentProject,
+            title: "",
+            type: "general",
+            location: "None",
+            status: "none",
+            priority: "unknown",
+            body: "",
+            currentState: "",
+            goal: "",
+            needsToAdd: "",
+            immediateNextStep: "",
+            buildOrder: [],
+            completionCriteria: [],
+            constraints: [],
+            implementationPreferences: [],
+            canvasContent: "",
+            canvasUpdatedAt: 0,
+            projectUpdatedAt: 0,
+            latestProjectNote: "",
+            recommendedNextAction: "",
+            materials: {
+               count: 0,
+               summaries: [],
+               hasMaterials: false,
+            },
+         },
+         projectMaterials: {
+            count: 0,
+            selectedTitles: [],
+            titles: [],
+            summaries: [],
+            usefulSignals: [],
+            selectedMaterialInsights: [],
+            selectedMaterialNextSteps: [],
+            recentMaterialInsights: [],
+            recentMaterialNextSteps: [],
+         },
+         projects: {
+            count: 0,
+            titles: [],
+            latestTitle: "",
+         },
+         projectIntelligence: getEmptyProjectIntelligencePacket(),
+         responseRules: {
+            ...packet.responseRules,
+            format: "Answer the user directly without using active-project context.",
+         },
+      };
+   }
+
+   function buildProjectLeadGuidanceResponse(prompt = "") {
+      const packet = buildAllevinInternalContextPacket(prompt);
+
+      const guidance: ProjectGuidanceResult = buildProjectGuidance({
+         prompt,
+         packet: packet.projectIntelligence,
+         fallbackNextAction: packet.currentProject.recommendedNextAction,
+      });
+
+      return guidance;
+   }
+
+   function hasExplicitProjectContextLanguage(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+
+      return promptIncludesAny(lower, [
+         "this project",
+         "my project",
+         "the project",
+         "current project",
+         "active project",
+         "canvas",
+         "roadmap",
+         "build ",
+         "milestone",
+         "current status",
+         "current stage",
+         "research question",
+         "research brief",
+         "brief",
+         "draft",
+         "outline",
+         "source requirement",
+         "required sources",
+         "evidence",
+         "deliverable",
+         "success criteria",
+         "tester feedback",
+         "technical debt",
+         "architecture",
+         "checklist",
+         "timeline",
+         "blocked item",
+      ]);
+   }
+
+   function looksLikeExplicitProjectRiskQuestion(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+
+      // normalizeUserIntentPrompt intentionally preserves punctuation for normal
+      // conversation. Risk routing should not depend on whether the user ended
+      // a short question with ?, !, or a period.
+      const comparable = lower.replace(/[?!.,;:]+$/g, "").trim();
+
+      return (
+         comparable === "what am i overlooking" ||
+         comparable === "what are we overlooking" ||
+         comparable === "what have i missed" ||
+         comparable === "what am i missing" ||
+         comparable === "what is the risk" ||
+         comparable === "what is the biggest risk" ||
+         comparable === "biggest risk" ||
+         comparable.includes("what haven't i realized") ||
+         comparable.includes("what makes you nervous") ||
+         comparable.includes("technical debt") ||
+         comparable.includes("block this project")
+      );
+   }
+
+   function hasExplicitProjectDecisionLanguage(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+
+      const decisionSignals = [
+         "what should",
+         "what do i do",
+         "what do we do",
+         "where should",
+         "how should",
+         "should i",
+         "should we",
+         "are we ready",
+         "am i ready",
+         "ready",
+         "next",
+         "priority",
+         "focus",
+         "start",
+         "continue",
+         "finish",
+         "improve",
+         "change",
+         "revise",
+         "review",
+         "risk",
+         "missing",
+         "depends",
+         "dependency",
+         "before i",
+         "before we",
+         "enough to",
+      ];
+
+      return hasExplicitProjectContextLanguage(prompt) && promptIncludesAny(lower, decisionSignals);
+   }
+
+   function hasProfileSpecificGuidanceLanguage(prompt: string, guidance: ProjectGuidanceResult) {
+      const lower = normalizeUserIntentPrompt(prompt);
+
+      const decisionSignals = [
+         "what should",
+         "which should",
+         "what do i",
+         "what do we",
+         "where should",
+         "how should",
+         "should i",
+         "should we",
+         "are we ready",
+         "am i ready",
+         "ready",
+         "next",
+         "start",
+         "continue",
+         "finish",
+         "improve",
+         "revise",
+         "review",
+         "missing",
+         "enough",
+         "collect",
+         "organize",
+         "structure",
+         "prioritize",
+         "fix",
+         "test",
+         "move on",
+      ];
+
+      if (!promptIncludesAny(lower, decisionSignals)) {
+         return false;
+      }
+
+      const profileSignals: Record<ProjectGuidanceResult["profile"], string[]> = {
+         software: ["build", "feature", "implementation", "architecture", "technical debt", "tester", "feedback", "bug", "regression", "backend", "frontend", "api", "database", "deploy", "release"],
+         research: ["source", "sources", "evidence", "research", "research question", "finding", "findings", "citation", "citations", "claim", "claims", "study", "studies", "brief"],
+         writing: ["audience", "introduction", "section", "paragraph", "draft", "outline", "revision", "revise", "clarity", "conclusion", "ending", "tone"],
+         planning: [
+            "milestone",
+            "deadline",
+            "timeline",
+            "logistics",
+            "blocked",
+            "priority",
+            "dependency",
+            "dependencies",
+            "schedule",
+            "sequence",
+            "option",
+            "options",
+            "assumption",
+            "mesh",
+            "access point",
+            "router",
+            "switch",
+            "injector",
+            "equipment",
+            "purchase",
+            "buy",
+            "coverage",
+            "validation",
+         ],
+         checklist: ["checklist", "item", "items", "remaining", "complete", "completed", "done", "verify", "verification"],
+         general: ["project", "goal", "status", "priority", "next step"],
+      };
+
+      return promptIncludesAny(lower, profileSignals[guidance.profile] || profileSignals.general);
+   }
+
+   function shouldRouteThroughProjectGuidance(prompt: string, guidance?: ProjectGuidanceResult) {
+      const lower = normalizeUserIntentPrompt(prompt);
+
+      if (!lower) {
+         return false;
+      }
+
+      const toolIntent = getMkvToolIntent(prompt);
+
+      if (
+         looksLikeDirectCalendarScheduleRequest(prompt) ||
+         looksLikeCalendarNotesQuestion(prompt) ||
+         looksLikeCalendarScheduleQuestion(prompt) ||
+         looksLikeInternalIntegrationQuestion(prompt) ||
+         looksLikeCognitionModeCommand(prompt) ||
+         looksLikeCognitionReadbackQuestion(prompt) ||
+         looksLikeToolIntentDebugQuestion(prompt) ||
+         looksLikeAddInsightToCanvasCommand(prompt) ||
+         looksLikeCanvasAdditionQuestion(prompt) ||
+         toolIntent.type === "weather" ||
+         toolIntent.type === "current-time" ||
+         toolIntent.type === "date-math" ||
+         toolIntent.type === "calculator" ||
+         toolIntent.type === "maps-location" ||
+         toolIntent.type === "traffic" ||
+         toolIntent.type === "external-integration" ||
+         toolIntent.type === "automation" ||
+         toolIntent.type === "live-lookup"
+      ) {
+         return false;
+      }
+
+      const resolvedGuidance = guidance || buildProjectLeadGuidanceResponse(prompt);
+
+      if (!resolvedGuidance.handled) {
+         return false;
+      }
+
+      if (looksLikeExplicitProjectRiskQuestion(prompt)) {
+         return true;
+      }
+
+      const materialIntent = looksLikeProjectMaterialsQuestion(prompt) ? getProjectMaterialConversationIntent(prompt) : "general";
+
+      if (materialIntent === "list" || materialIntent === "summarize") {
+         return false;
+      }
+
+      const hasProjectContext = hasExplicitProjectContextLanguage(prompt);
+
+      const strongGuidanceIntent =
+         resolvedGuidance.intent === "project-understanding" ||
+         resolvedGuidance.intent === "next-action" ||
+         resolvedGuidance.intent === "build-order" ||
+         resolvedGuidance.intent === "readiness" ||
+         resolvedGuidance.intent === "simplification" ||
+         resolvedGuidance.intent === "project-lead" ||
+         resolvedGuidance.intent === "decision" ||
+         (resolvedGuidance.intent === "risk" && (hasProjectContext || looksLikeExplicitProjectRiskQuestion(prompt)));
+
+      const projectSummaryIntent =
+         looksLikeProjectSummaryQuestion(prompt) &&
+         (hasProjectContext || lower === "summarize this" || lower === "summarize it" || lower === "summarize my work" || lower === "summary of my work" || lower === "what is this about" || lower === "what's this about");
+
+      const whatMattersIntent =
+         looksLikeWhatMattersQuestion(prompt) && (hasProjectContext || lower === "what matters here" || lower === "what matters most" || lower === "what is important here" || lower === "what should i care about" || lower === "what is the useful part");
+
+      const projectWorkflowRecommendation =
+         shouldAnswerWithWorkflowRecommendation(prompt) &&
+         (hasProjectContext || lower.includes("best move") || lower.includes("best next") || lower.includes("next move") || lower.includes("what should i do next") || lower.includes("where should this go"));
+
+      if (
+         strongGuidanceIntent ||
+         looksLikeDirectNextActionQuestion(prompt) ||
+         whatMattersIntent ||
+         looksLikeProjectFocusQuestion(prompt) ||
+         looksLikeImplementationGuidanceQuestion(prompt) ||
+         looksLikeTaskReadinessQuestion(prompt) ||
+         projectSummaryIntent ||
+         looksLikeStaleProjectQuestion(prompt) ||
+         projectWorkflowRecommendation ||
+         lower === "are we ready" ||
+         lower === "am i ready" ||
+         lower === "ready to move on"
+      ) {
+         return true;
+      }
+
+      if (looksLikeDeepInsightQuestion(prompt) && hasExplicitProjectContextLanguage(prompt)) {
+         return true;
+      }
+
+      if (resolvedGuidance.intent === "materials" && looksLikeProjectMaterialsQuestion(prompt) && (materialIntent === "recommend" || materialIntent === "focus" || materialIntent === "help" || lower.includes("improve") || lower.includes("feedback"))) {
+         return true;
+      }
+
+      if (hasProfileSpecificGuidanceLanguage(prompt, resolvedGuidance)) {
+         return true;
+      }
+
+      return hasExplicitProjectDecisionLanguage(prompt);
+   }
+
+   function buildProjectGuidanceDisplayResponse(prompt: string, guidance: ProjectGuidanceResult) {
+      const grounded = sanitizeAssistantOutput(guidance.response).trim() || compactText(guidance.nextAction) || compactText(guidance.judgment);
+
+      if (!grounded) {
+         return "";
+      }
+
+      return buildLocalHumanResponseFromBase(prompt, grounded);
+   }
+
    function buildCoreGuidanceResponseFromContext(prompt = "") {
       const packet = buildAllevinInternalContextPacket(prompt);
+
+      const projectGuidance = buildProjectGuidance({
+         prompt,
+         packet: packet.projectIntelligence,
+         fallbackNextAction: packet.currentProject.recommendedNextAction,
+      });
+
+      if (shouldRouteThroughProjectGuidance(prompt, projectGuidance)) {
+         return {
+            focus: buildProjectGuidanceDisplayResponse(prompt, projectGuidance),
+            nextLabel: "Next",
+            nextStep: "",
+         };
+      }
 
       const title = compactText(packet.currentProject.title || getSafeThreadTitle());
 
@@ -10416,6 +11429,12 @@ I could not turn this recommendation into a clean action yet.
          return cleanBase || baseResponse;
       }
 
+      const projectGuidance = buildProjectLeadGuidanceResponse(prompt);
+
+      if (shouldRouteThroughProjectGuidance(prompt, projectGuidance)) {
+         return buildProjectGuidanceDisplayResponse(prompt, projectGuidance) || cleanBase;
+      }
+
       // Natural conversation should stay in ALLEVIN's local voice.
       // The LLM variation layer is reserved for project/calendar guidance,
       // where it can vary wording without making simple conversation generic.
@@ -10500,7 +11519,7 @@ ${getCognitionPromptInstruction()}
             usefulContext: "Answer the user's general knowledge question directly. Do not use empty workspace fallback language.",
             nextStep: "",
             rawContent: "",
-            contextPacket: buildAllevinInternalContextPacket(prompt),
+            contextPacket: buildGeneralKnowledgeContextPacket(prompt),
             userInstruction: `
 User question: ${prompt}
 
@@ -10540,6 +11559,12 @@ Rules:
 
    async function generateLightLLMResponse(prompt: string) {
       const deterministicPrompt = normalizeUserIntentPrompt(prompt);
+
+      const projectGuidance = buildProjectLeadGuidanceResponse(prompt);
+
+      if (shouldRouteThroughProjectGuidance(prompt, projectGuidance)) {
+         return buildProjectGuidanceDisplayResponse(prompt, projectGuidance);
+      }
 
       // Build 19 deterministic priority:
       // thoughtful project prompts must use ALLEVIN's local project state,
@@ -12003,11 +13028,22 @@ Try one of these:
       if (looksLikeContextPacketDebugCommand(prompt)) {
          const packet = buildAllevinInternalContextPacket(prompt);
 
-         return `MK VII context packet is online.\n\nProject: ${packet.currentProject.title || "None"}\nType: ${packet.currentProject.type}\nLocation: ${packet.currentProject.location}\nIntent: ${looksLikeContextPacketDebugCommand(prompt) ? "debug-context" : packet.userIntent.intentType}\nResponse style: ${packet.cognition.label}\nStatus: ${packet.currentProject.status}\nCalendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
+         const researchSourceLine =
+            packet.projectIntelligence.reasoningProfile === "research"
+               ? `\nResearch sources: ${packet.projectIntelligence.profileSignals.sourceCountAvailable}${typeof packet.projectIntelligence.profileSignals.sourceCountRequired === "number" ? ` of ${packet.projectIntelligence.profileSignals.sourceCountRequired}` : ""}`
+               : "";
+
+         return `MK VII context packet is online.\n\nProject: ${packet.currentProject.title || "None"}\nType: ${packet.projectIntelligence.projectType}\nReasoning profile: ${packet.projectIntelligence.reasoningProfile}\nProfile reason: ${packet.projectIntelligence.reasoningProfileReason}\nLocation: ${packet.currentProject.location}\nIntent: ${looksLikeContextPacketDebugCommand(prompt) ? "debug-context" : packet.userIntent.intentType}\nResponse style: ${packet.cognition.label}\nStatus: ${packet.currentProject.status}\nCurrent build: ${packet.projectIntelligence.currentBuild ? `Build ${packet.projectIntelligence.currentBuild.number} — ${packet.projectIntelligence.currentBuild.title}` : "Not applicable or not detected"}\nReadiness: ${packet.projectIntelligence.readiness.state}\nEvidence signals: ${packet.projectIntelligence.evidence.length}${researchSourceLine}\nDependencies: ${packet.projectIntelligence.dependencies.length}\nRisks: ${packet.projectIntelligence.risks.length}\nCalendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
       }
 
       if (looksLikeCurrentTimeToolQuestion(prompt)) {
          return withTypoAwareResponse(prompt, buildCurrentTimeResponse());
+      }
+
+      const projectLeadGuidance = buildProjectLeadGuidanceResponse(prompt);
+
+      if (shouldRouteThroughProjectGuidance(prompt, projectLeadGuidance)) {
+         return withTypoAwareResponse(prompt, buildProjectGuidanceDisplayResponse(prompt, projectLeadGuidance));
       }
 
       if (looksLikeDirectNextActionQuestion(prompt)) {
@@ -12148,6 +13184,121 @@ Try one of these:
       return `${choosePersonalityLine("default")} Current project: ${getSafeThreadTitle()}.\n\nAsk me what to do next, summarize the project, or prepare a move when you are ready.`;
    }
 
+   function buildProjectStarterProposalResponse(draft: ProjectStarterDraft) {
+      return [
+         `I’d start this as ${draft.title}.`,
+         "",
+         `This looks like a ${getProjectStarterTypeLabel(draft.projectType).toLowerCase()} project. The first useful move is to ${draft.immediateNextAction.charAt(0).toLowerCase()}${draft.immediateNextAction.slice(1)}`,
+         "",
+         "I’ve prepared a Canvas starter with the goal, current state, decision points, milestones, constraints, immediate next step, and success criteria.",
+         "",
+         "Say “open it in Canvas” to use it, or tell me what to change.",
+      ].join("\n");
+   }
+
+   function openProjectStarterInCanvas(draft: ProjectStarterDraft) {
+      const savedProject = upsertProjectMemory({
+         title: draft.title,
+         body: draft.body,
+         sourceTitle: draft.title,
+         sourceContent: draft.body,
+         workingSummary: draft.brief,
+         source: "manual",
+         destination: "canvas",
+         stage: "idea",
+         status: "active",
+         priority: "medium",
+         latestMovement: "ai-dock → canvas",
+         recommendedNextAction: draft.immediateNextAction,
+         projectType: getProjectStarterTypeLabel(draft.projectType),
+      });
+
+      clearDeletedTombstonesForLiveProject({
+         title: draft.title,
+         workflowId: savedProject.workflowId,
+         originBoardItemId: savedProject.originBoardItemId,
+      });
+
+      window.setTimeout(() => {
+         window.dispatchEvent(
+            new CustomEvent("allevin-send-to-canvas", {
+               detail: {
+                  title: draft.title,
+                  body: draft.body,
+                  sourceTitle: draft.title,
+                  sourceContent: draft.body,
+                  workingSummary: draft.brief,
+                  workflowId: savedProject.workflowId,
+                  originBoardItemId: savedProject.originBoardItemId,
+                  projectId: savedProject.id,
+                  projectType: getProjectStarterTypeLabel(draft.projectType),
+                  recommendedNextAction: draft.immediateNextAction,
+                  source: "project",
+               },
+            }),
+         );
+      }, 0);
+
+      setPendingProjectStarter(null);
+
+      workspace?.setActiveView("focus" as any);
+      setExpanded(true);
+      setChatOpen(true);
+
+      window.dispatchEvent(
+         new CustomEvent("allevin-open-product-module", {
+            detail: {
+               moduleId: "canvas",
+            },
+         }),
+      );
+
+      window.setTimeout(() => {
+         const target = document.getElementById("work-area") || document.getElementById("canvas");
+
+         target?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+         });
+
+         refreshThreadSoon();
+      }, 160);
+
+      return `${draft.title} is ready in Canvas. I gave it a structured starting point rather than a blank page. Start with this: ${draft.immediateNextAction}`;
+   }
+
+   function revisePendingProjectStarter(prompt: string, current: ProjectStarterDraft) {
+      const requestedTitle = extractRequestedProjectStarterTitle(prompt);
+
+      if (requestedTitle && requestedTitle !== "Untitled") {
+         const revised = {
+            ...current,
+            title: requestedTitle,
+            body: current.body,
+            createdAt: Date.now(),
+         };
+
+         setPendingProjectStarter({
+            stage: "review",
+            originalPrompt: current.brief,
+            draft: revised,
+         });
+
+         return buildProjectStarterProposalResponse(revised);
+      }
+
+      const revisedBrief = sanitizeLongText(`${current.brief}\n\nRequested adjustment:\n${prompt}`, 6000);
+      const revised = buildProjectStarterDraft(revisedBrief);
+
+      setPendingProjectStarter({
+         stage: "review",
+         originalPrompt: revisedBrief,
+         draft: revised,
+      });
+
+      return buildProjectStarterProposalResponse(revised);
+   }
+
    // ========================================
    // Send Handler
    // ========================================
@@ -12202,6 +13353,119 @@ Try one of these:
       // Routing, commands, and LLM calls happen after this so a later error
       // cannot make the typed prompt disappear from the chat.
       setMessages((prev) => [...prev, userMessage]);
+
+      if (pendingProjectStarter?.stage === "awaiting-brief") {
+         if (looksLikeProjectStarterRejection(currentInput)) {
+            setPendingProjectStarter(null);
+
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content: "No problem. I cleared the project starter.",
+               },
+            ]);
+
+            return;
+         }
+
+         const draft = buildProjectStarterDraft(currentInput);
+
+         setPendingProjectStarter({
+            stage: "review",
+            originalPrompt: currentInput,
+            draft,
+         });
+
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: cleanFinalAIDockResponse(buildProjectStarterProposalResponse(draft)),
+            },
+         ]);
+
+         return;
+      }
+
+      if (pendingProjectStarter?.stage === "review" && pendingProjectStarter.draft) {
+         if (looksLikeProjectStarterApproval(currentInput)) {
+            const response = openProjectStarterInCanvas(pendingProjectStarter.draft);
+
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content: cleanFinalAIDockResponse(response),
+               },
+            ]);
+
+            return;
+         }
+
+         if (looksLikeProjectStarterRejection(currentInput)) {
+            setPendingProjectStarter(null);
+
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content: "Understood. I discarded that starter without changing Canvas.",
+               },
+            ]);
+
+            return;
+         }
+
+         const response = revisePendingProjectStarter(currentInput, pendingProjectStarter.draft);
+
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: cleanFinalAIDockResponse(response),
+            },
+         ]);
+
+         return;
+      }
+
+      if (looksLikeNewProjectRequest(currentInput)) {
+         if (!hasEnoughProjectStarterDetail(currentInput)) {
+            setPendingProjectStarter({
+               stage: "awaiting-brief",
+               originalPrompt: currentInput,
+            });
+
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content: "What are you trying to finish, who or what is it for, and what would a successful result look like? A sentence or two is enough—I’ll turn it into a title and a useful Canvas starting point.",
+               },
+            ]);
+
+            return;
+         }
+
+         const draft = buildProjectStarterDraft(currentInput);
+
+         setPendingProjectStarter({
+            stage: "review",
+            originalPrompt: currentInput,
+            draft,
+         });
+
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: cleanFinalAIDockResponse(buildProjectStarterProposalResponse(draft)),
+            },
+         ]);
+
+         return;
+      }
 
       if (handleLocalFirstAIDockIntent(currentInput)) {
          return;
@@ -12294,6 +13558,24 @@ Try one of these:
                role: "assistant" as const,
 
                content: responseContent,
+            },
+         ]);
+
+         refreshThreadSoon();
+
+         return;
+      }
+
+      const projectGuidance = buildProjectLeadGuidanceResponse(currentInput);
+
+      if (shouldRouteThroughProjectGuidance(currentInput, projectGuidance)) {
+         const responseContent = cleanFinalAIDockResponse(buildProjectGuidanceDisplayResponse(currentInput, projectGuidance));
+
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: responseContent || "I have the project context, but I could not shape the recommendation cleanly.",
             },
          ]);
 
@@ -12447,6 +13729,28 @@ Try one of these:
          return;
       }
 
+      // MK VII Build 4.4 — Calendar project-lead routing lock:
+      // Guidance decides what project action matters; Calendar decides when it fits.
+      // Return the grounded calendar response directly so legacy smart-command or
+      // conversational variation routes cannot remove the action or time window.
+      if (looksLikeCalendarNotesQuestion(currentInput) || looksLikeCalendarScheduleQuestion(currentInput)) {
+         const responseContent = cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, buildCalendarAwarenessResponse(currentInput)));
+
+         setMessages((prev) => [
+            ...prev,
+
+            {
+               role: "assistant" as const,
+
+               content: responseContent,
+            },
+         ]);
+
+         refreshThreadSoon();
+
+         return;
+      }
+
       const mkvToolIntent = getMkvToolIntent(currentInput);
 
       if (
@@ -12507,6 +13811,49 @@ Try one of these:
                role: "assistant" as const,
 
                content: cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, buildAvailableMkvToolResponse(currentInput))),
+            },
+         ]);
+
+         refreshThreadSoon();
+
+         return;
+      }
+
+      // MK VII — Project guidance priority lock:
+      // Project-work questions must be resolved before the broad general-knowledge
+      // detector, which intentionally treats most question-mark prompts as factual.
+      // Without this guard, prompts such as “What should I work on next?” can be
+      // misrouted to generic chat even when the active project packet is healthy.
+      const immediateProjectGuidance = buildProjectLeadGuidanceResponse(currentInput);
+
+      if (shouldRouteThroughProjectGuidance(currentInput, immediateProjectGuidance)) {
+         const responseContent = cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, buildProjectGuidanceDisplayResponse(currentInput, immediateProjectGuidance)));
+
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: responseContent || "I found the project route, but the guidance response was empty. Try that once more.",
+            },
+         ]);
+
+         refreshThreadSoon();
+
+         return;
+      }
+
+      // A direct next-action question must never fall through to the LLM even
+      // when project memory is temporarily unavailable during a fresh Canvas handoff.
+      // generateResponse will use project guidance when available and a grounded
+      // empty-workspace/starter response when it is not.
+      if (looksLikeDirectNextActionQuestion(currentInput)) {
+         const responseContent = cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, generateResponse(currentInput)));
+
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: responseContent || "I do not have enough active project context yet. Open or create a project, then ask that again.",
             },
          ]);
 
@@ -12645,26 +13992,6 @@ Try one of these:
                role: "assistant" as const,
 
                content: cleanFinalAIDockResponse(commandResponse),
-            },
-         ]);
-
-         refreshThreadSoon();
-
-         return;
-      }
-
-      if (looksLikeCalendarNotesQuestion(currentInput) || looksLikeCalendarScheduleQuestion(currentInput)) {
-         const baseResponse = withTypoAwareResponse(currentInput, buildCalendarAwarenessResponse(currentInput));
-
-         const responseContent = await generateNaturalResponseVariation(currentInput, baseResponse);
-
-         setMessages((prev) => [
-            ...prev,
-
-            {
-               role: "assistant" as const,
-
-               content: cleanFinalAIDockResponse(responseContent),
             },
          ]);
 

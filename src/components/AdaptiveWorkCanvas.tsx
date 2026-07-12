@@ -263,6 +263,10 @@ interface CanvasImportPayload {
 
    cleanSourceContent?: string;
 
+   projectType?: string;
+
+   recommendedNextAction?: string;
+
    projectId?: string;
 
    materialId?: string;
@@ -400,7 +404,7 @@ interface IntegrationSavePayload {
 
 type CanvasWorkflowMode = "balanced" | "planning" | "research" | "creative" | "deep-focus";
 
-type CanvasStructureTemplateId = "simple" | "plan" | "notes";
+type CanvasStructureTemplateId = "general" | "software" | "research" | "writing" | "planning" | "checklist";
 
 interface CanvasStructureTemplate {
    id: CanvasStructureTemplateId;
@@ -416,90 +420,240 @@ interface CanvasStructureTemplate {
 
 const CANVAS_STRUCTURE_TEMPLATES: CanvasStructureTemplate[] = [
    {
-      id: "simple",
-      label: "Shape your project",
-      helper: "Use this when you have a rough idea and need help turning it into a clear project.",
+      id: "general",
+      label: "Shape a project",
+      helper: "Use this when the project does not fit a specialized workflow yet.",
       title: "New Project",
-      body: `Project Type:
-Write the kind of project this is, such as personal, school, work, creative, technical, or planning.
+      body: `Project Type: General
 
 Current Status:
-Write where this project stands right now. This can be one sentence.
+Starting point
 
-Main Idea:
-Describe the project in plain language. What is this about?
+Project Goal:
+What are you trying to finish, improve, decide, or understand?
 
-Goal:
-Write what you want to finish, improve, decide, or understand.
+Finished Outcome:
+What should exist, change, or be resolved when this project is complete?
 
-Important Details:
-Add any useful notes, dates, people, links, examples, limits, or reminders.
-
-Materials or References:
-List any files, notes, screenshots, websites, messages, or ideas that may help.
-
-What Success Looks Like:
-Describe how you will know this project is in a good place.
-
-Next Step:
-Write one small action you can take next.`,
-   },
-   {
-      id: "plan",
-      label: "Plan the steps",
-      helper: "Use this when you know the goal and need to break it into smaller actions.",
-      title: "New Step Plan",
-      body: `Project Type:
-Write the kind of project this is, such as personal, school, work, creative, technical, or planning.
-
-Goal:
-Write the main result you want.
-
-Current Status:
-Write what has already happened and what still needs attention.
-
-Steps:
-1. First useful step
-2. Next useful step
-3. Final check or finish step
-
-Things to Check:
-List anything that could block progress, needs review, or should not be forgotten.
-
-Materials or References:
-List anything that supports the project.
-
-Next Step:
-Choose the first step to work on.`,
-   },
-   {
-      id: "notes",
-      label: "Notes and research",
-      helper: "Use this when you are collecting information before deciding what to do next.",
-      title: "New Notes and Research",
-      body: `Project Type:
-Write the kind of project this is, such as personal, school, work, creative, technical, or planning.
-
-Topic:
-Write the subject, question, or idea you are exploring.
-
-What I Know So Far:
-Write the information you already have.
-
-What I Need to Learn:
-List the main things you still need to understand.
-
-Useful Notes:
-Add important facts, examples, quotes, links, reminders, or observations.
-
-Sources or Materials:
-List where the information came from or what files support it.
+Known Context:
+Record the facts already known and separate them from assumptions.
 
 Open Questions:
-List anything that still feels unclear.
+What information could change the direction or priority?
 
-Next Step:
-Write the next source, note, or decision to handle.`,
+Milestones:
+1. Define the finished outcome.
+2. Resolve the first important unknown.
+3. Complete the first meaningful milestone.
+4. Review the result and adjust.
+
+Constraints:
+Add budget, time, tools, rules, people, or quality limits.
+
+Immediate Next Step:
+Describe the first observable action that would prove the project has started.
+
+Success Criteria:
+Define observable checks that prove the project is finished and useful.`,
+   },
+   {
+      id: "software",
+      label: "Build a product",
+      helper: "Use this for an application, website, feature, platform, or technical build.",
+      title: "New Software Project",
+      body: `Project Type: Software Engineering
+
+Current Status:
+Starting point
+
+Project Goal:
+What product or capability are you trying to deliver?
+
+Primary User:
+Who needs this, and what are they trying to accomplish?
+
+Problem to Solve:
+What current friction or limitation should the product remove?
+
+First Useful Release:
+Define the smallest complete user flow that creates real value.
+
+Architecture / Technical Context:
+Record the confirmed stack, integrations, data needs, and constraints.
+
+Milestones:
+1. Define the user and core problem.
+2. Choose the smallest end-to-end flow.
+3. Confirm architecture and dependencies.
+4. Build the core flow.
+5. Test with real use and resolve failures.
+
+Constraints:
+Add platform, time, budget, security, compatibility, or deployment limits.
+
+Immediate Next Step:
+Define the smallest end-to-end user flow that would prove the project is useful.
+
+Success Criteria:
+Define the user outcome and technical checks that prove the release works.`,
+   },
+   {
+      id: "research",
+      label: "Start research",
+      helper: "Use this when the outcome depends on credible evidence before drafting or deciding.",
+      title: "New Research Project",
+      body: `Project Type: Research
+
+Current Status:
+Starting point
+
+Project Goal:
+What must this research explain, support, compare, or help decide?
+
+Research Question:
+What exact question must the project answer?
+
+Evidence Needed:
+Define how many credible sources are required and what makes each source acceptable.
+
+Deliverable:
+Define the final brief, report, paper, presentation, or decision this research must support.
+
+Milestones:
+1. Confirm the research question and evidence requirement.
+2. Collect and evaluate the required sources.
+3. Assign each source a role in the argument.
+4. Build the outline around findings, not source summaries.
+5. Draft and review against the deliverable requirements.
+
+Constraints:
+Add source rules, length, deadline, citation style, audience, or scope limits.
+
+Immediate Next Step:
+Confirm the research question and source requirement before collecting evidence.
+
+Success Criteria:
+Define what the final deliverable must answer and how the evidence will support it.`,
+   },
+   {
+      id: "writing",
+      label: "Shape a draft",
+      helper: "Use this for an essay, article, report, proposal, story, script, or speech.",
+      title: "New Writing Project",
+      body: `Project Type: Writing
+
+Current Status:
+Starting point
+
+Project Goal:
+What are you trying to communicate, persuade, explain, or create?
+
+Audience:
+Who is this for, and what do they need from it?
+
+Core Message:
+What is the one idea the reader should understand or feel by the end?
+
+Deliverable:
+Define the format, length, sections, tone, and deadline if known.
+
+Milestones:
+1. Confirm audience and purpose.
+2. Build the outline.
+3. Draft the complete piece.
+4. Revise for clarity and missing information.
+5. Finalize against the deliverable requirements.
+
+Constraints:
+Add length, voice, format, source, approval, or deadline requirements.
+
+Immediate Next Step:
+Define the audience, purpose, and one idea the reader should leave with.
+
+Success Criteria:
+Define what the final piece must communicate and what requirements it must satisfy.`,
+   },
+   {
+      id: "planning",
+      label: "Plan a decision",
+      helper: "Use this when the project involves options, dependencies, logistics, or a finished outcome.",
+      title: "New Planning Project",
+      body: `Project Type: Planning
+
+Current Status:
+Starting point
+
+Project Goal:
+What must be decided, organized, upgraded, or completed?
+
+Decision or Finished Outcome:
+What specific outcome should this plan produce?
+
+Known Options:
+List the real alternatives without choosing prematurely.
+
+Dependencies:
+Identify the facts, approvals, logistics, or resources that can change the plan.
+
+Risks:
+Record what could create rework, delay, unnecessary cost, or a weak outcome.
+
+Milestones:
+1. Confirm the outcome and decision gates.
+2. Resolve the first dependency.
+3. Choose the approach.
+4. Execute the plan.
+5. Validate the result.
+
+Constraints:
+Add budget, timing, tools, people, space, or quality limits.
+
+Immediate Next Step:
+Identify the first dependency that can change the plan.
+
+Success Criteria:
+Define the checks that prove the planned outcome was actually achieved.`,
+   },
+   {
+      id: "checklist",
+      label: "Build a checklist",
+      helper: "Use this when completion depends on ordered requirements and verification.",
+      title: "New Checklist Project",
+      body: `Project Type: Checklist
+
+Current Status:
+Starting point
+
+Project Goal:
+What process, inspection, launch, review, or requirement set must be completed?
+
+Required Outcome:
+What must be true when every item is complete?
+
+Requirements:
+List the mandatory checks, approvals, materials, or actions.
+
+Order and Dependencies:
+Place prerequisites before the items that depend on them.
+
+Verification:
+Define how each important item will be confirmed rather than assumed.
+
+Milestones:
+1. Capture all requirements.
+2. Order them by dependency.
+3. Complete the first unfinished requirement.
+4. Verify the result.
+5. Close the checklist only when the outcome is confirmed.
+
+Constraints:
+Add deadlines, owners, standards, approvals, or resource limits.
+
+Immediate Next Step:
+Define what complete means, then order the requirements by dependency.
+
+Success Criteria:
+Every required item is completed and the final outcome is independently verified.`,
    },
 ];
 
@@ -2249,7 +2403,7 @@ export default function AdaptiveWorkCanvas() {
 
    const [structureStarterOpen, setStructureStarterOpen] = useState(false);
 
-   const [selectedStructureTemplateId, setSelectedStructureTemplateId] = useState<CanvasStructureTemplateId>("simple");
+   const [selectedStructureTemplateId, setSelectedStructureTemplateId] = useState<CanvasStructureTemplateId>("general");
 
    const [selectedReferenceIds, setSelectedReferenceIds] = useState<string[]>([]);
 
@@ -2645,10 +2799,12 @@ ${currentContent}`
             originBoardItemId: updatedCanvas.originBoardItemId,
             source: updatedCanvas.source === "system" ? "system" : updatedCanvas.source === "research" ? "research" : updatedCanvas.source === "task" ? "task" : updatedCanvas.source === "project" ? "projects" : "canvas",
             destination: "canvas",
-            stage: "drafting",
+            stage: payload.projectType ? "idea" : "drafting",
             status: "active",
             priority: "medium",
             latestMovement: `${updatedCanvas.source || "system"} → canvas`,
+            recommendedNextAction: payload.recommendedNextAction || "Continue shaping the project in Canvas.",
+            projectType: payload.projectType,
          });
 
          return updatedCanvas;
@@ -2693,7 +2849,9 @@ ${currentContent}`
             planningSignals++;
          }
 
-         if (message.includes("research") || message.includes("study") || message.includes("analyze") || message.includes("compare") || message.includes("investigate")) {
+         const looksLikeProductStudy = message.includes("study planner") || message.includes("study app") || message.includes("study platform");
+
+         if (message.includes("research") || (!looksLikeProductStudy && message.includes("study")) || message.includes("analyze") || message.includes("compare") || message.includes("investigate")) {
             researchSignals++;
          }
 
