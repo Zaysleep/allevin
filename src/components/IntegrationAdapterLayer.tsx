@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -17,14 +17,16 @@ import { rememberDeletedProjectMemorySignal } from "@/components/MemoryEngine";
 // ========================================
 // ALLEVIN Projects Workspace
 // Purpose:
-// MK VII project home base.
-// Projects keeps each project organized with schedule planning and materials.
-// Canvas remains the active workbench where project updates are written and shaped.
+// MK VIII project home base.
+// Projects keeps each project, Working Notes, milestones, schedule, and materials together.
+// ALLEVIN turns a user's description into an editable project draft before it is saved.
 // ========================================
 
 const STORAGE_KEY = "allevin-internal-output-hub";
 
 const PROJECT_LIBRARY_STORAGE_KEY = "allevin-project-library";
+
+const ACTIVE_PROJECT_SELECTION_STORAGE_KEY = "allevin-active-project-selection-mkviii";
 
 const DELETED_PROJECTS_STORAGE_KEY = "allevin-project-deleted";
 
@@ -42,16 +44,20 @@ const CANVAS_STORAGE_KEY = "allevin-adaptive-work-canvas";
 
 const PROJECT_TRACKING_STORAGE_KEY = "allevin-project-tracking-map";
 
+const CALENDAR_EVENTS_STORAGE_KEY = "allevin-calendar-events-mki";
+
 const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
 
 const CANVAS_SELECTED_REFERENCES_STORAGE_KEY = "allevin-canvas-selected-references-mkvi";
+
+const PROJECT_SELECTED_MATERIALS_STORAGE_KEY = "allevin-project-selected-materials-mkviii";
 
 const PROJECT_MATERIAL_STORAGE_SAFE_LIMIT = 4500000;
 
 const APPROVED_INTERNAL_INTEGRATION_HANDLED_KEY = "allevin-approved-internal-integration-handled";
 
 // ========================================
-// MK VII — Projects Sanitization Parameters
+// MK VIII — Projects Sanitization Parameters
 // Projects should preserve saved work, but every stored/displayed field is untrusted.
 // ========================================
 
@@ -322,12 +328,38 @@ interface ProjectLibraryItem {
 
 type ProjectTrackingStatus = "idea" | "active" | "check" | "done";
 
+type ProjectMilestoneStatus = "waiting" | "active" | "needs-review" | "complete" | "archived";
+
+interface ProjectMilestone {
+   id: string;
+   title: string;
+   status: ProjectMilestoneStatus;
+
+   // Compatibility field retained while MK VII project records migrate.
+   completed: boolean;
+   completedAt?: number;
+
+   goal: string;
+   whyItMatters: string;
+   startingPrompt: string;
+   workingContent: string;
+   decisions: string[];
+   openQuestions: string[];
+   completionEvidence: string[];
+
+   order: number;
+   createdAt: number;
+   updatedAt: number;
+}
+
 interface ProjectTrackingMeta {
    status: ProjectTrackingStatus;
 
    priority: "low" | "medium" | "high";
 
    nextStep: string;
+
+   milestones: ProjectMilestone[];
 
    calendarTaskTitle: string;
 
@@ -338,6 +370,26 @@ interface ProjectTrackingMeta {
    calendarTaskDurationMinutes: number;
 
    updatedAt: number;
+}
+
+interface ProjectCalendarEvent {
+   id?: string;
+
+   title?: string;
+
+   description?: string;
+
+   sourceTitle?: string;
+
+   workflowId?: string;
+
+   originBoardItemId?: string;
+
+   startTime?: number;
+
+   endTime?: number;
+
+   allDay?: boolean;
 }
 
 type ProjectMaterialType = "Note" | "Document" | "Image" | "Research" | "Feedback" | "Reference";
@@ -522,6 +574,86 @@ function getReadableProjectDate(value?: number) {
    } catch {
       return "Recently updated";
    }
+}
+
+function normalizeProjectMatchValue(value?: string) {
+   return sanitizeProjectTitle(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+}
+
+function readProjectCalendarEvents() {
+   if (typeof window === "undefined") {
+      return [] as ProjectCalendarEvent[];
+   }
+
+   try {
+      const stored = localStorage.getItem(CALENDAR_EVENTS_STORAGE_KEY);
+      const parsed = stored ? JSON.parse(stored) : [];
+
+      if (!Array.isArray(parsed)) {
+         return [] as ProjectCalendarEvent[];
+      }
+
+      return parsed.filter((event) => event && typeof event === "object") as ProjectCalendarEvent[];
+   } catch {
+      return [] as ProjectCalendarEvent[];
+   }
+}
+
+function getNextCalendarSessionForProject(project: ProjectLibraryItem) {
+   const now = Date.now();
+   const projectTitleKey = normalizeProjectMatchValue(project.title);
+
+   return (
+      readProjectCalendarEvents()
+         .filter((event) => {
+            const startTime = Number(event.startTime || 0);
+
+            if (!Number.isFinite(startTime) || startTime < now) {
+               return false;
+            }
+
+            if (project.workflowId && event.workflowId === project.workflowId) {
+               return true;
+            }
+
+            if (project.originBoardItemId && event.originBoardItemId === project.originBoardItemId) {
+               return true;
+            }
+
+            const eventProjectKey = normalizeProjectMatchValue(event.sourceTitle);
+            const eventTitleKey = normalizeProjectMatchValue(event.title);
+
+            return Boolean(projectTitleKey && (eventProjectKey === projectTitleKey || eventTitleKey.startsWith(projectTitleKey)));
+         })
+         .sort((a, b) => Number(a.startTime || 0) - Number(b.startTime || 0))[0] || null
+   );
+}
+
+function getProjectSessionDateLabel(timestamp?: number, allDay?: boolean) {
+   if (!timestamp) {
+      return "";
+   }
+
+   const date = new Date(timestamp);
+   const dateLabel = new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+   }).format(date);
+
+   if (allDay) {
+      return `${dateLabel} · All day`;
+   }
+
+   const timeLabel = new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+   }).format(date);
+
+   return `${dateLabel} · ${timeLabel}`;
 }
 
 function pickRandomItem(values: string[]) {
@@ -964,6 +1096,62 @@ function saveProjectMaterials(materials: ProjectMaterial[]) {
    }
 }
 
+function readProjectSelectedMaterialMap() {
+   if (typeof window === "undefined") {
+      return {} as Record<string, string[]>;
+   }
+
+   try {
+      const stored = localStorage.getItem(PROJECT_SELECTED_MATERIALS_STORAGE_KEY);
+      const parsed = stored ? JSON.parse(stored) : {};
+
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+         return {} as Record<string, string[]>;
+      }
+
+      return Object.fromEntries(
+         Object.entries(parsed)
+            .map(([projectId, value]) => [sanitizeProjectPlainText(projectId, 180), Array.isArray(value) ? Array.from(new Set(value.filter((id): id is string => typeof id === "string"))).slice(0, 30) : []])
+            .filter(([projectId]) => Boolean(projectId)),
+      );
+   } catch {
+      localStorage.removeItem(PROJECT_SELECTED_MATERIALS_STORAGE_KEY);
+      return {} as Record<string, string[]>;
+   }
+}
+
+function saveProjectSelectedMaterialMap(map: Record<string, string[]>) {
+   if (typeof window === "undefined") {
+      return;
+   }
+
+   const safeMap = Object.fromEntries(
+      Object.entries(map)
+         .map(([projectId, ids]) => [sanitizeProjectPlainText(projectId, 180), Array.from(new Set((ids || []).filter(Boolean))).slice(0, 30)])
+         .filter(([projectId]) => Boolean(projectId)),
+   );
+
+   localStorage.setItem(PROJECT_SELECTED_MATERIALS_STORAGE_KEY, JSON.stringify(safeMap));
+}
+
+function removeMaterialsFromProjectSelection(materialIds: string[]) {
+   if (!materialIds.length || typeof window === "undefined") {
+      return;
+   }
+
+   const materialIdSet = new Set(materialIds);
+   const current = readProjectSelectedMaterialMap();
+   const next: Record<string, string[]> = Object.fromEntries(
+      Object.entries(current).map(([projectId, ids]) => {
+         const safeIds = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+
+         return [projectId, safeIds.filter((id) => !materialIdSet.has(id))];
+      }),
+   );
+
+   saveProjectSelectedMaterialMap(next);
+}
+
 function readCanvasSelectedReferenceIdsForProjects() {
    if (typeof window === "undefined") {
       return [] as string[];
@@ -1038,267 +1226,6 @@ function getShortProjectMaterialPreview(value?: string, limit = 180) {
    return `${cleanValue.slice(0, limit).trim()}...`;
 }
 
-type ProjectDetailSection = {
-   title: string;
-
-   body: string;
-};
-
-const PROJECT_DETAIL_LABELS = [
-   // General project language
-   "Project Type",
-   "Project Goal",
-   "Goal",
-   "Current Status",
-   "Status",
-   "Core Idea",
-   "Primary Goal",
-   "Main Goal",
-   "Timeline",
-   "Target Date",
-   "Deadline",
-   "Next Step",
-   "Next Steps",
-   "Testing Notes",
-   "Notes",
-
-   // Software / portfolio language
-   "Live Portfolio",
-   "Live App",
-   "Live Link",
-   "GitHub Repo",
-   "Repository",
-   "Push Command for Future Updates",
-   "Push Command",
-   "Deployment Flow",
-   "Recommended Stack",
-   "Tech Stack",
-   "Stack",
-   "Features",
-   "MVP",
-   "Portfolio Direction",
-   "Core User Experience",
-   "Main Navigation",
-   "Navigation",
-
-   // School / research language
-   "Assignment",
-   "Requirements",
-   "Sources",
-   "Research Question",
-   "Draft Status",
-   "Deliverable",
-
-   // Vehicle / physical project language
-   "Upgrade Goal",
-   "Mods",
-   "Parts",
-   "Parts List",
-   "Budget",
-   "Color",
-   "Wrap",
-   "Maintenance",
-] as const;
-
-type ProjectDetailProfile = {
-   id: "software" | "portfolio" | "vehicle" | "school" | "research" | "content" | "home" | "general";
-
-   label: string;
-
-   primaryTitle: string;
-
-   notesTitle: string;
-
-   nextTitle: string;
-};
-
-function getProjectDetailProfile(project: ProjectLibraryItem): ProjectDetailProfile {
-   const body = compactText(`${project.title} ${project.latestSummary} ${project.notes[0]?.body || ""}`).toLowerCase();
-
-   if (["portfolio", "resume", "linkedin", "github pages", "vercel portfolio"].some((signal) => body.includes(signal))) {
-      return {
-         id: "portfolio",
-         label: "Portfolio project",
-         primaryTitle: "Portfolio Goal",
-         notesTitle: "Presentation Notes",
-         nextTitle: "Next Portfolio Step",
-      };
-   }
-
-   if (["app", "software", "next.js", "react", "typescript", "tailwind", "component", "api", "deploy", "vercel", "github", "code"].some((signal) => body.includes(signal))) {
-      return {
-         id: "software",
-         label: "Software project",
-         primaryTitle: "Build Goal",
-         notesTitle: "Build Notes",
-         nextTitle: "Next Build Step",
-      };
-   }
-
-   if (["car", "cayman", "nissan", "350z", "wrap", "mod", "mods", "upgrade", "spoiler", "wheels", "rims", "suspension", "exhaust", "paint"].some((signal) => body.includes(signal))) {
-      return {
-         id: "vehicle",
-         label: "Vehicle project",
-         primaryTitle: "Upgrade Goal",
-         notesTitle: "Upgrade Notes",
-         nextTitle: "Next Upgrade Step",
-      };
-   }
-
-   if (["assignment", "class", "course", "professor", "rubric", "due date", "essay", "presentation", "semester"].some((signal) => body.includes(signal))) {
-      return {
-         id: "school",
-         label: "School project",
-         primaryTitle: "Assignment Goal",
-         notesTitle: "Class Notes",
-         nextTitle: "Next School Step",
-      };
-   }
-
-   if (["research", "source", "article", "thesis", "study", "citation", "literature", "evidence"].some((signal) => body.includes(signal))) {
-      return {
-         id: "research",
-         label: "Research project",
-         primaryTitle: "Research Goal",
-         notesTitle: "Research Notes",
-         nextTitle: "Next Research Step",
-      };
-   }
-
-   if (["caption", "campaign", "flyer", "instagram", "content", "audience", "post", "creative"].some((signal) => body.includes(signal))) {
-      return {
-         id: "content",
-         label: "Content project",
-         primaryTitle: "Content Goal",
-         notesTitle: "Content Notes",
-         nextTitle: "Next Content Step",
-      };
-   }
-
-   if (["patio", "apartment", "room", "furniture", "plants", "backyard", "home", "clean", "organize"].some((signal) => body.includes(signal))) {
-      return {
-         id: "home",
-         label: "Home project",
-         primaryTitle: "Home Goal",
-         notesTitle: "Home Notes",
-         nextTitle: "Next Home Step",
-      };
-   }
-
-   return {
-      id: "general",
-      label: "Project",
-      primaryTitle: "Project Goal",
-      notesTitle: "Project Notes",
-      nextTitle: "Next Step",
-   };
-}
-
-function getProjectOpeningSectionTitle(profile: ProjectDetailProfile) {
-   return profile.primaryTitle;
-}
-
-function getProjectFallbackSections(project: ProjectLibraryItem, profile: ProjectDetailProfile) {
-   const body = sanitizeProjectBody(project.latestSummary || project.notes[0]?.body || project.title)
-      .replace(/\s+/g, " ")
-      .trim();
-
-   const firstSentence = body.match(/^(.+?[.!?])\s/)?.[1] || getShortProjectMaterialPreview(body, 280);
-
-   const sections: ProjectDetailSection[] = [];
-
-   if (firstSentence) {
-      sections.push({
-         title: profile.primaryTitle,
-         body: firstSentence,
-      });
-   }
-
-   if (body && body !== firstSentence) {
-      sections.push({
-         title: profile.notesTitle,
-         body,
-      });
-   }
-
-   const nextMove = getProjectTypeInsight(project).nextMove;
-
-   if (nextMove) {
-      sections.push({
-         title: profile.nextTitle,
-         body: nextMove,
-      });
-   }
-
-   return sections.slice(0, 6);
-}
-
-function getProjectDetailSections(value: string | undefined, profile: ProjectDetailProfile) {
-   const cleanValue = sanitizeProjectBody(value).replace(/\s+/g, " ").trim();
-
-   if (!cleanValue) {
-      return [] as ProjectDetailSection[];
-   }
-
-   const labelPattern = PROJECT_DETAIL_LABELS.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-
-   const matches = Array.from(cleanValue.matchAll(new RegExp(`\\b(${labelPattern})\\s*:`, "gi")));
-
-   if (!matches.length) {
-      return [] as ProjectDetailSection[];
-   }
-
-   const sections: ProjectDetailSection[] = [];
-
-   const opening = cleanValue.slice(0, matches[0].index).trim();
-
-   if (opening) {
-      sections.push({
-         title: getProjectOpeningSectionTitle(profile),
-         body: opening,
-      });
-   }
-
-   matches.forEach((match, index) => {
-      const label = sanitizeProjectTitle(match[1]) || "Project Detail";
-
-      const bodyStart = (match.index || 0) + match[0].length;
-
-      const bodyEnd = index + 1 < matches.length ? matches[index + 1].index || cleanValue.length : cleanValue.length;
-
-      const body = cleanValue.slice(bodyStart, bodyEnd).trim();
-
-      if (body) {
-         sections.push({
-            title: label,
-            body,
-         });
-      }
-   });
-
-   return sections.slice(0, 12);
-}
-
-function getAdaptiveProjectDetailSections(project: ProjectLibraryItem) {
-   const profile = getProjectDetailProfile(project);
-
-   const structuredSections = getProjectDetailSections(project.latestSummary || project.notes[0]?.body, profile);
-
-   if (structuredSections.length) {
-      return structuredSections;
-   }
-
-   return getProjectFallbackSections(project, profile);
-}
-
-function getProjectDetailPreview(section: ProjectDetailSection, expanded: boolean) {
-   if (expanded) {
-      return section.body;
-   }
-
-   return getShortProjectMaterialPreview(section.body, 170);
-}
-
 function inferProjectTrackingStatus(project: ProjectLibraryItem): ProjectTrackingStatus {
    const lower = compactText(`${project.latestMovement} ${project.latestSummary} ${project.notes[0]?.body || ""}`).toLowerCase();
 
@@ -1317,11 +1244,355 @@ function inferProjectTrackingStatus(project: ProjectLibraryItem): ProjectTrackin
    return "idea";
 }
 
+function splitProjectDescriptionSentences(value?: string) {
+   return sanitizeProjectBody(value)
+      .split(/(?<=[.!?])\s+|\n{2,}/)
+      .map((sentence) => sanitizeProjectBody(sentence))
+      .filter(Boolean);
+}
+
+function normalizeProjectCheckpoint(value?: string) {
+   return sanitizeProjectTitle(
+      sanitizeProjectBody(value)
+         .replace(/^(?:before launch|before release|to finish|i need to|we need to|need to|needs to|must|should)\s*/i, "")
+         .replace(/^(?:and|then)\s+/i, "")
+         .replace(/[.;]+$/g, ""),
+   );
+}
+
+function extractProjectDescriptionMilestones(description?: string) {
+   const clean = sanitizeProjectBody(description);
+   const actionVerbs = "(?:finalize|define|decide|confirm|create|build|write|research|collect|design|implement|test|validate|prepare|deploy|launch|review|coordinate|schedule|organize|document|choose|establish|clarify)";
+   const source =
+      clean.match(/(?:before\s+(?:launch|release|deployment)|to\s+(?:launch|finish|complete|deliver))[^,.]*,\s*(?:i|we)\s+need\s+to\s+([\s\S]*?)(?=\n\n|success\s+means|$)/i)?.[1] ||
+      clean.match(/(?:i|we)\s+need\s+to\s+([\s\S]*?)(?=\n\n|success\s+means|$)/i)?.[1] ||
+      "";
+
+   const candidates: string[] = [];
+
+   if (source) {
+      const splitPattern = new RegExp(`(?:,\\s+|\\s+and\\s+)(?=${actionVerbs}\\b)`, "gi");
+
+      candidates.push(
+         ...source
+            .split(splitPattern)
+            .map((item) => normalizeProjectCheckpoint(item))
+            .filter(Boolean),
+      );
+   }
+
+   if (!candidates.length) {
+      for (const sentence of splitProjectDescriptionSentences(clean)) {
+         if (!new RegExp(`\\b${actionVerbs}\\b`, "i").test(sentence)) {
+            continue;
+         }
+
+         const checkpoint = normalizeProjectCheckpoint(sentence.replace(/^(?:before launch|before release)[^,]*,\s*/i, "").replace(/^(?:i|we)\s+/i, ""));
+
+         if (checkpoint && checkpoint.length <= 220) {
+            candidates.push(checkpoint);
+         }
+      }
+   }
+
+   const seen = new Set<string>();
+
+   return candidates
+      .map((candidate) =>
+         candidate
+            .replace(/^and\s+/i, "")
+            .replace(/\s+/g, " ")
+            .replace(/[.;]+$/g, "")
+            .trim(),
+      )
+      .filter((candidate) => {
+         const key = candidate.toLowerCase();
+
+         if (!candidate || seen.has(key) || /^success means\b/i.test(candidate)) {
+            return false;
+         }
+
+         seen.add(key);
+         return true;
+      })
+      .slice(0, 8);
+}
+
+function inferProjectDraftGoal(title: string, description: string) {
+   const sentences = splitProjectDescriptionSentences(description);
+   const deliverableSentence = sentences.find((sentence) => /\b(?:first public-facing deliverable|deliverable|build|create|launch|write|research|organize|design)\b/i.test(sentence));
+   const opening = sentences[0] || description;
+
+   if (deliverableSentence && deliverableSentence !== opening) {
+      return sanitizeProjectBody(`${opening} ${deliverableSentence}`);
+   }
+
+   return sanitizeProjectBody(opening || `Complete ${title}.`);
+}
+
+function inferProjectDraftSuccess(description: string) {
+   const explicit = sanitizeProjectBody(description).match(/success\s+means\s+([\s\S]*?)(?=\n\n|$)/i)?.[1];
+
+   if (explicit) {
+      return sanitizeProjectBody(explicit).replace(/[.]+$/, "") + ".";
+   }
+
+   return "The intended outcome is complete, the important requirements have been verified, and the user can confidently share or use the result.";
+}
+
+function inferProjectDraftSituation(description: string, milestones: string[]) {
+   const sentences = splitProjectDescriptionSentences(description);
+   const situation =
+      sentences.find((sentence) => /\b(?:before launch|before release|currently|right now|still need|need to finalize|need to define|first public-facing deliverable)\b/i.test(sentence)) ||
+      milestones[0] ||
+      "The project has a clear direction and now needs its first checkpoint confirmed.";
+
+   return sanitizeProjectBody(situation);
+}
+
+function inferProjectDraftOpenQuestions(description: string) {
+   const lower = sanitizeProjectBody(description).toLowerCase();
+   const questions: string[] = [];
+
+   if (!/\b(?:audience|customer|reader|user|visitor|stakeholder)\b/.test(lower)) {
+      questions.push("Who is the primary audience for the finished project?");
+   }
+
+   if (!/\b(?:deadline|launch date|due date|by [a-z]+day|by \w+ \d+|timeline)\b/.test(lower)) {
+      questions.push("Is there a target date or outside deadline that should shape the order of work?");
+   }
+
+   if (!/\b(?:call to action|cta|next action|conversion|what should visitors do)\b/.test(lower) && /\b(?:website|site|landing page|homepage)\b/.test(lower)) {
+      questions.push("What should someone understand or do after viewing the finished website?");
+   }
+
+   return questions.slice(0, 3);
+}
+
+function inferSeniorProjectStartingPoint(description: string, milestones: string[], llmNextStep?: string) {
+   const lower = sanitizeProjectBody(description).toLowerCase();
+   const first = milestones[0] || "Clarify the finished outcome";
+
+   if (/\bbrand\b/.test(lower) && /\b(?:product|ecosystem|parent brand|parent company)\b/.test(lower)) {
+      return "Define the company promise and how each product fits within the ecosystem first. That decision should guide the page hierarchy, feature-story emphasis, and copy before implementation begins.";
+   }
+
+   if (/\b(?:research|source|evidence|citation)\b/.test(lower)) {
+      return `Start with ${first.replace(/[.]+$/, "")}. This establishes the evidence or framing the later work depends on.`;
+   }
+
+   if (/\b(?:website|app|software|platform|product)\b/.test(lower)) {
+      return `Start with ${first.replace(/[.]+$/, "")}. Locking that decision first will reduce design and implementation rework later.`;
+   }
+
+   const cleanLLMNextStep = sanitizeProjectNextStep(llmNextStep);
+
+   if (cleanLLMNextStep && !/^(?:let'?s|get started|start by defining what success looks like)/i.test(cleanLLMNextStep)) {
+      return cleanLLMNextStep;
+   }
+
+   return `Start with ${first.replace(/[.]+$/, "")}. It is the first checkpoint that gives the rest of the project a reliable direction.`;
+}
+
+function buildDetailedProjectDraft({ title, description, llmSummary, llmUsefulContext, llmNextStep }: { title: string; description: string; llmSummary?: string; llmUsefulContext?: string; llmNextStep?: string }) {
+   const inferredMilestones = extractProjectDescriptionMilestones(description);
+   const milestones =
+      inferredMilestones.length >= 3
+         ? inferredMilestones
+         : [...inferredMilestones, "Confirm the intended outcome and the decisions that shape it", "Complete the main project work", "Review the result against the success criteria", "Prepare the finished project to share or use"].slice(0, 6);
+
+   const goal = inferProjectDraftGoal(title, description);
+   const success = inferProjectDraftSuccess(description);
+   const situation = inferProjectDraftSituation(description, milestones);
+   const openQuestions = inferProjectDraftOpenQuestions(description);
+   const startingPoint = inferSeniorProjectStartingPoint(description, milestones, llmNextStep);
+
+   const modelContext = [llmSummary, llmUsefulContext]
+      .map((value) => sanitizeProjectBody(value))
+      .filter((value) => value && value.length > 30 && !/^let'?s\b/i.test(value))
+      .join(" ");
+
+   return sanitizeProjectBody(`Project Goal:
+${goal}
+
+Success Looks Like:
+${success}
+
+Current Situation:
+${situation}
+
+Working Notes:
+${description}${modelContext ? `\n\nALLEVIN Project Lead Context:\n${modelContext}` : ""}
+
+Initial Milestones:
+${milestones.map((milestone, index) => `${index + 1}. ${milestone}`).join("\n")}
+
+Open Questions:
+${openQuestions.length ? openQuestions.map((question) => `- ${question}`).join("\n") : "None yet."}
+
+Recommended Starting Point:
+${startingPoint}`);
+}
+
+function getStructuredProjectSection(body: string, labels: string[]) {
+   const escaped = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+   const match = sanitizeProjectBody(body).match(new RegExp(`(?:^|\\n)\\s*(?:${escaped})\\s*:\\s*\\n?([\\s\\S]*?)(?=\\n\\s*[A-Z][A-Za-z /&-]{2,50}\\s*:\\s*(?:\\n|$)|$)`, "i"));
+
+   return sanitizeProjectBody(match?.[1] || "");
+}
+
+function createProjectMilestoneId(projectId: string, title: string, index: number) {
+   const titleKey = sanitizeProjectTitle(title)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60);
+
+   return `${projectId}-milestone-${titleKey || index + 1}`;
+}
+
+function getProjectMilestoneCandidates(project: ProjectLibraryItem) {
+   const body = sanitizeProjectBody(project.notes[0]?.body || project.latestSummary);
+
+   const milestoneMatch = body.match(/(?:^|\n)\s*(?:Initial Milestones|Milestones|Progress Points|Progress|Steps)\s*:\s*\n([\s\S]*?)(?=\n\s*[A-Z][A-Za-z /&-]{2,40}\s*:\s*(?:\n|$)|$)/i);
+
+   const candidates = sanitizeProjectBody(milestoneMatch?.[1] || "")
+      .split("\n")
+      .map((line) => sanitizeProjectTitle(line.replace(/^\s*(?:[-*•]|\d+[.)]|[☐☑✓○])\s*/, "")))
+      .filter((line) => line && !/^(add|write|describe|list)\b/i.test(line))
+      .slice(0, 6);
+
+   if (candidates.length) {
+      return candidates;
+   }
+
+   const nextStep = sanitizeProjectNextStep(getProjectTypeInsight(project).nextMove);
+
+   return [nextStep || "Clarify the finished outcome", "Complete the main work", "Review and finish the project"];
+}
+
+function getMilestoneDefaultGoal(title: string) {
+   const clean = sanitizeProjectTitle(title).replace(/[.!?]+$/, "");
+   return clean ? `Complete ${clean.toLowerCase()} with a clear, reviewable outcome.` : "Complete this milestone with a clear, reviewable outcome.";
+}
+
+function getMilestoneDefaultWhyItMatters(title: string, index: number) {
+   const clean = sanitizeProjectTitle(title).replace(/[.!?]+$/, "");
+   return index === 0
+      ? `This is the first project checkpoint. Finishing ${clean.toLowerCase()} should reduce uncertainty for the work that follows.`
+      : `This checkpoint moves the project forward by turning ${clean.toLowerCase()} into saved project progress.`;
+}
+
+function getMilestoneDefaultStartingPrompt(title: string) {
+   const clean = sanitizeProjectTitle(title).replace(/[.!?]+$/, "");
+   return clean ? `What must be decided, created, or verified to complete ${clean.toLowerCase()}?` : "What must be decided, created, or verified to complete this milestone?";
+}
+
+function getMilestoneStatus(value: any, completed = false): ProjectMilestoneStatus {
+   if (value === "waiting" || value === "active" || value === "needs-review" || value === "complete" || value === "archived") {
+      return value;
+   }
+
+   return completed ? "complete" : "waiting";
+}
+
+function milestoneHasSavedWork(milestone: ProjectMilestone) {
+   return Boolean(sanitizeProjectBody(milestone.workingContent) || milestone.decisions.length || milestone.openQuestions.length || milestone.completionEvidence.length);
+}
+
+function getDefaultProjectMilestones(project: ProjectLibraryItem): ProjectMilestone[] {
+   const now = getNow();
+
+   return getProjectMilestoneCandidates(project).map((title, index) => ({
+      id: createProjectMilestoneId(project.id, title, index),
+      title,
+      status: index === 0 ? "active" : "waiting",
+      completed: false,
+      goal: getMilestoneDefaultGoal(title),
+      whyItMatters: getMilestoneDefaultWhyItMatters(title, index),
+      startingPrompt: getMilestoneDefaultStartingPrompt(title),
+      workingContent: "",
+      decisions: [],
+      openQuestions: [],
+      completionEvidence: [],
+      order: index + 1,
+      createdAt: now,
+      updatedAt: now,
+   }));
+}
+
+function sanitizeProjectMilestones(value: unknown, project: ProjectLibraryItem): ProjectMilestone[] {
+   if (!Array.isArray(value)) {
+      return getDefaultProjectMilestones(project);
+   }
+
+   const now = getNow();
+   const milestones = value
+      .filter((item) => item && typeof item === "object")
+      .map((item: any, index) => {
+         const title = sanitizeProjectTitle(item.title);
+         const completed = Boolean(item.completed) || item.status === "complete";
+         const status = getMilestoneStatus(item.status, completed);
+
+         return {
+            id: sanitizeProjectPlainText(item.id, 180) || createProjectMilestoneId(project.id, title, index),
+            title,
+            status,
+            completed: status === "complete",
+            completedAt: isValidProjectTimestamp(item.completedAt) ? item.completedAt : status === "complete" ? now : undefined,
+            goal: sanitizeProjectSummary(item.goal) || getMilestoneDefaultGoal(title),
+            whyItMatters: sanitizeProjectSummary(item.whyItMatters) || getMilestoneDefaultWhyItMatters(title, index),
+            startingPrompt: sanitizeProjectSummary(item.startingPrompt) || getMilestoneDefaultStartingPrompt(title),
+            workingContent: sanitizeProjectBody(item.workingContent),
+            decisions: Array.isArray(item.decisions)
+               ? item.decisions
+                    .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
+                    .filter(Boolean)
+                    .slice(0, 40)
+               : [],
+            openQuestions: Array.isArray(item.openQuestions)
+               ? item.openQuestions
+                    .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
+                    .filter(Boolean)
+                    .slice(0, 40)
+               : [],
+            completionEvidence: Array.isArray(item.completionEvidence)
+               ? item.completionEvidence
+                    .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
+                    .filter(Boolean)
+                    .slice(0, 40)
+               : [],
+            order: typeof item.order === "number" && Number.isFinite(item.order) ? Math.max(1, Math.floor(item.order)) : index + 1,
+            createdAt: isValidProjectTimestamp(item.createdAt) ? Number(item.createdAt) : now,
+            updatedAt: isValidProjectTimestamp(item.updatedAt) ? Number(item.updatedAt) : now,
+         } satisfies ProjectMilestone;
+      })
+      .filter((item) => item.title)
+      .sort((left, right) => left.order - right.order)
+      .slice(0, 12)
+      .map((item, index) => ({ ...item, order: index + 1 }));
+
+   if (!milestones.length) {
+      return getDefaultProjectMilestones(project);
+   }
+
+   const activeExists = milestones.some((item) => item.status === "active");
+   if (!activeExists) {
+      const firstOpenIndex = milestones.findIndex((item) => item.status !== "complete" && item.status !== "archived");
+      if (firstOpenIndex >= 0) {
+         milestones[firstOpenIndex] = { ...milestones[firstOpenIndex], status: "active" };
+      }
+   }
+
+   return milestones;
+}
+
 function getDefaultProjectTracking(project: ProjectLibraryItem): ProjectTrackingMeta {
    return {
       status: inferProjectTrackingStatus(project),
       priority: "medium",
       nextStep: getProjectTypeInsight(project).nextMove,
+      milestones: getDefaultProjectMilestones(project),
       calendarTaskTitle: "",
       calendarTaskDate: "",
       calendarTaskTime: "",
@@ -1389,7 +1660,7 @@ function getNextStatus(status: ProjectTrackingStatus): ProjectTrackingStatus {
 
 function getTrackingGuidance(status: ProjectTrackingStatus) {
    if (status === "idea") {
-      return "Shape this in Canvas until the next step is obvious.";
+      return "Review the project guide and clarify the first progress checkpoint.";
    }
 
    if (status === "active") {
@@ -1406,7 +1677,7 @@ function getTrackingGuidance(status: ProjectTrackingStatus) {
 function getGeneratedProjectsLine(action: "saved" | "opened" | "tasked" | "scheduled" | "deleted" | "polished" | "added") {
    const actionMap = {
       saved: ["Saved to Projects", "Project saved", "Saved safely", "Saved in Projects", "Project saved for later"],
-      opened: ["Opened in Canvas", "Back in Canvas", "Project reopened", "Returned to Canvas", "Canvas is ready"],
+      opened: ["Project opened", "Back in Projects", "Project reopened", "Returned to the project", "Project is ready"],
       tasked: ["Task created", "Sent to Tasks", "Next action created", "Task ready", "Next step saved"],
       scheduled: ["Scheduled in Calendar", "Time added", "Added to Calendar", "Time scheduled", "Calendar updated"],
       deleted: ["Project deleted", "Project removed", "Removed from Projects", "Project cleared", "Project no longer appears here"],
@@ -1911,6 +2182,93 @@ function pruneDeletedProjectFromStorage(project: ProjectLibraryItem) {
    }
 }
 
+function getProjectTitleKey(value?: string) {
+   return sanitizeProjectTitle(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+}
+
+interface ActiveProjectSelectionRecord {
+   projectId: string;
+   title: string;
+   updatedAt: number;
+}
+
+function readActiveProjectSelection(): ActiveProjectSelectionRecord | null {
+   if (typeof window === "undefined") {
+      return null;
+   }
+
+   try {
+      const stored = localStorage.getItem(ACTIVE_PROJECT_SELECTION_STORAGE_KEY);
+      const parsed = stored ? JSON.parse(stored) : null;
+
+      if (!parsed || typeof parsed !== "object") {
+         return null;
+      }
+
+      const projectId = compactText(parsed.projectId);
+      const title = sanitizeProjectTitle(parsed.title);
+      const updatedAt = typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : 0;
+
+      if (!projectId && !title) {
+         return null;
+      }
+
+      return {
+         projectId,
+         title,
+         updatedAt,
+      };
+   } catch {
+      return null;
+   }
+}
+
+function writeActiveProjectSelection(project?: ProjectLibraryItem | null) {
+   if (typeof window === "undefined" || !project) {
+      return;
+   }
+
+   const record: ActiveProjectSelectionRecord = {
+      projectId: compactText(project.id),
+      title: sanitizeProjectTitle(project.title),
+      updatedAt: Date.now(),
+   };
+
+   localStorage.setItem(ACTIVE_PROJECT_SELECTION_STORAGE_KEY, JSON.stringify(record));
+
+   window.dispatchEvent(
+      new CustomEvent("allevin-active-project-selection-change", {
+         detail: record,
+      }),
+   );
+}
+
+function resolvePersistedProjectSelection(projects: ProjectLibraryItem[]): ProjectLibraryItem | null {
+   const selection = readActiveProjectSelection();
+
+   if (!projects.length) {
+      return null;
+   }
+
+   if (!selection) {
+      return projects[0] || null;
+   }
+
+   const idMatch = selection.projectId ? projects.find((project) => project.id === selection.projectId) : null;
+
+   if (idMatch) {
+      return idMatch;
+   }
+
+   const selectionTitleKey = getProjectTitleKey(selection.title);
+
+   return projects.find((project) => getProjectTitleKey(project.title) === selectionTitleKey) || projects[0] || null;
+}
+
 function readProjectLibrary() {
    if (typeof window === "undefined") {
       return [] as ProjectLibraryItem[];
@@ -2048,7 +2406,7 @@ function saveProjectDirectly(item: InternalOutputItem) {
       status: "active",
       priority: "medium",
       latestMovement: "Saved to Projects",
-      recommendedNextAction: sanitizeProjectNextStep("Continue this project in Canvas or turn the clearest next step into a task."),
+      recommendedNextAction: getStructuredProjectSection(body, ["Recommended Starting Point", "Recommended Move", "Starting Point"]) || sanitizeProjectNextStep(item.suggestedNextStep) || "Review the first unfinished progress checkpoint.",
    });
 
    upsertProjectLibraryNote({
@@ -2453,9 +2811,13 @@ export default function IntegrationAdapterLayer() {
 
    const [manualBody, setManualBody] = useState("");
 
-   const [manualBuilderOpen, setManualBuilderOpen] = useState(false);
+   const [manualDescription, setManualDescription] = useState("");
 
-   const [selectedProjectStructureTemplateId, setSelectedProjectStructureTemplateId] = useState<ProjectStructureTemplateId>("shape");
+   const [manualDraftGenerated, setManualDraftGenerated] = useState(false);
+
+   const [manualDraftGenerating, setManualDraftGenerating] = useState(false);
+
+   const [manualBuilderOpen, setManualBuilderOpen] = useState(false);
 
    const [notice, setNotice] = useState("");
 
@@ -2467,11 +2829,25 @@ export default function IntegrationAdapterLayer() {
 
    const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
-   const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([]);
-
    const [projectSuggestions, setProjectSuggestions] = useState<Record<string, string>>({});
 
    const [projectTrackingMap, setProjectTrackingMap] = useState<Record<string, ProjectTrackingMeta>>({});
+
+   const [calendarRevision, setCalendarRevision] = useState(0);
+
+   const [workingNotesDraft, setWorkingNotesDraft] = useState("");
+
+   const [newMilestoneTitle, setNewMilestoneTitle] = useState("");
+
+   const [editingMilestoneIds, setEditingMilestoneIds] = useState<string[]>([]);
+
+   const [milestoneEditDrafts, setMilestoneEditDrafts] = useState<Record<string, Partial<ProjectMilestone>>>({});
+
+   const [milestoneWorkingDrafts, setMilestoneWorkingDrafts] = useState<Record<string, string>>({});
+
+   const [selectedMilestoneWorkspaceId, setSelectedMilestoneWorkspaceId] = useState("");
+
+   const milestoneAutosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
    const [projectMaterials, setProjectMaterials] = useState<ProjectMaterial[]>([]);
 
@@ -2509,6 +2885,8 @@ export default function IntegrationAdapterLayer() {
 
    const [activeMaterialInterpretId, setActiveMaterialInterpretId] = useState<string | null>(null);
 
+   const [selectedProjectMaterialIds, setSelectedProjectMaterialIds] = useState<string[]>([]);
+
    function getShortPreview(value?: string, limit = 180) {
       const cleanValue = compactText(value);
 
@@ -2521,7 +2899,36 @@ export default function IntegrationAdapterLayer() {
 
    const activeProject = useMemo(() => projectLibrary.find((project) => project.id === selectedProjectId) || projectLibrary[0] || null, [projectLibrary, selectedProjectId]);
 
+   useEffect(() => {
+      if (!activeProject) {
+         return;
+      }
+
+      writeActiveProjectSelection(activeProject);
+   }, [activeProject?.id, activeProject?.title]);
+
    const activeProjectMaterials = useMemo(() => (activeProject ? projectMaterials.filter((material) => material.projectId === activeProject.id) : []), [activeProject, projectMaterials]);
+
+   useEffect(() => {
+      if (!activeProject) {
+         setSelectedProjectMaterialIds([]);
+         return;
+      }
+
+      const selectedMap: Record<string, string[]> = readProjectSelectedMaterialMap();
+      const validMaterialIds = new Set<string>(activeProjectMaterials.map((material: ProjectMaterial) => material.id));
+      const currentSelectedIds: string[] = Array.isArray(selectedMap[activeProject.id]) ? selectedMap[activeProject.id] : [];
+      const selectedIds: string[] = currentSelectedIds.filter((id: string) => validMaterialIds.has(id));
+
+      setSelectedProjectMaterialIds(selectedIds);
+
+      if (selectedIds.length !== (selectedMap[activeProject.id] || []).length) {
+         saveProjectSelectedMaterialMap({
+            ...selectedMap,
+            [activeProject.id]: selectedIds,
+         });
+      }
+   }, [activeProject?.id, activeProjectMaterials.map((material) => material.id).join("|")]);
 
    const visibleProjectMaterials = useMemo(() => {
       if (materialTypeFilter === "All") {
@@ -2543,9 +2950,24 @@ export default function IntegrationAdapterLayer() {
 
    const activeProjectTracking = activeProject ? getProjectTracking(activeProject) : null;
 
-   const activeProjectScheduledCount = activeProjectTracking?.calendarTaskDate && activeProjectTracking?.calendarTaskTime ? 1 : 0;
+   const activeProjectCalendarSession = useMemo(() => {
+      void calendarRevision;
 
-   const activeProjectScheduledTaskLabel = activeProjectTracking?.calendarTaskTitle ? sanitizeProjectTitle(activeProjectTracking.calendarTaskTitle) : "No scheduled task yet";
+      return activeProject ? getNextCalendarSessionForProject(activeProject) : null;
+   }, [activeProject, calendarRevision]);
+
+   const activeProjectSessionLabel = activeProjectCalendarSession
+      ? getProjectSessionDateLabel(activeProjectCalendarSession.startTime, activeProjectCalendarSession.allDay)
+      : activeProjectTracking?.calendarTaskDate && activeProjectTracking?.calendarTaskTime
+        ? getProjectSessionDateLabel(new Date(`${activeProjectTracking.calendarTaskDate}T${activeProjectTracking.calendarTaskTime}`).getTime())
+        : "";
+
+   const activeProjectScheduledTaskLabel = sanitizeProjectTitle(activeProjectCalendarSession?.title || activeProjectTracking?.calendarTaskTitle || "");
+
+   useEffect(() => {
+      setWorkingNotesDraft(activeProject ? buildProjectWorkspaceBody(activeProject) : "");
+      setNewMilestoneTitle("");
+   }, [activeProject?.id, activeProject?.updatedAt]);
 
    const materialGuidance = getMaterialTypeGuidance(materialType);
 
@@ -2749,6 +3171,75 @@ export default function IntegrationAdapterLayer() {
       );
    }
 
+   function getActiveProjectMilestone(tracking?: ProjectTrackingMeta | null) {
+      return tracking?.milestones.find((milestone) => milestone.status === "active") || tracking?.milestones.find((milestone) => milestone.status !== "complete" && milestone.status !== "archived") || null;
+   }
+
+   function getCompletedProjectMilestoneTitles(tracking?: ProjectTrackingMeta | null) {
+      return (tracking?.milestones || []).filter((milestone) => milestone.status === "complete" || milestone.completed).map((milestone) => milestone.title);
+   }
+
+   function getMaterialCheckpointNextStep(material: ProjectMaterial, tracking?: ProjectTrackingMeta | null, modelNextStep?: string) {
+      const activeMilestone = getActiveProjectMilestone(tracking);
+      const cleanModelNextStep = sanitizeProjectNextStep(modelNextStep);
+      const materialText = compactText([material.title, material.notes, material.summary, material.documentText, material.interpretationSummary, material.interpretationUsefulContext].join(" ")).toLowerCase();
+
+      if (!activeMilestone) {
+         return cleanModelNextStep || "Use this material to confirm whether the project is ready for its final review.";
+      }
+
+      const activeTitle = sanitizeProjectTitle(activeMilestone.title);
+      const activeLower = activeTitle.toLowerCase();
+
+      if (/(?:relate|relationship|product roles?|ecosystem)/i.test(activeLower) && ["allevin", "compass", "frontoffice"].every((name) => materialText.includes(name))) {
+         return "Use this brief to write one concise sentence for Kin and one distinct sentence for ALLEVIN, Compass, and FrontOffice. Then resolve whether ALLEVIN should lead the feature hierarchy before moving to page structure.";
+      }
+
+      const activeWords = activeLower.split(/[^a-z0-9]+/).filter((word) => word.length >= 5);
+
+      const modelSupportsActiveMilestone = cleanModelNextStep && activeWords.some((word) => cleanModelNextStep.toLowerCase().includes(word));
+
+      if (modelSupportsActiveMilestone) {
+         return cleanModelNextStep;
+      }
+
+      return `Use this material to complete the current checkpoint: ${activeTitle}. Keep the interpretation tied to that checkpoint before moving to later work.`;
+   }
+
+   function toggleMaterialProjectReference(project: ProjectLibraryItem, material: ProjectMaterial) {
+      const selectedMap = readProjectSelectedMaterialMap();
+      const currentIds = selectedMap[project.id] || [];
+      const isSelected = currentIds.includes(material.id);
+      const nextIds = isSelected ? currentIds.filter((id: string) => id !== material.id) : [...currentIds, material.id];
+
+      saveProjectSelectedMaterialMap({
+         ...selectedMap,
+         [project.id]: nextIds,
+      });
+
+      setSelectedProjectMaterialIds(nextIds);
+
+      window.dispatchEvent(
+         new CustomEvent("allevin-project-material-selection-update", {
+            detail: {
+               projectId: project.id,
+               projectTitle: project.title,
+               materialId: material.id,
+               materialTitle: material.title,
+               selected: !isSelected,
+               selectedMaterialIds: nextIds,
+               updatedAt: getNow(),
+            },
+         }),
+      );
+
+      if (!isSelected) {
+         queueMaterialForAIDock(project, material);
+      }
+
+      showNotice(isSelected ? "Reference removed from project" : "Material referenced in project");
+   }
+
    async function interpretProjectMaterial(project: ProjectLibraryItem, material: ProjectMaterial) {
       try {
          setActiveMaterialInterpretId(material.id);
@@ -2761,8 +3252,25 @@ export default function IntegrationAdapterLayer() {
             usefulContext: `Project: ${project.title}`,
             nextStep: "Explain how this material can help the active project.",
             rawContent: getMaterialInterpretationSourceText(material),
-            userInstruction:
-               "Interpret this material for the current project. Make it useful to the user, natural, and specific. Explain what matters, how it helps, and one clear next move. Do not sound robotic. Do not pretend to read unavailable content.",
+            userInstruction: `Interpret this material as a senior project lead for the current project.
+
+The first unfinished checkpoint is: ${getActiveProjectMilestone(activeProjectTracking)?.title || activeProjectTracking?.nextStep || "Review the project material"}.
+
+Completed checkpoints:
+${
+   getCompletedProjectMilestoneTitles(activeProjectTracking).length
+      ? getCompletedProjectMilestoneTitles(activeProjectTracking)
+           .map((title) => `- ${title}`)
+           .join("\n")
+      : "- None yet"
+}
+
+Explain:
+1. What the material adds that was not already clear.
+2. Which current decision, risk, or checkpoint it affects.
+3. What the user should do now.
+
+Do not recommend returning to a completed checkpoint. Do not give a generic summary. Keep the next move tied to the first unfinished checkpoint. Do not pretend to read unavailable content.`,
             projectStage: "project-material",
             currentLocation: "Projects",
             priority: activeProjectTracking?.priority || "medium",
@@ -2782,7 +3290,7 @@ export default function IntegrationAdapterLayer() {
                imageDataUrl: material.imageDataUrl,
             },
             contextPacket: {
-               version: "MK VI",
+               version: "MK VIII",
                currentProject: {
                   title: project.title,
                   type: getProjectTypeInsight(project).type,
@@ -2790,12 +3298,17 @@ export default function IntegrationAdapterLayer() {
                   status: activeProjectTracking ? getProjectStatusLabel(activeProjectTracking.status) : "active",
                   priority: activeProjectTracking?.priority || "medium",
                   body: buildProjectWorkspaceBody(project),
-                  latestProjectNote: project.latestSummary,
-                  recommendedNextAction: activeProjectTracking?.nextStep || getProjectTypeInsight(project).nextMove,
+                  currentState: getActiveProjectMilestone(activeProjectTracking)?.title ? `Current checkpoint: ${getActiveProjectMilestone(activeProjectTracking)?.title}` : activeProjectTracking?.nextStep || "",
+                  latestProjectNote: [project.latestSummary, getCompletedProjectMilestoneTitles(activeProjectTracking).length ? `Completed checkpoints: ${getCompletedProjectMilestoneTitles(activeProjectTracking).join("; ")}` : ""]
+                     .filter(Boolean)
+                     .join("\n"),
+                  recommendedNextAction: getActiveProjectMilestone(activeProjectTracking)?.title || activeProjectTracking?.nextStep || getProjectTypeInsight(project).nextMove,
+                  buildOrder: (activeProjectTracking?.milestones || []).map((milestone) => milestone.title),
+                  completionCriteria: getCompletedProjectMilestoneTitles(activeProjectTracking),
                },
                projectMaterials: {
                   count: activeProjectMaterials.length,
-                  selectedTitles: [material.title],
+                  selectedTitles: Array.from(new Set([...activeProjectMaterials.filter((item) => selectedProjectMaterialIds.includes(item.id)).map((item) => item.title), material.title])),
                   titles: activeProjectMaterials.map((item) => item.title),
                   summaries: activeProjectMaterials.map((item) => item.summary || item.notes),
                   usefulSignals: [material.notes, material.summary, material.documentFileName, material.imageFileName].filter(Boolean) as string[],
@@ -2808,12 +3321,22 @@ export default function IntegrationAdapterLayer() {
             },
          });
 
+         const activeMilestone = getActiveProjectMilestone(activeProjectTracking);
+         const completedMilestones = getCompletedProjectMilestoneTitles(activeProjectTracking);
+         const modelSummary = sanitizeMaterialInterpretation(response.focus || response.summary);
+         const modelUsefulContext = sanitizeMaterialInterpretation(response.usefulContext);
+         const checkpointNextStep = getMaterialCheckpointNextStep(material, activeProjectTracking, response.nextStep);
+
          const interpretedMaterial: ProjectMaterial = {
             ...material,
             summary: sanitizeProjectSummary(response.summary || response.focus || material.summary),
-            interpretationSummary: sanitizeMaterialInterpretation(response.focus || response.summary),
-            interpretationUsefulContext: sanitizeMaterialInterpretation(response.usefulContext),
-            interpretationNextStep: sanitizeProjectNextStep(response.nextStep),
+            interpretationSummary: sanitizeMaterialInterpretation(
+               activeMilestone ? `${modelSummary || "This material adds useful project context."} It should be applied to the current checkpoint: ${activeMilestone.title}.` : modelSummary || response.summary,
+            ),
+            interpretationUsefulContext: sanitizeMaterialInterpretation(
+               [modelUsefulContext, activeMilestone ? `Current checkpoint: ${activeMilestone.title}.` : "", completedMilestones.length ? `Already completed: ${completedMilestones.join("; ")}.` : ""].filter(Boolean).join(" "),
+            ),
+            interpretationNextStep: sanitizeProjectNextStep(checkpointNextStep),
             interpretedAt: getNow(),
             updatedAt: getNow(),
          };
@@ -2827,6 +3350,33 @@ export default function IntegrationAdapterLayer() {
          }
 
          setProjectMaterials(nextMaterials);
+
+         const selectedMap = readProjectSelectedMaterialMap();
+         const currentSelectedIds = selectedMap[project.id] || [];
+
+         if (!currentSelectedIds.includes(material.id)) {
+            const nextSelectedIds = [...currentSelectedIds, material.id];
+
+            saveProjectSelectedMaterialMap({
+               ...selectedMap,
+               [project.id]: nextSelectedIds,
+            });
+
+            setSelectedProjectMaterialIds(nextSelectedIds);
+         }
+
+         window.dispatchEvent(
+            new CustomEvent("allevin-project-material-selection-update", {
+               detail: {
+                  projectId: project.id,
+                  projectTitle: project.title,
+                  materialId: material.id,
+                  materialTitle: material.title,
+                  selected: true,
+                  updatedAt: getNow(),
+               },
+            }),
+         );
 
          setExpandedMaterialIds((current) => (current.includes(material.id) ? current : [...current, material.id]));
 
@@ -2879,6 +3429,7 @@ export default function IntegrationAdapterLayer() {
       return {
          ...fallbackTracking,
          ...storedTracking,
+         milestones: sanitizeProjectMilestones(storedTracking?.milestones, project),
          calendarTaskTitle: storedTracking?.calendarTaskTitle || "",
          calendarTaskDate: storedTracking?.calendarTaskDate || "",
          calendarTaskTime: storedTracking?.calendarTaskTime || "",
@@ -2886,13 +3437,14 @@ export default function IntegrationAdapterLayer() {
       };
    }
 
-   function updateProjectTracking(project: ProjectLibraryItem, updates: Partial<ProjectTrackingMeta>) {
+   function updateProjectTracking(project: ProjectLibraryItem, updates: Partial<ProjectTrackingMeta>, options: { quiet?: boolean } = {}) {
       const currentTracking = getProjectTracking(project);
 
       const nextTracking: ProjectTrackingMeta = {
          ...currentTracking,
          ...updates,
          nextStep: sanitizeProjectNextStep(updates.nextStep ?? currentTracking.nextStep),
+         milestones: sanitizeProjectMilestones(updates.milestones ?? currentTracking.milestones, project),
          calendarTaskTitle: sanitizeLiveProjectTitle(updates.calendarTaskTitle ?? currentTracking.calendarTaskTitle),
          calendarTaskDate: sanitizeProjectPlainText(updates.calendarTaskDate ?? currentTracking.calendarTaskDate, 40),
          calendarTaskTime: sanitizeProjectPlainText(updates.calendarTaskTime ?? currentTracking.calendarTaskTime, 40),
@@ -2924,11 +3476,370 @@ export default function IntegrationAdapterLayer() {
          priority: nextTracking.priority,
          latestMovement: `Projects → ${getProjectStatusLabel(nextTracking.status)}`,
          recommendedNextAction: nextTracking.nextStep || getTrackingGuidance(nextTracking.status),
+         projectMetadata: {
+            roadmap: nextTracking.milestones.map((milestone) => ({
+               id: milestone.id,
+               order: milestone.order,
+               title: milestone.title,
+               status: milestone.status === "complete" ? "completed" : milestone.status === "needs-review" ? "ready-for-review" : milestone.status === "active" ? "in-progress" : milestone.status === "archived" ? "archived" : "not-started",
+               goal: milestone.goal,
+               whyItMatters: milestone.whyItMatters,
+               startingPrompt: milestone.startingPrompt,
+               workingContent: milestone.workingContent,
+               decisions: milestone.decisions,
+               openQuestions: milestone.openQuestions,
+               dependencies: [],
+               completionCriteria: milestone.completionEvidence,
+               createdAt: milestone.createdAt,
+               updatedAt: milestone.updatedAt,
+            })),
+         },
+         roadmap: nextTracking.milestones.map((milestone) => ({
+            id: milestone.id,
+            order: milestone.order,
+            title: milestone.title,
+            status: milestone.status === "complete" ? "completed" : milestone.status === "needs-review" ? "ready-for-review" : milestone.status === "active" ? "in-progress" : milestone.status === "archived" ? "archived" : "not-started",
+            goal: milestone.goal,
+            whyItMatters: milestone.whyItMatters,
+            startingPrompt: milestone.startingPrompt,
+            workingContent: milestone.workingContent,
+            decisions: milestone.decisions,
+            openQuestions: milestone.openQuestions,
+            dependencies: [],
+            completionCriteria: milestone.completionEvidence,
+            createdAt: milestone.createdAt,
+            updatedAt: milestone.updatedAt,
+         })),
       });
 
       window.dispatchEvent(new CustomEvent("allevin-project-memory-update"));
 
-      showNotice("Project updated");
+      if (!options.quiet) showNotice("Project updated");
+   }
+
+   function saveWorkingNotes(project: ProjectLibraryItem) {
+      const body = sanitizeProjectBody(workingNotesDraft);
+
+      if (!body) {
+         showNotice("Add a note before saving");
+
+         return;
+      }
+
+      const summary = sanitizeProjectSummary(getSummaryFromBody(body) || body);
+      const noteId = `${project.id}-working-notes`;
+
+      upsertProjectLibraryNote({
+         title: project.title,
+         body,
+         summary,
+         workflowId: project.workflowId,
+         originBoardItemId: project.originBoardItemId,
+         noteId,
+      });
+
+      upsertProjectMemory({
+         title: project.title,
+         body,
+         sourceTitle: project.title,
+         sourceContent: body,
+         workingSummary: summary,
+         workflowId: project.workflowId,
+         originBoardItemId: project.originBoardItemId,
+         source: "notes",
+         destination: "integrations",
+         stage: getProjectMemoryStageFromTrackingStatus(getProjectTracking(project).status),
+         status: getProjectMemoryStatusFromTrackingStatus(getProjectTracking(project).status),
+         priority: getProjectTracking(project).priority,
+         latestMovement: "Updated in Projects",
+         recommendedNextAction: getProjectTracking(project).nextStep || getProjectTypeInsight(project).nextMove,
+      });
+
+      setProjectLibrary(readProjectLibrary());
+
+      window.dispatchEvent(new CustomEvent("allevin-project-memory-update"));
+      window.dispatchEvent(new CustomEvent("allevin-project-library-update"));
+
+      showNotice("Working notes saved");
+   }
+
+   function normalizeMilestoneStatuses(milestones: ProjectMilestone[]) {
+      const ordered = [...milestones]
+         .sort((left, right) => left.order - right.order)
+         .map((item, index) => ({
+            ...item,
+            order: index + 1,
+         }));
+
+      const explicitActive = ordered.find((item) => item.status === "active");
+      const activeId = explicitActive?.id || ordered.find((item) => item.status !== "complete" && item.status !== "archived" && item.status !== "needs-review")?.id;
+
+      return ordered.map((item) => {
+         const status: ProjectMilestoneStatus = item.status === "complete" || item.status === "archived" || item.status === "needs-review" ? item.status : item.id === activeId ? "active" : "waiting";
+
+         return {
+            ...item,
+            status,
+            completed: status === "complete",
+         };
+      });
+   }
+
+   function toggleProjectMilestone(project: ProjectLibraryItem, milestoneId: string) {
+      const tracking = getProjectTracking(project);
+      const now = getNow();
+      const targetMilestone = tracking.milestones.find((milestone) => milestone.id === milestoneId);
+
+      if (!targetMilestone) {
+         return;
+      }
+
+      const reopening = targetMilestone.status === "complete";
+
+      const milestones = normalizeMilestoneStatuses(
+         tracking.milestones.map((milestone) => {
+            if (milestone.id === milestoneId) {
+               return {
+                  ...milestone,
+                  status: reopening ? ("active" as const) : ("complete" as const),
+                  completed: !reopening,
+                  completedAt: reopening ? undefined : now,
+                  updatedAt: now,
+               };
+            }
+
+            // Reopening an earlier milestone is an intentional regression.
+            // It becomes the current checkpoint and the previously active
+            // milestone returns to waiting without losing any saved work.
+            if (reopening && milestone.status === "active") {
+               return {
+                  ...milestone,
+                  status: "waiting" as const,
+                  completed: false,
+                  updatedAt: now,
+               };
+            }
+
+            return milestone;
+         }),
+      );
+
+      const nextOpenMilestone = milestones.find((milestone) => milestone.status === "active");
+      const visibleMilestones = milestones.filter((milestone) => milestone.status !== "archived");
+      const allComplete = visibleMilestones.length > 0 && visibleMilestones.every((milestone) => milestone.status === "complete");
+
+      updateProjectTracking(project, {
+         milestones,
+         status: allComplete ? "done" : tracking.status === "idea" || tracking.status === "done" ? "active" : tracking.status,
+         nextStep: nextOpenMilestone?.title || (allComplete ? "Review the finished project and close any remaining gaps." : tracking.nextStep),
+      });
+
+      if (reopening) {
+         setSelectedMilestoneWorkspaceId(milestoneId);
+      } else if (selectedMilestoneWorkspaceId === milestoneId && nextOpenMilestone?.id) {
+         setSelectedMilestoneWorkspaceId(nextOpenMilestone.id);
+      }
+
+      window.dispatchEvent(
+         new CustomEvent("allevin-project-progress-update", {
+            detail: {
+               projectId: project.id,
+               projectTitle: project.title,
+               milestones,
+               currentMilestone: nextOpenMilestone?.title || (allComplete ? "Project complete" : ""),
+               activeMilestoneId: nextOpenMilestone?.id,
+               reopenedMilestoneId: reopening ? milestoneId : undefined,
+               createdAt: now,
+            },
+         }),
+      );
+   }
+
+   function beginEditingMilestone(milestone: ProjectMilestone) {
+      setEditingMilestoneIds((current) => (current.includes(milestone.id) ? current : [...current, milestone.id]));
+      setMilestoneEditDrafts((current) => ({ ...current, [milestone.id]: { ...milestone } }));
+   }
+
+   function cancelEditingMilestone(milestoneId: string) {
+      setEditingMilestoneIds((current) => current.filter((id) => id !== milestoneId));
+      setMilestoneEditDrafts((current) => {
+         const next = { ...current };
+         delete next[milestoneId];
+         return next;
+      });
+   }
+
+   function updateMilestoneEditDraft(milestoneId: string, updates: Partial<ProjectMilestone>) {
+      setMilestoneEditDrafts((current) => ({
+         ...current,
+         [milestoneId]: {
+            ...current[milestoneId],
+            ...updates,
+         },
+      }));
+   }
+
+   function saveMilestoneStructuralChanges(project: ProjectLibraryItem, milestoneId: string) {
+      const tracking = getProjectTracking(project);
+      const draft = milestoneEditDrafts[milestoneId];
+
+      if (!draft) return;
+
+      const milestones = normalizeMilestoneStatuses(
+         tracking.milestones.map((milestone) =>
+            milestone.id === milestoneId
+               ? {
+                    ...milestone,
+                    title: sanitizeProjectTitle(draft.title) || milestone.title,
+                    goal: sanitizeProjectSummary(draft.goal) || milestone.goal,
+                    whyItMatters: sanitizeProjectSummary(draft.whyItMatters),
+                    startingPrompt: sanitizeProjectSummary(draft.startingPrompt),
+                    decisions: Array.isArray(draft.decisions)
+                       ? draft.decisions
+                            .map((item) => sanitizeProjectSummary(item))
+                            .filter(Boolean)
+                            .slice(0, 40)
+                       : milestone.decisions,
+                    openQuestions: Array.isArray(draft.openQuestions)
+                       ? draft.openQuestions
+                            .map((item) => sanitizeProjectSummary(item))
+                            .filter(Boolean)
+                            .slice(0, 40)
+                       : milestone.openQuestions,
+                    completionEvidence: Array.isArray(draft.completionEvidence)
+                       ? draft.completionEvidence
+                            .map((item) => sanitizeProjectSummary(item))
+                            .filter(Boolean)
+                            .slice(0, 40)
+                       : milestone.completionEvidence,
+                    updatedAt: getNow(),
+                 }
+               : milestone,
+         ),
+      );
+
+      const activeMilestone = milestones.find((item) => item.status === "active");
+
+      updateProjectTracking(project, {
+         milestones,
+         nextStep: activeMilestone?.title || tracking.nextStep,
+      });
+
+      cancelEditingMilestone(milestoneId);
+      showNotice("Milestone saved");
+   }
+
+   function scheduleMilestoneWorkingContentSave(project: ProjectLibraryItem, milestone: ProjectMilestone, value: string) {
+      const safeValue = sanitizeLiveProjectBody(value);
+
+      setMilestoneWorkingDrafts((current) => ({ ...current, [milestone.id]: safeValue }));
+
+      const existingTimer = milestoneAutosaveTimers.current[milestone.id];
+      if (existingTimer) clearTimeout(existingTimer);
+
+      milestoneAutosaveTimers.current[milestone.id] = setTimeout(() => {
+         const tracking = getProjectTracking(project);
+         const milestones = tracking.milestones.map((item) =>
+            item.id === milestone.id
+               ? {
+                    ...item,
+                    workingContent: sanitizeProjectBody(safeValue),
+                    updatedAt: getNow(),
+                 }
+               : item,
+         );
+
+         updateProjectTracking(project, { milestones }, { quiet: true });
+         setMilestoneWorkingDrafts((current) => {
+            const next = { ...current };
+            delete next[milestone.id];
+            return next;
+         });
+
+         window.dispatchEvent(
+            new CustomEvent("allevin-project-milestone-workspace-update", {
+               detail: {
+                  projectId: project.id,
+                  projectTitle: project.title,
+                  milestoneId: milestone.id,
+                  milestoneTitle: milestone.title,
+                  updatedAt: getNow(),
+               },
+            }),
+         );
+      }, 850);
+   }
+
+   function addProjectMilestone(project: ProjectLibraryItem) {
+      const title = sanitizeProjectTitle(newMilestoneTitle);
+
+      if (!title) return;
+
+      const tracking = getProjectTracking(project);
+
+      if (tracking.milestones.length >= 12) {
+         showNotice("Keep progress to twelve milestones or fewer");
+         return;
+      }
+
+      const now = getNow();
+      const milestones = normalizeMilestoneStatuses([
+         ...tracking.milestones,
+         {
+            id: createProjectMilestoneId(project.id, title, tracking.milestones.length),
+            title,
+            status: "waiting" as const,
+            completed: false,
+            goal: getMilestoneDefaultGoal(title),
+            whyItMatters: getMilestoneDefaultWhyItMatters(title, tracking.milestones.length),
+            startingPrompt: getMilestoneDefaultStartingPrompt(title),
+            workingContent: "",
+            decisions: [],
+            openQuestions: [],
+            completionEvidence: [],
+            order: tracking.milestones.length + 1,
+            createdAt: now,
+            updatedAt: now,
+         },
+      ]);
+
+      updateProjectTracking(project, {
+         milestones,
+         nextStep: milestones.find((milestone) => milestone.status === "active")?.title || title,
+      });
+
+      setNewMilestoneTitle("");
+   }
+
+   function removeProjectMilestone(project: ProjectLibraryItem, milestoneId: string) {
+      const tracking = getProjectTracking(project);
+      const target = tracking.milestones.find((milestone) => milestone.id === milestoneId);
+
+      if (!target) return;
+
+      const milestones = milestoneHasSavedWork(target)
+         ? normalizeMilestoneStatuses(
+              tracking.milestones.map((milestone) =>
+                 milestone.id === milestoneId
+                    ? {
+                         ...milestone,
+                         status: "archived" as const,
+                         completed: false,
+                         updatedAt: getNow(),
+                      }
+                    : milestone,
+              ),
+           )
+         : normalizeMilestoneStatuses(tracking.milestones.filter((milestone) => milestone.id !== milestoneId));
+
+      const nextOpenMilestone = milestones.find((milestone) => milestone.status === "active");
+
+      updateProjectTracking(project, {
+         milestones,
+         nextStep: nextOpenMilestone?.title || getProjectTypeInsight(project).nextMove,
+      });
+
+      showNotice(milestoneHasSavedWork(target) ? "Milestone archived with its saved work" : "Milestone removed");
    }
 
    function notifyAllevin(message: string, detail?: Record<string, unknown>) {
@@ -3024,7 +3935,15 @@ export default function IntegrationAdapterLayer() {
 
       setOutputs([]);
 
-      setProjectLibrary(readProjectLibrary());
+      const nextProjects = readProjectLibrary();
+      const persistedProject = resolvePersistedProjectSelection(nextProjects);
+
+      setProjectLibrary(nextProjects);
+      setSelectedProjectId(persistedProject?.id || nextProjects[0]?.id || null);
+
+      if (persistedProject) {
+         writeActiveProjectSelection(persistedProject);
+      }
 
       setProjectTrackingMap(getProjectTrackingMap());
 
@@ -3035,7 +3954,11 @@ export default function IntegrationAdapterLayer() {
 
    useEffect(() => {
       function refreshProjectLibrary() {
-         setProjectLibrary(readProjectLibrary());
+         const nextProjects = readProjectLibrary();
+         const persistedProject = resolvePersistedProjectSelection(nextProjects);
+
+         setProjectLibrary(nextProjects);
+         setSelectedProjectId((current) => nextProjects.find((project) => project.id === current)?.id || persistedProject?.id || nextProjects[0]?.id || null);
 
          setProjectTrackingMap(getProjectTrackingMap());
 
@@ -3045,6 +3968,14 @@ export default function IntegrationAdapterLayer() {
       window.addEventListener("allevin-project-library-update", refreshProjectLibrary);
 
       window.addEventListener("allevin-project-materials-update", refreshProjectLibrary);
+
+      function refreshCalendarSession() {
+         setCalendarRevision((current) => current + 1);
+      }
+
+      window.addEventListener("allevin-calendar-events-updated", refreshCalendarSession);
+
+      window.addEventListener("allevin-send-to-calendar", refreshCalendarSession);
 
       window.addEventListener("storage", refreshProjectLibrary);
 
@@ -3058,6 +3989,10 @@ export default function IntegrationAdapterLayer() {
          window.removeEventListener("allevin-project-library-update", refreshProjectLibrary);
 
          window.removeEventListener("allevin-project-materials-update", refreshProjectLibrary);
+
+         window.removeEventListener("allevin-calendar-events-updated", refreshCalendarSession);
+
+         window.removeEventListener("allevin-send-to-calendar", refreshCalendarSession);
 
          window.removeEventListener("storage", refreshProjectLibrary);
 
@@ -3129,55 +4064,94 @@ export default function IntegrationAdapterLayer() {
       };
    }, []);
 
-   function createManualOutput() {
+   async function createManualOutput() {
       const cleanTitle = sanitizeProjectTitle(manualTitle);
-
+      const cleanDescription = sanitizeProjectBody(manualDescription);
       const cleanBody = sanitizeProjectBody(manualBody);
 
-      if (!cleanTitle && !cleanBody) {
-         showNotice("Add a title or body");
+      if (!cleanTitle) {
+         showNotice("Add a project title");
+         return;
+      }
+
+      if (!manualDraftGenerated) {
+         if (!cleanDescription) {
+            showNotice("Describe what you are looking to do");
+            return;
+         }
+
+         try {
+            setManualDraftGenerating(true);
+            showNotice("ALLEVIN is shaping the project");
+
+            const response = await requestAllevinLLM({
+               mode: "project-guidance",
+               source: "projects",
+               title: cleanTitle,
+               focus: cleanDescription,
+               usefulContext: "Act as a senior project lead. Identify the first dependency-aware checkpoint, why it matters, and any important framing the user may have missed.",
+               nextStep: "Choose the first move that reduces downstream uncertainty or rework.",
+               rawContent: cleanDescription,
+               projectStage: "starting-point",
+               currentLocation: "ALLEVIN Projects",
+               priority: "medium",
+               maxWords: 500,
+               userInstruction:
+                  "Use the user's full description. Do not merely encourage them to define success. Give project-specific judgment about where to begin, what the later checkpoints should accomplish, and why the first checkpoint comes first. Do not invent completed work.",
+            });
+
+            const generatedBody = buildDetailedProjectDraft({
+               title: cleanTitle,
+               description: cleanDescription,
+               llmSummary: response.summary || response.focus,
+               llmUsefulContext: response.usefulContext,
+               llmNextStep: response.nextStep,
+            });
+
+            setManualBody(sanitizeLiveProjectBody(generatedBody));
+            setManualDraftGenerated(true);
+            showNotice("Project guide ready to review");
+         } catch {
+            const generatedBody = buildDetailedProjectDraft({
+               title: cleanTitle,
+               description: cleanDescription,
+            });
+
+            setManualBody(sanitizeLiveProjectBody(generatedBody));
+            setManualDraftGenerated(true);
+            showNotice("Project guide ready to review");
+         } finally {
+            setManualDraftGenerating(false);
+         }
 
          return;
       }
 
+      if (!cleanBody) {
+         showNotice("Review or add the Working Notes before saving");
+         return;
+      }
+
+      const startingPoint = getStructuredProjectSection(cleanBody, ["Recommended Starting Point", "Recommended Move", "Starting Point"]) || "Review the first unfinished progress checkpoint.";
+
       const output = buildInternalOutputFromPayload({
-         title: cleanTitle || "Manual ALLEVIN Output",
-
-         body: cleanBody || cleanTitle,
-
+         title: cleanTitle,
+         body: cleanBody,
          destination: "notes",
-
          objectType: "project-summary",
-
-         source: "manual",
+         source: "manual-generated",
+         recommendation: {
+            suggestedNextStep: startingPoint,
+         },
       });
 
       setManualTitle("");
-
+      setManualDescription("");
       setManualBody("");
+      setManualDraftGenerated(false);
+      setManualBuilderOpen(false);
 
       void saveOutputToNotes(output);
-   }
-
-   function applyProjectStructureTemplate(templateId: ProjectStructureTemplateId) {
-      const template = getProjectStructureTemplate(templateId);
-
-      const currentTitle = sanitizeProjectTitle(manualTitle);
-
-      const currentBody = sanitizeProjectBody(manualBody);
-
-      const structuredBody = currentBody
-         ? `${template.body}
-
-Existing Notes:
-${currentBody}`
-         : template.body;
-
-      setManualTitle(currentTitle || template.title);
-
-      setManualBody(sanitizeLiveProjectBody(structuredBody));
-
-      showNotice(`${template.label} structure added`);
    }
 
    async function polishOutput(item: InternalOutputItem) {
@@ -3257,7 +4231,53 @@ ${currentBody}`
 
          const cleanTitle = saveProjectDirectly(item);
 
-         // No confirmation queue in MK VI Projects.
+         if (item.source === "manual-generated") {
+            const nextLibrary = readProjectLibrary();
+            const savedProject = nextLibrary.find((project) => sanitizeProjectTitle(project.title).toLowerCase() === cleanTitle.toLowerCase());
+
+            if (savedProject) {
+               const milestoneTitles = getProjectMilestoneCandidates(savedProject);
+               const now = getNow();
+               const milestones = milestoneTitles.map((title, index) => ({
+                  id: createProjectMilestoneId(savedProject.id, title, index),
+                  title,
+                  status: index === 0 ? ("active" as const) : ("waiting" as const),
+                  completed: false,
+                  goal: getMilestoneDefaultGoal(title),
+                  whyItMatters: getMilestoneDefaultWhyItMatters(title, index),
+                  startingPrompt: getMilestoneDefaultStartingPrompt(title),
+                  workingContent: "",
+                  decisions: [],
+                  openQuestions: [],
+                  completionEvidence: [],
+                  order: index + 1,
+                  createdAt: now,
+                  updatedAt: now,
+               }));
+
+               const startingPoint = getStructuredProjectSection(item.body, ["Recommended Starting Point", "Recommended Move", "Starting Point"]) || milestones[0]?.title || "Review the project guide and confirm the first checkpoint.";
+
+               updateProjectTracking(savedProject, {
+                  status: "active",
+                  milestones,
+                  nextStep: startingPoint,
+               });
+
+               window.dispatchEvent(
+                  new CustomEvent("allevin-project-progress-update", {
+                     detail: {
+                        projectId: savedProject.id,
+                        projectTitle: savedProject.title,
+                        milestones,
+                        currentMilestone: milestones[0]?.title || startingPoint,
+                        createdAt: getNow(),
+                     },
+                  }),
+               );
+            }
+         }
+
+         // No confirmation queue in MK VIII Projects.
          // If the item came from an old queue, remove it safely.
          commitOutputs((current) => current.filter((output) => output.id !== item.id));
 
@@ -3588,10 +4608,10 @@ ${currentBody}`
 
       updateProjectTracking(project, {
          nextStep: taskTitle,
-         calendarTaskTitle: "",
-         calendarTaskDate: "",
-         calendarTaskTime: "",
-         calendarTaskDurationMinutes: 60,
+         calendarTaskTitle: taskTitle,
+         calendarTaskDate: tracking.calendarTaskDate,
+         calendarTaskTime: tracking.calendarTaskTime,
+         calendarTaskDurationMinutes: durationMinutes,
       });
 
       workspace.setActiveView("workspace");
@@ -3609,10 +4629,6 @@ ${currentBody}`
       );
 
       showNotice(getGeneratedProjectsLine("scheduled"));
-   }
-
-   function toggleProjectExpanded(id: string) {
-      setExpandedProjectIds((current) => (current.includes(id) ? current.filter((projectId) => projectId !== id) : [...current, id]));
    }
 
    function createProjectMaterial(project: ProjectLibraryItem) {
@@ -3731,6 +4747,10 @@ ${currentBody}`
 
       removeMaterialsFromCanvasSelection([materialId]);
 
+      removeMaterialsFromProjectSelection([materialId]);
+
+      setSelectedProjectMaterialIds((current: string[]) => current.filter((id: string) => id !== materialId));
+
       window.dispatchEvent(
          new CustomEvent("allevin-project-material-deleted", {
             detail: {
@@ -3743,64 +4763,6 @@ ${currentBody}`
       );
 
       showNotice("Material removed");
-   }
-
-   function sendMaterialToCanvas(project: ProjectLibraryItem, material: ProjectMaterial) {
-      const body = buildProjectWorkspaceBody(project);
-
-      window.dispatchEvent(
-         new CustomEvent("allevin-send-to-canvas", {
-            detail: {
-               title: sanitizeProjectTitle(project.title),
-               body: sanitizeProjectBody(body),
-               source: "project",
-               sourceTitle: sanitizeProjectTitle(project.title),
-               sourceContent: sanitizeProjectBody(body),
-               workingSummary: sanitizeProjectSummary(body),
-               cleanSourceContent: sanitizeProjectBody(body),
-               workflowId: project.workflowId,
-               originBoardItemId: project.originBoardItemId,
-               materialId: material.id,
-               projectId: project.id,
-               selectedMaterial: {
-                  id: material.id,
-                  title: material.title,
-                  type: material.type,
-                  source: material.source,
-                  summary: material.summary,
-                  notes: material.notes,
-                  imageDataUrl: material.imageDataUrl,
-                  imageFileName: material.imageFileName,
-                  imageMimeType: material.imageMimeType,
-                  documentDataUrl: material.documentDataUrl,
-                  documentFileName: material.documentFileName,
-                  documentMimeType: material.documentMimeType,
-                  documentText: material.documentText,
-                  interpretationSummary: material.interpretationSummary,
-                  interpretationUsefulContext: material.interpretationUsefulContext,
-                  interpretationNextStep: material.interpretationNextStep,
-                  interpretedAt: material.interpretedAt,
-               },
-               referenceMode: "selected-material",
-            },
-         }),
-      );
-
-      workspace.setActiveView("focus");
-
-      workspace.setSystemStatus("focused-work-active");
-
-      workspace.registerWorkspaceActivity("focused-work-active");
-
-      window.dispatchEvent(
-         new CustomEvent("allevin-open-product-module", {
-            detail: {
-               moduleId: "canvas",
-            },
-         }),
-      );
-
-      showNotice("Reference ready in Canvas");
    }
 
    function queueMaterialForAIDock(project: ProjectLibraryItem, material: ProjectMaterial) {
@@ -3827,7 +4789,7 @@ ${currentBody}`
          materialId: material.id,
       });
 
-      showNotice("Material context ready for AIDock");
+      showNotice("Material context ready for ALLEVIN");
    }
 
    function deleteProject(project: ProjectLibraryItem) {
@@ -3894,8 +4856,6 @@ ${currentBody}`
 
          return nextTracking;
       });
-
-      setExpandedProjectIds((current) => current.filter((projectId) => projectId !== project.id));
 
       setSelectedProjectId(nextProjects[0]?.id || null);
 
@@ -4006,58 +4966,84 @@ ${currentBody}`
                   className="mb-5 overflow-hidden lg:mb-6"
                >
                   <div className="studio-paper p-4 sm:p-6">
-                     <p className="text-lg font-semibold">Add Project</p>
+                     <p className="text-lg font-semibold">Start a Project</p>
 
-                     <div className="mt-4 border-y border-[var(--border-subtle)] py-4">
-                        <p className="text-sm font-medium">Structure starter</p>
+                     <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">
+                        Give ALLEVIN as much useful detail as you can about the project goal, the outcome you want, what you already know, important requirements, deadlines, constraints, and anything that may affect the work. ALLEVIN will turn that
+                        context into a detailed, editable project guide with Working Notes, progress checkpoints, open questions, and a senior project-lead recommendation for where to begin.
+                     </p>
 
-                        <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Choose a starting structure only when the project needs one.</p>
+                     <div className="mt-5">
+                        <label className="text-sm font-medium text-[var(--color-text-primary)]">Project title</label>
 
-                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
-                           <select
-                              value={selectedProjectStructureTemplateId}
-                              onChange={(event) => setSelectedProjectStructureTemplateId(event.target.value as ProjectStructureTemplateId)}
-                              className="rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-3 text-sm outline-none focus:border-[var(--color-primary)]"
-                           >
-                              {PROJECT_STRUCTURE_TEMPLATES.map((template) => (
-                                 <option key={template.id} value={template.id}>
-                                    {template.label}
-                                 </option>
-                              ))}
-                           </select>
-
-                           <button
-                              onClick={() => applyProjectStructureTemplate(selectedProjectStructureTemplateId)}
-                              className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-white px-5 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]"
-                           >
-                              <NotebookPen size={16} />
-                              Add structure
-                           </button>
-                        </div>
-
-                        <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">{getProjectStructureTemplate(selectedProjectStructureTemplateId).helper}</p>
-                     </div>
-
-                     <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
                         <input
                            value={manualTitle}
-                           onChange={(event) => setManualTitle(sanitizeLiveProjectTitle(event.target.value))}
-                           placeholder="Project title"
-                           className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm outline-none focus:border-[var(--color-primary)]"
+                           onChange={(event) => {
+                              setManualTitle(sanitizeLiveProjectTitle(event.target.value));
+                              if (manualDraftGenerated) setManualDraftGenerated(false);
+                           }}
+                           placeholder="e.g. Casino-Themed Retirement Party"
+                           className="mt-2 w-full rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm outline-none focus:border-[var(--color-primary)]"
                         />
-
-                        <button onClick={createManualOutput} className="flex items-center justify-center gap-2 rounded-2xl bg-[var(--color-primary)] px-5 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
-                           <Send size={16} />
-                           Add Project
-                        </button>
                      </div>
 
-                     <textarea
-                        value={manualBody}
-                        onChange={(event) => setManualBody(sanitizeLiveProjectBody(event.target.value))}
-                        placeholder="Write the project goal or first update..."
-                        className="mt-3 min-h-[120px] w-full resize-none rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
-                     />
+                     <div className="mt-4">
+                        <label className="text-sm font-medium text-[var(--color-text-primary)]">What are you looking to do?</label>
+
+                        <textarea
+                           value={manualDescription}
+                           onChange={(event) => {
+                              setManualDescription(sanitizeLiveProjectBody(event.target.value));
+                              if (manualDraftGenerated) setManualDraftGenerated(false);
+                           }}
+                           placeholder="Describe the goal, finished outcome, important context, requirements, dates, constraints, decisions already made, and anything else ALLEVIN should understand."
+                           className="mt-2 min-h-[140px] w-full resize-y rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                        />
+                     </div>
+
+                     {manualDraftGenerated && (
+                        <div className="mt-5 border-t border-[var(--border-subtle)] pt-5">
+                           <div className="flex flex-wrap items-end justify-between gap-3">
+                              <div>
+                                 <p className="text-sm font-semibold text-[var(--color-text-primary)]">Review the project guide</p>
+                                 <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Change anything that does not match your intent. These notes become the project’s starting understanding.</p>
+                              </div>
+
+                              <button type="button" onClick={() => setManualDraftGenerated(false)} className="rounded-full border border-[var(--border-subtle)] bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-bg)]">
+                                 Regenerate
+                              </button>
+                           </div>
+
+                           <textarea
+                              value={manualBody}
+                              onChange={(event) => setManualBody(sanitizeLiveProjectBody(event.target.value))}
+                              className="mt-3 min-h-[360px] w-full resize-y rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                           />
+                        </div>
+                     )}
+
+                     <div className="mt-5 flex flex-wrap justify-end gap-3">
+                        <button
+                           type="button"
+                           onClick={() => {
+                              setManualBuilderOpen(false);
+                              setManualDraftGenerated(false);
+                              setManualDraftGenerating(false);
+                           }}
+                           className="rounded-2xl border border-[var(--border-subtle)] bg-white px-5 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]"
+                        >
+                           Cancel
+                        </button>
+
+                        <button
+                           onClick={() => void createManualOutput()}
+                           disabled={manualDraftGenerating}
+                           className="flex items-center justify-center gap-2 rounded-2xl bg-[var(--color-primary)] px-5 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                           {manualDraftGenerating ? <RotateCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                           {manualDraftGenerating ? "Shaping project..." : manualDraftGenerated ? "Save Project" : "Generate Project Guide"}
+                        </button>
+                     </div>
                   </div>
                </motion.div>
             )}
@@ -4065,8 +5051,8 @@ ${currentBody}`
 
          <div className="mb-6 min-w-0">
             {projectLibrary.length > 0 ? (
-               <div className="grid grid-cols-1 gap-6 xl:grid-cols-12 xl:gap-7">
-                  <div className="xl:col-span-4">
+               <div className="space-y-6">
+                  <div>
                      <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                            <p className="text-sm font-medium">Saved Projects</p>
@@ -4078,8 +5064,38 @@ ${currentBody}`
                         </div>
                      </div>
 
-                     <div className="max-h-none divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] xl:max-h-[760px] xl:overflow-y-auto xl:pr-1">
-                        {projectLibrary.map((project, index) => {
+                     <div className="md:hidden">
+                        <label htmlFor="mobile-project-selector" className="sr-only">
+                           Select active project
+                        </label>
+
+                        <div className="relative rounded-2xl border border-[var(--border-subtle)] bg-white shadow-sm">
+                           <select
+                              id="mobile-project-selector"
+                              value={activeProject?.id || projectLibrary[0]?.id || ""}
+                              onChange={(event) => setSelectedProjectId(event.target.value)}
+                              className="w-full appearance-none rounded-2xl bg-transparent px-4 py-4 pr-12 text-sm font-semibold text-[var(--color-text-primary)] outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                           >
+                              {projectLibrary.map((project) => (
+                                 <option key={project.id} value={project.id}>
+                                    {project.title}
+                                 </option>
+                              ))}
+                           </select>
+
+                           <ChevronDown aria-hidden="true" size={18} className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[var(--color-primary)]" />
+                        </div>
+
+                        {activeProject && (
+                           <div className="mt-3 flex items-center justify-between gap-3 px-1 text-xs text-[var(--color-text-secondary)]">
+                              <span className="truncate">Updated {getReadableProjectDate(activeProject.updatedAt)}</span>
+                              <span className="shrink-0 font-semibold text-[var(--color-primary)]">Current</span>
+                           </div>
+                        )}
+                     </div>
+
+                     <div className="hidden grid-cols-1 gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
+                        {projectLibrary.map((project) => {
                            const selected = selectedProjectId ? selectedProjectId === project.id : projectLibrary[0]?.id === project.id;
 
                            return (
@@ -4092,19 +5108,17 @@ ${currentBody}`
                                     w-full
                                     overflow-hidden
                                     border-0
-                                    px-3
-                                    py-4
+                                    px-4
+                                    py-5
                                     text-left
                                     transition-colors
-                                    sm:px-4
-                                    sm:py-5
 
                                     ${selected ? "bg-[var(--color-surface-blue)]" : "bg-transparent hover:bg-[rgba(255,255,255,0.52)]"}
                                  `}
                               >
                                  {selected && <div className="absolute left-0 top-0 h-full w-0.5 bg-[var(--color-primary)]" />}
 
-                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                 <div className="flex items-start justify-between gap-3">
                                     <div className="min-w-0 flex-1">
                                        {selected && <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Current</p>}
 
@@ -4127,60 +5141,32 @@ ${currentBody}`
                      </div>
                   </div>
 
-                  <div className="xl:col-span-8">
+                  <div>
                      {(() => {
                         if (!activeProject) {
                            return null;
                         }
 
-                        const expanded = expandedProjectIds.includes(activeProject.id);
-
                         const projectTracking = getProjectTracking(activeProject);
-
-                        const projectDetailProfile = getProjectDetailProfile(activeProject);
-
-                        const projectDetailSections = getAdaptiveProjectDetailSections(activeProject);
-
-                        const visibleProjectDetailSections = expanded ? projectDetailSections : projectDetailSections.slice(0, 4);
-
-                        const hasMoreProjectDetail = projectDetailSections.length > 4 || compactText(activeProject.latestSummary).length > 700;
 
                         return (
                            <div className="studio-paper min-w-0 p-4 sm:p-6 xl:p-8">
-                              <div className="mb-5 flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-5 xl:flex-row xl:items-start xl:justify-between">
+                              <div className="mb-5 flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-4 sm:mb-6 sm:flex-row sm:items-start sm:justify-between sm:pb-5">
                                  <div className="min-w-0 flex-1">
                                     <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--color-text-secondary)]">
                                        <span className="font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Current Project</span>
 
-                                       <span>{projectDetailProfile.label}</span>
-
                                        <span>Updated {getReadableProjectDate(activeProject.updatedAt)}</span>
                                     </div>
 
-                                    <h3 data-editorial-title="true" className="break-words text-3xl leading-tight sm:text-4xl">
+                                    <h3 data-editorial-title="true" className="break-words text-2xl leading-tight sm:text-4xl">
                                        {activeProject.title}
                                     </h3>
-
-                                    <div className="mt-5 grid grid-cols-1 border-y border-[var(--border-subtle)] md:grid-cols-2">
-                                       {visibleProjectDetailSections.map((section) => (
-                                          <div key={`${activeProject.id}-${section.title}`} className="border-b border-[var(--border-subtle)] p-4 md:[&:nth-child(odd)]:border-r">
-                                             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">{section.title}</p>
-
-                                             <p className="mt-2 break-words text-sm leading-7 text-[var(--color-text-primary)]">{getProjectDetailPreview(section, expanded)}</p>
-                                          </div>
-                                       ))}
-                                    </div>
-
-                                    {hasMoreProjectDetail && (
-                                       <button onClick={() => toggleProjectExpanded(activeProject.id)} className="mt-3 rounded-xl bg-white px-3 py-2 text-sm font-medium text-[var(--color-primary)] transition-colors hover:bg-[var(--color-surface)]">
-                                          {expanded ? "Show less" : "Show full project notes"}
-                                       </button>
-                                    )}
                                  </div>
 
-                                 <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:w-[240px] xl:min-w-[240px] xl:shrink-0 xl:grid-cols-1">
-                                    <button onClick={() => continueProjectInCanvas(activeProject)} className="studio-button-primary w-full justify-center">
-                                       Continue in Canvas
+                                 <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[150px]">
+                                    <button onClick={() => saveWorkingNotes(activeProject)} className="studio-button-primary w-full justify-center">
+                                       Save Project
                                     </button>
 
                                     <button onClick={() => deleteProject(activeProject)} className="studio-button-secondary w-full justify-center text-[var(--color-text-secondary)]">
@@ -4189,91 +5175,382 @@ ${currentBody}`
                                  </div>
                               </div>
 
-                              <div className="mb-5 grid grid-cols-1 border-y border-[var(--border-subtle)] md:grid-cols-2 md:divide-x md:divide-[var(--border-subtle)]">
-                                 <div className="px-1 py-4 md:px-5">
-                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Schedule</p>
-                                    <p className="mt-2 text-xl font-semibold">{activeProjectScheduledCount}</p>
-                                    <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">{activeProjectScheduledTaskLabel}</p>
-                                 </div>
+                              <section className="mb-6 border-l-2 border-[var(--color-primary)] bg-[var(--color-bg-soft)] px-5 py-4 sm:px-6">
+                                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Current Focus</p>
 
-                                 <div className="px-1 py-4 md:px-5">
-                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Materials</p>
-                                    <p className="mt-2 text-xl font-semibold">{activeProjectMaterials.length}</p>
-                                    <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">Project references</p>
-                                 </div>
-                              </div>
+                                 <p className="mt-2 max-w-4xl text-base leading-7 text-[var(--color-text-primary)]">{projectTracking.nextStep || "Choose the next meaningful outcome."}</p>
+                              </section>
 
-                              <div className="mb-5 border-b border-[var(--border-subtle)] pb-5">
-                                 <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                              <section className="mb-6 border-y border-[var(--border-subtle)] py-6">
+                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                     <div>
-                                       <div className="flex items-center gap-2">
-                                          <CalendarDays size={18} />
+                                       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Working Notes</p>
 
-                                          <p className="font-medium">Schedule a task</p>
-                                       </div>
-
-                                       <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Add a work block that stays tied to this project.</p>
+                                       <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Keep updates, decisions, questions, and anything ALLEVIN should understand in one place.</p>
                                     </div>
 
-                                    <button
-                                       onClick={() => scheduleProjectTime(activeProject)}
-                                       className="w-full rounded-xl bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)] md:w-auto"
-                                    >
-                                       Add to Calendar
+                                    <button type="button" onClick={() => saveWorkingNotes(activeProject)} className="studio-button-secondary w-full justify-center sm:w-auto">
+                                       Save notes
                                     </button>
                                  </div>
 
-                                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_150px_130px_140px]">
-                                    <input
-                                       value={projectTracking.calendarTaskTitle}
-                                       onChange={(event) =>
-                                          updateProjectTracking(activeProject, {
-                                             calendarTaskTitle: event.target.value,
-                                          })
-                                       }
-                                       placeholder="What task should this project schedule?"
-                                       className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                    />
+                                 <textarea
+                                    value={workingNotesDraft}
+                                    onChange={(event) => setWorkingNotesDraft(sanitizeLiveProjectBody(event.target.value))}
+                                    rows={16}
+                                    maxLength={PROJECT_SANITIZE_LIMITS.body}
+                                    placeholder="Add project notes, decisions, updates, questions, or anything ALLEVIN should understand..."
+                                    className="mt-4 min-h-[360px] w-full resize-y rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-4 text-sm leading-7 text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
+                                 />
+                              </section>
 
-                                    <input
-                                       type="date"
-                                       value={projectTracking.calendarTaskDate}
-                                       onChange={(event) =>
-                                          updateProjectTracking(activeProject, {
-                                             calendarTaskDate: event.target.value,
-                                          })
-                                       }
-                                       className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                    />
+                              <div className="mb-6 space-y-4">
+                                 <section className="rounded-2xl border border-[var(--border-subtle)] p-4 sm:p-5">
+                                    <div className="flex items-center justify-between gap-3">
+                                       <div>
+                                          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Progress</p>
+                                       </div>
 
-                                    <input
-                                       type="time"
-                                       value={projectTracking.calendarTaskTime}
-                                       onChange={(event) =>
-                                          updateProjectTracking(activeProject, {
-                                             calendarTaskTime: event.target.value,
-                                          })
-                                       }
-                                       className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                    />
+                                       <span className="text-xs font-medium text-[var(--color-text-secondary)]">
+                                          {projectTracking.milestones.filter((milestone) => milestone.status === "complete").length}/{projectTracking.milestones.length}
+                                       </span>
+                                    </div>
 
-                                    <select
-                                       value={projectTracking.calendarTaskDurationMinutes}
-                                       onChange={(event) =>
-                                          updateProjectTracking(activeProject, {
-                                             calendarTaskDurationMinutes: Number(event.target.value),
-                                          })
+                                    <div className="mt-3 space-y-2">
+                                       {projectTracking.milestones.map((milestone) => (
+                                          <div key={milestone.id} className="group flex items-start gap-3 rounded-xl px-2 py-2 hover:bg-[var(--color-bg)]">
+                                             <button
+                                                type="button"
+                                                onClick={() => toggleProjectMilestone(activeProject, milestone.id)}
+                                                className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-white text-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
+                                                aria-label={`${milestone.status === "complete" ? "Mark incomplete" : "Mark complete"}: ${milestone.title}`}
+                                             >
+                                                {milestone.status === "complete" ? <CheckCircle2 size={16} /> : <span className="h-2 w-2 rounded-full bg-[var(--border-subtle)]" />}
+                                             </button>
+
+                                             <p
+                                                className={`min-w-0 flex-1 break-words text-sm leading-6 ${milestone.status === "complete" ? "text-[var(--color-text-secondary)] line-through" : milestone.status === "archived" ? "text-[var(--color-text-tertiary)]" : "text-[var(--color-text-primary)]"}`}
+                                             >
+                                                {milestone.title}
+                                             </p>
+
+                                             <button
+                                                type="button"
+                                                onClick={() => removeProjectMilestone(activeProject, milestone.id)}
+                                                className="px-1 text-xs text-[var(--color-text-tertiary)] opacity-0 transition-opacity hover:text-[var(--color-text-primary)] group-hover:opacity-100 focus:opacity-100"
+                                                aria-label={`Remove ${milestone.title}`}
+                                             >
+                                                ×
+                                             </button>
+                                          </div>
+                                       ))}
+                                    </div>
+
+                                    <div className="mt-3 flex gap-2">
+                                       <input
+                                          value={newMilestoneTitle}
+                                          onChange={(event) => setNewMilestoneTitle(sanitizeLiveProjectTitle(event.target.value))}
+                                          onKeyDown={(event) => {
+                                             if (event.key === "Enter") {
+                                                event.preventDefault();
+                                                addProjectMilestone(activeProject);
+                                             }
+                                          }}
+                                          maxLength={120}
+                                          placeholder="Add a milestone"
+                                          className="min-w-0 flex-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                       />
+
+                                       <button type="button" onClick={() => addProjectMilestone(activeProject)} className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm font-medium text-[var(--color-primary)]">
+                                          Add
+                                       </button>
+                                    </div>
+                                 </section>
+
+                                 <section aria-labelledby="milestone-workspaces-heading" className="space-y-5">
+                                    {(() => {
+                                       const visibleMilestones = projectTracking.milestones.filter((milestone) => milestone.status !== "archived").sort((left, right) => left.order - right.order);
+
+                                       const currentMilestone = visibleMilestones.find((milestone) => milestone.status === "active") || visibleMilestones.find((milestone) => milestone.status !== "complete") || visibleMilestones[0];
+
+                                       const selectedMilestone = visibleMilestones.find((milestone) => milestone.id === selectedMilestoneWorkspaceId) || currentMilestone;
+
+                                       if (!selectedMilestone) {
+                                          return null;
                                        }
-                                       className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                    >
-                                       <option value={15}>15 min</option>
-                                       <option value={30}>30 min</option>
-                                       <option value={45}>45 min</option>
-                                       <option value={60}>1 hour</option>
-                                       <option value={90}>1.5 hours</option>
-                                       <option value={120}>2 hours</option>
-                                    </select>
-                                 </div>
+
+                                       const selectedIndex = visibleMilestones.findIndex((milestone) => milestone.id === selectedMilestone.id);
+                                       const isEditing = editingMilestoneIds.includes(selectedMilestone.id);
+                                       const draft = milestoneEditDrafts[selectedMilestone.id] || selectedMilestone;
+                                       const isComplete = selectedMilestone.status === "complete";
+                                       const isActive = selectedMilestone.status === "active";
+                                       const workingValue = Object.prototype.hasOwnProperty.call(milestoneWorkingDrafts, selectedMilestone.id) ? milestoneWorkingDrafts[selectedMilestone.id] : selectedMilestone.workingContent;
+
+                                       return (
+                                          <>
+                                             <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                                                <div>
+                                                   <p id="milestone-workspaces-heading" className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                                                      Milestone Workspace
+                                                   </p>
+                                                   <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--color-text-secondary)]">Choose a milestone to view or continue its work.</p>
+                                                </div>
+
+                                                <div className="w-full sm:max-w-sm">
+                                                   <label htmlFor="milestone-workspace-selector" className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
+                                                      Select milestone
+                                                   </label>
+                                                   <div className="relative mt-2">
+                                                      <select
+                                                         id="milestone-workspace-selector"
+                                                         value={selectedMilestone.id}
+                                                         onChange={(event) => {
+                                                            cancelEditingMilestone(selectedMilestone.id);
+                                                            setSelectedMilestoneWorkspaceId(event.target.value);
+                                                         }}
+                                                         className="w-full appearance-none rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-3 pr-10 text-sm font-medium text-[var(--color-text-primary)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                                                      >
+                                                         {visibleMilestones.map((milestone, index) => (
+                                                            <option key={milestone.id} value={milestone.id}>
+                                                               {index + 1}. {milestone.title}
+                                                               {milestone.status === "active" ? " — Current" : milestone.status === "complete" ? " — Complete" : ""}
+                                                            </option>
+                                                         ))}
+                                                      </select>
+                                                      <ChevronDown aria-hidden="true" size={18} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]" />
+                                                   </div>
+                                                </div>
+                                             </div>
+
+                                             <section aria-labelledby={`milestone-heading-${selectedMilestone.id}`} className="scroll-mt-24">
+                                                <div aria-hidden="true" className="mb-6 flex items-center gap-3">
+                                                   <div className="h-px flex-1 bg-[var(--border-subtle)]" />
+                                                   <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">Milestone {selectedIndex + 1}</span>
+                                                   <div className="h-px flex-1 bg-[var(--border-subtle)]" />
+                                                </div>
+
+                                                <div className={`rounded-2xl border p-4 sm:p-6 ${isActive ? "border-[var(--color-primary)] bg-[var(--color-bg-soft)]" : "border-[var(--border-subtle)] bg-white"}`}>
+                                                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                                      <div className="min-w-0">
+                                                         <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">{isActive ? "Current Milestone" : isComplete ? "Complete" : "Upcoming"}</span>
+
+                                                         <h4 id={`milestone-heading-${selectedMilestone.id}`} className="mt-2 break-words text-xl font-semibold leading-7 text-[var(--color-text-primary)]">
+                                                            {selectedMilestone.title}
+                                                         </h4>
+
+                                                         {selectedMilestone.goal && <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{selectedMilestone.goal}</p>}
+                                                      </div>
+                                                   </div>
+
+                                                   <div className="mt-5 border-t border-[var(--border-subtle)] pt-5">
+                                                      {isEditing ? (
+                                                         <div className="space-y-4">
+                                                            <div>
+                                                               <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Milestone title</label>
+                                                               <input
+                                                                  value={String(draft.title || "")}
+                                                                  onChange={(event) => updateMilestoneEditDraft(selectedMilestone.id, { title: sanitizeLiveProjectTitle(event.target.value) })}
+                                                                  className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                                               />
+                                                            </div>
+
+                                                            <div className="grid gap-4 lg:grid-cols-2">
+                                                               <div>
+                                                                  <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Milestone goal</label>
+                                                                  <textarea
+                                                                     value={String(draft.goal || "")}
+                                                                     onChange={(event) => updateMilestoneEditDraft(selectedMilestone.id, { goal: sanitizeLiveProjectBody(event.target.value) })}
+                                                                     rows={4}
+                                                                     className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                                                                  />
+                                                               </div>
+
+                                                               <div>
+                                                                  <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Why it matters</label>
+                                                                  <textarea
+                                                                     value={String(draft.whyItMatters || "")}
+                                                                     onChange={(event) => updateMilestoneEditDraft(selectedMilestone.id, { whyItMatters: sanitizeLiveProjectBody(event.target.value) })}
+                                                                     rows={4}
+                                                                     className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                                                                  />
+                                                               </div>
+                                                            </div>
+
+                                                            <div>
+                                                               <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Starting prompt</label>
+                                                               <textarea
+                                                                  value={String(draft.startingPrompt || "")}
+                                                                  onChange={(event) => updateMilestoneEditDraft(selectedMilestone.id, { startingPrompt: sanitizeLiveProjectBody(event.target.value) })}
+                                                                  rows={3}
+                                                                  className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                                                               />
+                                                            </div>
+
+                                                            {[
+                                                               { key: "decisions", label: "Decisions", placeholder: "One decision per line" },
+                                                               { key: "openQuestions", label: "Open questions", placeholder: "One question per line" },
+                                                               { key: "completionEvidence", label: "Completion evidence", placeholder: "What must be true before this milestone is complete?" },
+                                                            ].map((field) => (
+                                                               <div key={field.key}>
+                                                                  <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{field.label}</label>
+                                                                  <textarea
+                                                                     value={Array.isArray((draft as any)[field.key]) ? ((draft as any)[field.key] as string[]).join("\n") : ""}
+                                                                     onChange={(event) =>
+                                                                        updateMilestoneEditDraft(selectedMilestone.id, {
+                                                                           [field.key]: event.target.value
+                                                                              .split("\n")
+                                                                              .map((item) => sanitizeProjectSummary(item))
+                                                                              .filter(Boolean),
+                                                                        } as Partial<ProjectMilestone>)
+                                                                     }
+                                                                     placeholder={field.placeholder}
+                                                                     rows={4}
+                                                                     className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                                                                  />
+                                                               </div>
+                                                            ))}
+
+                                                            <div className="flex flex-wrap gap-2">
+                                                               <button type="button" onClick={() => saveMilestoneStructuralChanges(activeProject, selectedMilestone.id)} className="studio-button-primary">
+                                                                  Save milestone
+                                                               </button>
+                                                               <button type="button" onClick={() => cancelEditingMilestone(selectedMilestone.id)} className="studio-button-secondary">
+                                                                  Cancel
+                                                               </button>
+                                                            </div>
+                                                         </div>
+                                                      ) : (
+                                                         <>
+                                                            {selectedMilestone.whyItMatters && (
+                                                               <div className="mb-5">
+                                                                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Why this matters</p>
+                                                                  <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{selectedMilestone.whyItMatters}</p>
+                                                               </div>
+                                                            )}
+
+                                                            {selectedMilestone.startingPrompt && (
+                                                               <div className="mb-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3">
+                                                                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Starting prompt</p>
+                                                                  <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{selectedMilestone.startingPrompt}</p>
+                                                               </div>
+                                                            )}
+
+                                                            <div>
+                                                               <label htmlFor={`milestone-work-${selectedMilestone.id}`} className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
+                                                                  Work on this milestone
+                                                               </label>
+                                                               <textarea
+                                                                  id={`milestone-work-${selectedMilestone.id}`}
+                                                                  value={workingValue}
+                                                                  onChange={(event) => scheduleMilestoneWorkingContentSave(activeProject, selectedMilestone, event.target.value)}
+                                                                  rows={10}
+                                                                  maxLength={PROJECT_SANITIZE_LIMITS.body}
+                                                                  placeholder={`Add the work, notes, draft, decisions, or evidence for ${selectedMilestone.title}...`}
+                                                                  className="mt-2 min-h-[220px] w-full resize-y rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-4 text-sm leading-7 text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
+                                                               />
+                                                            </div>
+
+                                                            {(selectedMilestone.decisions.length > 0 || selectedMilestone.openQuestions.length > 0 || selectedMilestone.completionEvidence.length > 0) && (
+                                                               <div className="mt-5 grid gap-4 lg:grid-cols-3">
+                                                                  {[
+                                                                     { label: "Decisions", items: selectedMilestone.decisions },
+                                                                     { label: "Open questions", items: selectedMilestone.openQuestions },
+                                                                     { label: "Completion evidence", items: selectedMilestone.completionEvidence },
+                                                                  ].map((group) => (
+                                                                     <div key={group.label} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
+                                                                        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{group.label}</p>
+                                                                        {group.items.length ? (
+                                                                           <ul className="mt-3 space-y-2">
+                                                                              {group.items.map((item, itemIndex) => (
+                                                                                 <li key={`${group.label}-${itemIndex}`} className="text-sm leading-6 text-[var(--color-text-primary)]">
+                                                                                    {item}
+                                                                                 </li>
+                                                                              ))}
+                                                                           </ul>
+                                                                        ) : null}
+                                                                     </div>
+                                                                  ))}
+                                                               </div>
+                                                            )}
+
+                                                            <div className="mt-5 flex flex-wrap gap-2 border-t border-[var(--border-subtle)] pt-4">
+                                                               <button type="button" onClick={() => beginEditingMilestone(selectedMilestone)} className="studio-button-secondary">
+                                                                  Edit milestone
+                                                               </button>
+                                                               <button type="button" onClick={() => toggleProjectMilestone(activeProject, selectedMilestone.id)} className="studio-button-secondary">
+                                                                  {isComplete ? "Reopen milestone" : "Mark complete"}
+                                                               </button>
+                                                               <button type="button" onClick={() => removeProjectMilestone(activeProject, selectedMilestone.id)} className="studio-button-secondary text-[var(--color-text-secondary)]">
+                                                                  {milestoneHasSavedWork(selectedMilestone) ? "Archive milestone" : "Delete milestone"}
+                                                               </button>
+                                                            </div>
+                                                         </>
+                                                      )}
+                                                   </div>
+                                                </div>
+                                             </section>
+                                          </>
+                                       );
+                                    })()}
+                                 </section>
+
+                                 <details className="border-y border-[var(--border-subtle)] px-1 py-4">
+                                    <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-2 text-left focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]">
+                                       <div className="min-w-0 sm:flex sm:items-center sm:gap-5">
+                                          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Next Session</p>
+
+                                          <p className="mt-1 text-sm font-medium text-[var(--color-text-primary)] sm:mt-0">{activeProjectSessionLabel || "Schedule time"}</p>
+
+                                          {activeProjectSessionLabel && activeProjectScheduledTaskLabel && <p className="mt-1 truncate text-xs text-[var(--color-text-secondary)] sm:mt-0">{activeProjectScheduledTaskLabel}</p>}
+                                       </div>
+
+                                       <ChevronDown size={17} className="shrink-0 text-[var(--color-text-secondary)]" />
+                                    </summary>
+
+                                    <div className="mx-2 mt-4 space-y-3 border-t border-[var(--border-subtle)] pt-4">
+                                       <input
+                                          value={projectTracking.calendarTaskTitle}
+                                          onChange={(event) => updateProjectTracking(activeProject, { calendarTaskTitle: event.target.value })}
+                                          placeholder="What should this session accomplish?"
+                                          className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                       />
+
+                                       <div className="grid grid-cols-2 gap-2">
+                                          <input
+                                             type="date"
+                                             value={projectTracking.calendarTaskDate}
+                                             onChange={(event) => updateProjectTracking(activeProject, { calendarTaskDate: event.target.value })}
+                                             className="min-w-0 rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                          />
+
+                                          <input
+                                             type="time"
+                                             value={projectTracking.calendarTaskTime}
+                                             onChange={(event) => updateProjectTracking(activeProject, { calendarTaskTime: event.target.value })}
+                                             className="min-w-0 rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                          />
+                                       </div>
+
+                                       <div className="grid grid-cols-[1fr_auto] gap-2">
+                                          <select
+                                             value={projectTracking.calendarTaskDurationMinutes}
+                                             onChange={(event) => updateProjectTracking(activeProject, { calendarTaskDurationMinutes: Number(event.target.value) })}
+                                             className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                          >
+                                             <option value={15}>15 minutes</option>
+                                             <option value={30}>30 minutes</option>
+                                             <option value={45}>45 minutes</option>
+                                             <option value={60}>1 hour</option>
+                                             <option value={90}>1.5 hours</option>
+                                             <option value={120}>2 hours</option>
+                                          </select>
+
+                                          <button type="button" onClick={() => scheduleProjectTime(activeProject)} className="rounded-xl bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-[var(--color-cream)]">
+                                             Add to Calendar
+                                          </button>
+                                       </div>
+                                    </div>
+                                 </details>
                               </div>
 
                               <div className="mb-5">
@@ -4282,7 +5559,7 @@ ${currentBody}`
                                        <div className="flex items-center gap-2">
                                           <FileText size={18} />
 
-                                          <p className="font-medium">Project Materials</p>
+                                          <p className="font-medium">Project Materials ({activeProjectMaterials.length})</p>
                                        </div>
 
                                        <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Keep references, feedback, notes, and documents connected to this project.</p>
@@ -4473,6 +5750,10 @@ ${currentBody}`
                                                       <div className="flex min-w-0 flex-wrap items-start gap-x-4 gap-y-1 text-xs font-medium text-[var(--color-text-secondary)]">
                                                          <span className="uppercase tracking-[0.1em]">{material.type}</span>
 
+                                                         {selectedProjectMaterialIds.includes(material.id) && (
+                                                            <span className="rounded-full bg-[var(--color-primary-soft)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-primary)]">Referenced in project</span>
+                                                         )}
+
                                                          {material.source && <span className="max-w-full break-words">{material.source}</span>}
                                                       </div>
 
@@ -4529,10 +5810,13 @@ ${currentBody}`
                                                       </button>
 
                                                       <button
-                                                         onClick={() => sendMaterialToCanvas(activeProject, material)}
-                                                         className="min-h-10 rounded-xl bg-white px-3 py-2 text-center text-xs font-medium leading-5 transition-colors hover:bg-[var(--color-surface)]"
+                                                         onClick={() => toggleMaterialProjectReference(activeProject, material)}
+                                                         aria-pressed={selectedProjectMaterialIds.includes(material.id)}
+                                                         className={`min-h-10 rounded-xl px-3 py-2 text-center text-xs font-medium leading-5 transition-colors ${
+                                                            selectedProjectMaterialIds.includes(material.id) ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "bg-white hover:bg-[var(--color-surface)]"
+                                                         }`}
                                                       >
-                                                         Reference in Canvas
+                                                         {selectedProjectMaterialIds.includes(material.id) ? "Referenced in Project" : "Reference in Project"}
                                                       </button>
                                                       <button
                                                          onClick={() => deleteProjectMaterial(material.id)}
@@ -4604,7 +5888,7 @@ ${currentBody}`
                   </div>
                </div>
             ) : (
-               <div className="rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)] sm:p-5">No projects yet. Add a project here or save work from Canvas. Each project becomes its own home base.</div>
+               <div className="rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)] sm:p-5">No projects yet. Add a project here and keep its notes, progress, materials, and schedule together.</div>
             )}
          </div>
 

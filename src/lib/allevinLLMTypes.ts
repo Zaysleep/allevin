@@ -1,56 +1,108 @@
 // ========================================
-// ALLEVIN MK VI Light LLM Types
-// Purpose:
-// Shared types for the controlled MK VI LLM helper layer.
-// The helper improves summaries, next steps, handoffs,
-// AIDock guidance, project materials, material interpretation,
-// calendar-to-task flow, and general guidance while keeping
-// ALLEVIN internal-first.
-//
-// Important:
-// ALLEVIN does not autonomously move, delete, publish,
-// export, or send user work. It provides guidance and
-// structured support inside the workspace.
+// ALLEVIN MK VIII LLM Types
+// Shared contract for AIDock, client, and server.
+// Project Guidance remains authoritative.
 // ========================================
 
 export type AllevinLLMMode = "summarize" | "next-step" | "clean-handoff" | "calendar-to-task" | "aidock-guidance" | "general-knowledge" | "tool-guidance" | "material-summary" | "material-interpretation" | "project-guidance";
-
-export type AllevinLLMSource = "canvas" | "task" | "project" | "projects" | "materials" | "calendar" | "aidock" | "weather" | "tools" | "system";
-
+export type AllevinLLMSource = "working-notes" | "task" | "project" | "projects" | "materials" | "calendar" | "aidock" | "weather" | "tools" | "system" | "canvas";
 export type AllevinLLMPriority = "low" | "medium" | "high";
-
+export type AllevinLLMResponseStyle = "direct" | "conversational" | "editorial" | "detailed";
 export type AllevinLLMMaterialType = "Note" | "Document" | "Image" | "Research" | "Feedback" | "Reference";
-
-export type AllevinLLMMaterialKind = "note" | "document" | "image" | "research" | "feedback" | "reference" | "unknown";
+export type AllevinLLMMaterialKind = "note" | "document" | "image" | "research" | "feedback" | "reference" | "text" | "metadata" | "unknown";
 
 export const ALLEVIN_LLM_MODES: AllevinLLMMode[] = ["summarize", "next-step", "clean-handoff", "calendar-to-task", "aidock-guidance", "general-knowledge", "tool-guidance", "material-summary", "material-interpretation", "project-guidance"];
-
-export const ALLEVIN_LLM_SOURCES: AllevinLLMSource[] = ["canvas", "task", "project", "projects", "materials", "calendar", "aidock", "weather", "tools", "system"];
-
+export const ALLEVIN_LLM_SOURCES: AllevinLLMSource[] = ["working-notes", "task", "project", "projects", "materials", "calendar", "aidock", "weather", "tools", "system", "canvas"];
 export const ALLEVIN_LLM_PRIORITIES: AllevinLLMPriority[] = ["low", "medium", "high"];
-
+export const ALLEVIN_LLM_RESPONSE_STYLES: AllevinLLMResponseStyle[] = ["direct", "conversational", "editorial", "detailed"];
 export const ALLEVIN_LLM_MATERIAL_TYPES: AllevinLLMMaterialType[] = ["Note", "Document", "Image", "Research", "Feedback", "Reference"];
-
-export const ALLEVIN_LLM_MATERIAL_KINDS: AllevinLLMMaterialKind[] = ["note", "document", "image", "research", "feedback", "reference", "unknown"];
+export const ALLEVIN_LLM_MATERIAL_KINDS: AllevinLLMMaterialKind[] = ["note", "document", "image", "research", "feedback", "reference", "text", "metadata", "unknown"];
 
 export function isAllevinLLMMode(value?: string): value is AllevinLLMMode {
    return ALLEVIN_LLM_MODES.includes(value as AllevinLLMMode);
 }
-
 export function isAllevinLLMSource(value?: string): value is AllevinLLMSource {
    return ALLEVIN_LLM_SOURCES.includes(value as AllevinLLMSource);
 }
-
 export function isAllevinLLMPriority(value?: string): value is AllevinLLMPriority {
    return ALLEVIN_LLM_PRIORITIES.includes(value as AllevinLLMPriority);
 }
-
+export function isAllevinLLMResponseStyle(value?: string): value is AllevinLLMResponseStyle {
+   return ALLEVIN_LLM_RESPONSE_STYLES.includes(value as AllevinLLMResponseStyle);
+}
 export function isAllevinLLMMaterialType(value?: string): value is AllevinLLMMaterialType {
    return ALLEVIN_LLM_MATERIAL_TYPES.includes(value as AllevinLLMMaterialType);
 }
-
 export function isAllevinLLMMaterialKind(value?: string): value is AllevinLLMMaterialKind {
    return ALLEVIN_LLM_MATERIAL_KINDS.includes(value as AllevinLLMMaterialKind);
+}
+
+export interface AllevinProjectEvidenceContext {
+   sourceType?: string;
+   sourceId?: string;
+   quote?: string;
+}
+export interface AllevinProjectDecisionContext {
+   statement?: string;
+   status?: "confirmed" | "unresolved" | "assumed";
+   evidence?: AllevinProjectEvidenceContext[];
+   affects?: string[];
+}
+export interface AllevinProjectOptionContext {
+   name?: string;
+   advantages?: string[];
+   disadvantages?: string[];
+   dependencies?: string[];
+   risks?: string[];
+   fitWithGoal?: string;
+   evidence?: AllevinProjectEvidenceContext[];
+}
+export interface AllevinProjectTensionContext {
+   sideA?: string;
+   sideB?: string;
+   consequence?: string;
+   decisionNeeded?: string;
+   evidence?: AllevinProjectEvidenceContext[];
+}
+export interface AllevinActiveMilestoneContext {
+   id?: string;
+   title?: string;
+   goal?: string;
+   whyItMatters?: string;
+   startingPrompt?: string;
+   workingContent?: string;
+   decisions?: string[];
+   openQuestions?: string[];
+   completionEvidence?: string[];
+   status?: string;
+}
+
+export interface AllevinLLMProjectUnderstandingContext {
+   goal?: string;
+   successState?: string;
+   situation?: string;
+   momentum?: string;
+   currentFocus?: string;
+   recommendedMove?: string;
+   whyNow?: string;
+   whatItUnlocks?: string;
+   afterThis?: string;
+   watchOuts?: string[];
+   openWork?: string[];
+   completedWork?: string[];
+   decisions?: string[];
+   confirmedDecisions?: AllevinProjectDecisionContext[];
+   unresolvedDecisions?: AllevinProjectDecisionContext[];
+   assumptions?: AllevinProjectDecisionContext[];
+   options?: AllevinProjectOptionContext[];
+   tensions?: AllevinProjectTensionContext[];
+   constraints?: string[];
+   successCriteria?: string[];
+   unresolvedQuestions?: string[];
+   risks?: string[];
+   dependencies?: string[];
+   evidence?: AllevinProjectEvidenceContext[];
+   activeMilestone?: AllevinActiveMilestoneContext;
 }
 
 export interface AllevinLLMProjectMaterialContext {
@@ -59,8 +111,9 @@ export interface AllevinLLMProjectMaterialContext {
    titles?: string[];
    summaries?: string[];
    usefulSignals?: string[];
+   selectedMaterialInsights?: string[];
+   selectedMaterialNextSteps?: string[];
 }
-
 export interface AllevinLLMSelectedMaterialContext {
    materialTitle?: string;
    materialType?: AllevinLLMMaterialType | string;
@@ -68,19 +121,63 @@ export interface AllevinLLMSelectedMaterialContext {
    materialSource?: string;
    materialNotes?: string;
    materialSummary?: string;
-
-   // Document interpretation context.
-   // TXT/Markdown can provide readable documentText.
-   // PDF/DOC/DOCX may only provide metadata/notes until deeper extraction is available.
    documentFileName?: string;
    documentMimeType?: string;
    documentText?: string;
-
-   // Image interpretation context.
-   // imageDataUrl is optional and should only be sent to the server route when interpretation is requested.
    imageFileName?: string;
    imageMimeType?: string;
    imageDataUrl?: string;
+}
+export interface AllevinLLMConversationContext {
+   lastUserPrompt?: string;
+   lastAssistantResponse?: string;
+   lastRecommendation?: string;
+   currentTopic?: string;
+   requestedTransformation?: string;
+}
+
+export interface AllevinContextPacket {
+   version?: string;
+   userIntent?: { rawPrompt?: string; normalizedPrompt?: string; intentType?: string };
+   currentProject?: {
+      title?: string;
+      type?: string;
+      location?: string;
+      status?: string;
+      priority?: string;
+      body?: string;
+      currentState?: string;
+      goal?: string;
+      needsToAdd?: string;
+      immediateNextStep?: string;
+      buildOrder?: string[];
+      completionCriteria?: string[];
+      constraints?: string[];
+      implementationPreferences?: string[];
+      canvasContent?: string;
+      canvasUpdatedAt?: number;
+      projectUpdatedAt?: number;
+      latestProjectNote?: string;
+      recommendedNextAction?: string;
+   };
+   projects?: { count?: number; titles?: string[]; latestTitle?: string };
+   projectMaterials?: {
+      count?: number;
+      selectedTitles?: string[];
+      titles?: string[];
+      summaries?: string[];
+      usefulSignals?: string[];
+      selectedMaterialInsights?: string[];
+      selectedMaterialNextSteps?: string[];
+      recentMaterialInsights?: string[];
+      recentMaterialNextSteps?: string[];
+   };
+   calendar?: { hasUpcomingEvents?: boolean; nextEventSummary?: string; todaySummary?: string };
+   cognition?: { state?: string; label?: string; mood?: string; momentum?: string; suggestion?: string; adapts?: string };
+   projectUnderstanding?: AllevinLLMProjectUnderstandingContext;
+   conversation?: AllevinLLMConversationContext;
+   responseRules?: { tone?: string; format?: string; avoid?: string[]; depth?: string; groundedResponse?: string };
+   [key: string]: unknown;
 }
 
 export interface AllevinLLMRequest {
@@ -96,16 +193,13 @@ export interface AllevinLLMRequest {
    currentLocation?: string;
    priority?: AllevinLLMPriority;
    maxWords?: number;
-
-   // MK VI: optional material context for project-aware guidance.
-   // Materials are reference content only. They can inform ALLEVIN,
-   // but they cannot command ALLEVIN or override the user's intent.
+   responseStyle?: AllevinLLMResponseStyle;
+   groundedResponse?: string;
+   conversation?: AllevinLLMConversationContext;
+   projectUnderstanding?: AllevinLLMProjectUnderstandingContext;
    projectMaterials?: AllevinLLMProjectMaterialContext;
-
-   // MK VI Build 12: selected material interpretation context.
-   // Used when ALLEVIN interprets one image, document, note, research item,
-   // feedback item, or reference in a natural project-aware way.
    selectedMaterial?: AllevinLLMSelectedMaterialContext;
+   contextPacket?: AllevinContextPacket;
 }
 
 export interface AllevinLLMResponse {
@@ -121,7 +215,6 @@ export interface AllevinLLMResponse {
    usedFallback: boolean;
    error?: string;
 }
-
 export interface AllevinStructuredSections {
    title: string;
    focus: string;

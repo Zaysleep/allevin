@@ -1,108 +1,30 @@
 // ========================================
-// ALLEVIN MK VI OpenAI Response Client
+// ALLEVIN MK VIII OpenAI Response Client
 // Purpose:
 // Frontend-safe helper for requesting controlled LLM improvements
 // from the server route at /api/allevin/llm.
 //
 // Notes:
 // - The OpenAI API key stays server-side.
-// - The MK VI context packet can be passed through to the route.
+// - The MK VIII Project Understanding packet can be passed through to the route.
 // - If the route fails, ALLEVIN falls back to safe local guidance.
 // - User/project/calendar/context/material text is sanitized before request/return.
 // ========================================
 
-import type { AllevinLLMRequest, AllevinLLMResponse, AllevinStructuredSections } from "@/lib/allevinLLMTypes";
+import type { AllevinContextPacket, AllevinLLMRequest, AllevinLLMResponse, AllevinStructuredSections } from "@/lib/allevinLLMTypes";
 
 // ========================================
-// MK VI Context Packet Types
-// Kept local so this client can support project materials
-// without forcing a full shared type refactor yet.
+// MK VIII Shared Context Packet
 // ========================================
 
-export type AllevinContextPacket = {
-   version?: string;
-
-   userIntent?: {
-      rawPrompt?: string;
-      normalizedPrompt?: string;
-      intentType?: string;
-   };
-
-   currentProject?: {
-      title?: string;
-      type?: string;
-      location?: string;
-      status?: string;
-      priority?: string;
-
-      body?: string;
-
-      // MK VII Project Awareness
-      currentState?: string;
-      goal?: string;
-      needsToAdd?: string;
-      immediateNextStep?: string;
-      buildOrder?: string[];
-      completionCriteria?: string[];
-      constraints?: string[];
-      implementationPreferences?: string[];
-
-      canvasContent?: string;
-      canvasUpdatedAt?: number;
-      projectUpdatedAt?: number;
-
-      latestProjectNote?: string;
-      recommendedNextAction?: string;
-   };
-
-   projects?: {
-      count?: number;
-      titles?: string[];
-      latestTitle?: string;
-   };
-
-   projectMaterials?: {
-      count?: number;
-      selectedTitles?: string[];
-      titles?: string[];
-      summaries?: string[];
-      usefulSignals?: string[];
-
-      // MK VII Project Awareness
-      selectedMaterialInsights?: string[];
-      selectedMaterialNextSteps?: string[];
-      recentMaterialInsights?: string[];
-      recentMaterialNextSteps?: string[];
-   };
-
-   calendar?: {
-      hasUpcomingEvents?: boolean;
-      nextEventSummary?: string;
-      todaySummary?: string;
-   };
-
-   cognition?: {
-      state?: string;
-      label?: string;
-      mood?: string;
-      momentum?: string;
-      suggestion?: string;
-      adapts?: string;
-   };
-
-   responseRules?: {
-      tone?: string;
-      format?: string;
-      avoid?: string[];
-   };
-};
+export type { AllevinContextPacket };
 
 export type AllevinLLMRequestWithContext = AllevinLLMRequest & {
    contextPacket?: AllevinContextPacket;
 };
 
 // ========================================
-// MK VI — LLM Client Sanitization
+// MK VIII — LLM Client Sanitization
 // Purpose:
 // The LLM client is an AI boundary. Sanitize
 // context before sending and sanitize responses
@@ -114,9 +36,9 @@ const LLM_CLIENT_SANITIZE_LIMITS = {
    title: 120,
    body: 100000,
    summary: 1500,
-   nextStep: 1000,
+   nextStep: 1600,
    smallText: 300,
-   responseText: 4000,
+   responseText: 7000,
    contextTitles: 20,
    materialSummaries: 12,
    selectedMaterialText: 100000,
@@ -255,13 +177,114 @@ function sanitizeSelectedMaterialContext(selectedMaterial?: AllevinLLMRequest["s
    };
 }
 
+function sanitizeEvidenceContext(values?: Array<{ sourceType?: string; sourceId?: string; quote?: string }>) {
+   return Array.isArray(values)
+      ? values
+           .map((item) => ({ sourceType: sanitizeLLMSmallText(item?.sourceType), sourceId: sanitizeLLMSmallText(item?.sourceId), quote: sanitizeLLMSummary(item?.quote) }))
+           .filter((item) => item.quote)
+           .slice(0, 40)
+      : [];
+}
+
+function sanitizeDecisionContext(values?: Array<{ statement?: string; status?: "confirmed" | "unresolved" | "assumed"; evidence?: Array<{ sourceType?: string; sourceId?: string; quote?: string }>; affects?: string[] }>) {
+   return Array.isArray(values)
+      ? values
+           .map((item) => ({
+              statement: sanitizeLLMSummary(item?.statement),
+              status: item?.status === "confirmed" || item?.status === "unresolved" || item?.status === "assumed" ? item.status : undefined,
+              evidence: sanitizeEvidenceContext(item?.evidence),
+              affects: sanitizeLLMStringArray(item?.affects, 20),
+           }))
+           .filter((item) => item.statement)
+           .slice(0, 30)
+      : [];
+}
+
+function sanitizeOptionContext(
+   values?: Array<{ name?: string; advantages?: string[]; disadvantages?: string[]; dependencies?: string[]; risks?: string[]; fitWithGoal?: string; evidence?: Array<{ sourceType?: string; sourceId?: string; quote?: string }> }>,
+) {
+   return Array.isArray(values)
+      ? values
+           .map((item) => ({
+              name: sanitizeLLMTitle(item?.name),
+              advantages: sanitizeLLMSummaryArray(item?.advantages, 12),
+              disadvantages: sanitizeLLMSummaryArray(item?.disadvantages, 12),
+              dependencies: sanitizeLLMSummaryArray(item?.dependencies, 12),
+              risks: sanitizeLLMSummaryArray(item?.risks, 12),
+              fitWithGoal: sanitizeLLMSummary(item?.fitWithGoal),
+              evidence: sanitizeEvidenceContext(item?.evidence),
+           }))
+           .filter((item) => item.name)
+           .slice(0, 12)
+      : [];
+}
+
+function sanitizeTensionContext(values?: Array<{ sideA?: string; sideB?: string; consequence?: string; decisionNeeded?: string; evidence?: Array<{ sourceType?: string; sourceId?: string; quote?: string }> }>) {
+   return Array.isArray(values)
+      ? values
+           .map((item) => ({
+              sideA: sanitizeLLMSummary(item?.sideA),
+              sideB: sanitizeLLMSummary(item?.sideB),
+              consequence: sanitizeLLMSummary(item?.consequence),
+              decisionNeeded: sanitizeLLMNextStep(item?.decisionNeeded),
+              evidence: sanitizeEvidenceContext(item?.evidence),
+           }))
+           .filter((item) => item.sideA && item.sideB)
+           .slice(0, 12)
+      : [];
+}
+
+function sanitizeProjectUnderstandingContext(value?: AllevinLLMRequest["projectUnderstanding"]) {
+   if (!value) return undefined;
+   return {
+      goal: sanitizeLLMSummary(value.goal),
+      successState: sanitizeLLMSummary(value.successState),
+      situation: sanitizeLLMSummary(value.situation),
+      momentum: sanitizeLLMSmallText(value.momentum),
+      currentFocus: sanitizeLLMNextStep(value.currentFocus),
+      recommendedMove: sanitizeLLMNextStep(value.recommendedMove),
+      whyNow: sanitizeLLMSummary(value.whyNow),
+      whatItUnlocks: sanitizeLLMSummary(value.whatItUnlocks),
+      afterThis: sanitizeLLMNextStep(value.afterThis),
+      watchOuts: sanitizeLLMSummaryArray(value.watchOuts, 12),
+      openWork: sanitizeLLMSummaryArray(value.openWork, 20),
+      completedWork: sanitizeLLMSummaryArray(value.completedWork, 20),
+      decisions: sanitizeLLMSummaryArray(value.decisions, 20),
+      confirmedDecisions: sanitizeDecisionContext(value.confirmedDecisions),
+      unresolvedDecisions: sanitizeDecisionContext(value.unresolvedDecisions),
+      assumptions: sanitizeDecisionContext(value.assumptions),
+      options: sanitizeOptionContext(value.options),
+      tensions: sanitizeTensionContext(value.tensions),
+      constraints: sanitizeLLMSummaryArray(value.constraints, 20),
+      successCriteria: sanitizeLLMSummaryArray(value.successCriteria, 20),
+      unresolvedQuestions: sanitizeLLMSummaryArray(value.unresolvedQuestions, 20),
+      risks: sanitizeLLMSummaryArray(value.risks, 20),
+      dependencies: sanitizeLLMSummaryArray(value.dependencies, 20),
+      evidence: sanitizeEvidenceContext(value.evidence),
+      activeMilestone: value.activeMilestone
+         ? {
+              id: sanitizeLLMSmallText(value.activeMilestone.id),
+              title: sanitizeLLMTitle(value.activeMilestone.title),
+              goal: sanitizeLLMSummary(value.activeMilestone.goal),
+              whyItMatters: sanitizeLLMSummary(value.activeMilestone.whyItMatters),
+              startingPrompt: sanitizeLLMSummary(value.activeMilestone.startingPrompt),
+              workingContent: sanitizeLLMBody(value.activeMilestone.workingContent),
+              decisions: sanitizeLLMSummaryArray(value.activeMilestone.decisions, 30),
+              openQuestions: sanitizeLLMSummaryArray(value.activeMilestone.openQuestions, 30),
+              completionEvidence: sanitizeLLMSummaryArray(value.activeMilestone.completionEvidence, 30),
+              status: sanitizeLLMSmallText(value.activeMilestone.status),
+           }
+         : undefined,
+   };
+}
+
 function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinContextPacket | undefined {
    if (!contextPacket) {
       return undefined;
    }
 
    return {
-      version: sanitizeLLMSmallText(contextPacket.version || "mkvi"),
+      version: sanitizeLLMSmallText(contextPacket.version || "MK VIII"),
 
       userIntent: {
          rawPrompt: sanitizeLLMClientText(contextPacket.userIntent?.rawPrompt, LLM_CLIENT_SANITIZE_LIMITS.prompt),
@@ -329,10 +352,22 @@ function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinCon
          adapts: sanitizeLLMSmallText(contextPacket.cognition?.adapts),
       },
 
+      projectUnderstanding: sanitizeProjectUnderstandingContext(contextPacket.projectUnderstanding),
+
+      conversation: {
+         lastUserPrompt: sanitizeLLMClientText(contextPacket.conversation?.lastUserPrompt, LLM_CLIENT_SANITIZE_LIMITS.prompt),
+         lastAssistantResponse: sanitizeLLMClientText(contextPacket.conversation?.lastAssistantResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
+         lastRecommendation: sanitizeLLMNextStep(contextPacket.conversation?.lastRecommendation),
+         currentTopic: sanitizeLLMSummary(contextPacket.conversation?.currentTopic),
+         requestedTransformation: sanitizeLLMSmallText(contextPacket.conversation?.requestedTransformation),
+      },
+
       responseRules: {
          tone: sanitizeLLMSmallText(contextPacket.responseRules?.tone),
          format: sanitizeLLMSmallText(contextPacket.responseRules?.format),
          avoid: sanitizeLLMStringArray(contextPacket.responseRules?.avoid, 12),
+         depth: sanitizeLLMSmallText(contextPacket.responseRules?.depth),
+         groundedResponse: sanitizeLLMClientText(contextPacket.responseRules?.groundedResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
       },
    };
 }
@@ -349,6 +384,18 @@ function sanitizeLLMRequest(request: AllevinLLMRequestWithContext): AllevinLLMRe
       projectStage: sanitizeLLMSmallText(request.projectStage),
       currentLocation: sanitizeLLMSmallText(request.currentLocation),
       priority: sanitizeLLMPriority(request.priority),
+      responseStyle: request.responseStyle === "direct" || request.responseStyle === "conversational" || request.responseStyle === "editorial" || request.responseStyle === "detailed" ? request.responseStyle : undefined,
+      groundedResponse: sanitizeLLMClientText(request.groundedResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
+      conversation: request.conversation
+         ? {
+              lastUserPrompt: sanitizeLLMClientText(request.conversation.lastUserPrompt, LLM_CLIENT_SANITIZE_LIMITS.prompt),
+              lastAssistantResponse: sanitizeLLMClientText(request.conversation.lastAssistantResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
+              lastRecommendation: sanitizeLLMNextStep(request.conversation.lastRecommendation),
+              currentTopic: sanitizeLLMSummary(request.conversation.currentTopic),
+              requestedTransformation: sanitizeLLMSmallText(request.conversation.requestedTransformation),
+           }
+         : undefined,
+      projectUnderstanding: sanitizeProjectUnderstandingContext(request.projectUnderstanding),
       contextPacket: sanitizeContextPacket(request.contextPacket),
       selectedMaterial: sanitizeSelectedMaterialContext(request.selectedMaterial),
    };
@@ -559,6 +606,27 @@ function buildMaterialInterpretationFallback(request: AllevinLLMRequestWithConte
 export function buildLLMFallbackResponse(request: AllevinLLMRequestWithContext, error?: string): AllevinLLMResponse {
    const safeRequest = sanitizeLLMRequest(request);
 
+   if (safeRequest.groundedResponse) {
+      const grounded = sanitizeLLMClientText(safeRequest.groundedResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText);
+
+      return sanitizeLLMResponse(
+         {
+            ok: true,
+            mode: safeRequest.mode,
+            source: safeRequest.source,
+            title: getContextTitle(safeRequest),
+            focus: grounded,
+            usefulContext: "",
+            nextStep: safeRequest.nextStep || "",
+            summary: grounded,
+            confidence: 80,
+            usedFallback: Boolean(error),
+            error: error ? "LLM request fell back safely." : undefined,
+         },
+         safeRequest,
+      );
+   }
+
    if (safeRequest.mode === "material-interpretation") {
       return buildMaterialInterpretationFallback(safeRequest, error);
    }
@@ -666,6 +734,6 @@ export async function interpretMaterialWithLLM(request: Omit<AllevinLLMRequestWi
       ...request,
       mode: "material-interpretation",
       source: "materials",
-      maxWords: request.maxWords || 180,
+      maxWords: request.maxWords || 420,
    });
 }

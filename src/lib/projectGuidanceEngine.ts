@@ -1,14 +1,40 @@
 // ========================================
-// ALLEVIN MK VII Project Guidance Engine
+// ALLEVIN MK VIII Project Lead Guidance Engine
 // Purpose:
 // Turn a Project Intelligence Packet into
-// one evidence-aware project-lead judgment
+// one project-understanding-aware judgment
 // before AIDock adds conversational delivery.
 // ========================================
 
 import type { ProjectBuildStep, ProjectDependencySignal, ProjectEvidenceSignal, ProjectIntelligencePacket, ProjectMaterialSignal, ProjectReasoningProfile, ProjectRiskSignal } from "@/lib/projectIntelligenceEngine";
 
-export type ProjectGuidanceIntent = "project-understanding" | "next-action" | "build-order" | "risk" | "readiness" | "simplification" | "project-lead" | "materials" | "evidence" | "decision" | "general";
+export type ProjectGuidanceIntent =
+   | "project-understanding"
+   | "next-action"
+   | "rationale"
+   | "progress-points"
+   | "relationship"
+   | "conversation-summary"
+   | "unresolved"
+   | "build-order"
+   | "risk"
+   | "readiness"
+   | "simplification"
+   | "project-lead"
+   | "materials"
+   | "material-impact"
+   | "material-next"
+   | "material-tension"
+   | "material-decisions"
+   | "material-rationale"
+   | "material-recommendation"
+   | "hierarchy-explanation"
+   | "hierarchy-comparison"
+   | "option-comparison"
+   | "milestone-focus"
+   | "evidence"
+   | "decision"
+   | "general";
 
 export interface ProjectGuidanceInput {
    prompt: string;
@@ -532,12 +558,131 @@ export function getProjectGuidanceIntent(prompt: string): ProjectGuidanceIntent 
       return "general";
    }
 
+   if (includesAny(lower, ["what does this material add", "what does the material add", "what does this document add", "what does the document add", "how does this material help", "how does this document help"])) {
+      return "material-impact";
+   }
+
+   if (
+      includesAny(lower, [
+         "how does this material change what i should work on next",
+         "how does the material change what i should work on next",
+         "how should this material change the next step",
+         "what should i do because of this material",
+         "what should i do with this material",
+      ])
+   ) {
+      return "material-next";
+   }
+
+   if (
+      includesAny(lower, [
+         "does this material reveal a tension",
+         "does this material reveal any tension",
+         "does this material reveal tension",
+         "does this material show a tension",
+         "does this material show any tension",
+         "does this document reveal a tension",
+         "does this document reveal any tension",
+         "does this document reveal tension",
+         "does this document show a tension",
+         "conflicting direction",
+         "contradiction in this material",
+         "contradiction in this document",
+      ])
+   ) {
+      return "material-tension";
+   }
+
+   if (
+      includesAny(lower, [
+         "what decisions are already made in this document",
+         "what decisions are already made in this material",
+         "what decisions are still unresolved in this document",
+         "what decisions are still unresolved in this material",
+         "what decisions does this material affect",
+      ])
+   ) {
+      return "material-decisions";
+   }
+
+   if (
+      includesAny(lower, [
+         "based on everything in the project and the pdf",
+         "based on everything in the project and this document",
+         "based on the project and the pdf",
+         "based on the project and this material",
+         "based on everything what would you recommend",
+         "taking everything into account what would you recommend",
+         "what would a senior project lead recommend",
+         "what would you recommend based on the material",
+      ])
+   ) {
+      return "material-recommendation";
+   }
+
+   if (includesAny(lower, ["compare the options", "compare these options", "pros and cons", "tradeoff", "trade-off", "which option", "which direction"])) {
+      return "option-comparison";
+   }
+
+   if (
+      includesAny(lower, [
+         "why are you recommending that",
+         "why do you recommend that",
+         "why is that your recommendation",
+         "why that recommendation",
+         "why this recommendation",
+         "why recommend that",
+         "why recommend this",
+         "what makes that the recommendation",
+         "what makes this the recommendation",
+      ])
+   ) {
+      return "material-rationale";
+   }
+
+   if (includesAny(lower, ["why should i do that first", "why is that the next step", "why that first", "why this first"])) {
+      return "rationale";
+   }
+
+   if (includesAny(lower, ["what progress points did you identify", "what are the progress points", "show me the progress points", "what milestones did you identify", "show me the milestones"])) {
+      return "progress-points";
+   }
+
+   if (includesAny(lower, ["how do these relate", "how does this relate", "help me define how", "relate to each other", "relationship between"])) {
+      return "relationship";
+   }
+
+   if (includesAny(lower, ["what decisions are already made", "what decisions have already been made", "what decisions are confirmed", "what decisions have been confirmed", "which decisions are confirmed", "show me the confirmed decisions"])) {
+      return "decision";
+   }
+
+   if (includesAny(lower, ["what have we decided", "what did we decide", "decisions so far", "what has changed since i started"])) {
+      return "conversation-summary";
+   }
+
+   if (includesAny(lower, ["what is still unresolved", "what remains unresolved", "what is unresolved", "what is still open"])) {
+      return "unresolved";
+   }
+
    if (includesAny(lower, ["what am i actually building", "what am i building", "explain this project", "what is this project", "where does this project stand", "where am i in this project", "current state", "new engineer joining", "joining the team"])) {
       return "project-understanding";
    }
 
    if (
+      /^(?:finalize|define|decide|confirm|create|build|write|research|collect|design|implement|test|validate|prepare|deploy|launch|review|coordinate|schedule|organize|document|choose|establish|clarify)\b/.test(lower) &&
+      lower.split(/\s+/).length >= 3 &&
+      !lower.endsWith("?")
+   ) {
+      return "milestone-focus";
+   }
+
+   if (
       includesAny(lower, [
+         "what should i do first",
+         "what do i do first",
+         "what should i start with",
+         "what should i tackle first",
+         "what should i prioritize first",
          "what should i do next",
          "what should i work on",
          "what would you have me work on",
@@ -601,6 +746,7 @@ export function getProjectGuidanceIntent(prompt: string): ProjectGuidanceIntent 
          "would you approve",
          "pass review",
          "is this ready",
+         "is this project ready",
          "is this project complete",
          "is the project complete",
          "is it complete",
@@ -1107,69 +1253,207 @@ function buildChecklistGuidance(packet: ProjectIntelligencePacket): ProfileGuida
    };
 }
 
+function getSituationalSentences(value?: string) {
+   return uniqueStrings(
+      compactText(value, 9000)
+         .split(/(?<=[.!?])\s+/)
+         .map((sentence) => compactText(sentence, 700))
+         .filter(Boolean),
+      8,
+   );
+}
+
+function getTimeSensitiveSituation(packet: ProjectIntelligencePacket) {
+   const sentences = getSituationalSentences(packet.currentState);
+   return sentences.find((sentence) => /\b(?:today|tomorrow|tonight)\b/i.test(sentence)) || sentences.find((sentence) => /\b(?:due|deadline|this week)\b/i.test(sentence)) || sentences.find((sentence) => /\bscheduled\b/i.test(sentence)) || "";
+}
+
+function turnSituationIntoAction(value?: string) {
+   const sentence = compactText(value, 700).replace(/[.!?]+$/, "");
+
+   if (!sentence) {
+      return "";
+   }
+
+   const needPassive = sentence.match(/^The\s+(.+?)\s+needs?\s+to\s+be\s+(.+)$/i);
+   if (needPassive) {
+      const subject = needPassive[1].trim();
+      const remainder = needPassive[2].replace(/\s+so\b[\s\S]*$/i, "").trim();
+      const passiveAction = remainder.match(/^(sent|confirmed|booked|tested|finished|completed)(?:\s+(.*))?$/i);
+
+      if (passiveAction) {
+         const verbMap: Record<string, string> = {
+            sent: "Send",
+            confirmed: "Confirm",
+            booked: "Book",
+            tested: "Test",
+            finished: "Finish",
+            completed: "Complete",
+         };
+         const verb = verbMap[passiveAction[1].toLowerCase()] || "Complete";
+         const timing = compactText(passiveAction[2]);
+         return `${verb} the ${subject}${timing ? ` ${timing}` : ""}`;
+      }
+   }
+
+   const needActive = sentence.match(/^(?:I|We|You)\s+need\s+to\s+(.+)$/i);
+   if (needActive) {
+      return needActive[1];
+   }
+
+   const direct = sentence.match(/^(?:Need to|Must|Should|Have to)\s+(.+)$/i);
+   if (direct) {
+      return direct[1];
+   }
+
+   return sentence;
+}
+
+function getFirstOpenProjectOutcome(packet: ProjectIntelligencePacket, fallbackNextAction?: string) {
+   const urgent = getTimeSensitiveSituation(packet);
+
+   if (urgent) {
+      return turnSituationIntoAction(urgent);
+   }
+
+   if (packet.currentBuild?.title) {
+      return packet.currentBuild.title;
+   }
+
+   const unsatisfied = getHighestPriorityDependency(packet);
+   if (unsatisfied?.text) {
+      return unsatisfied.text;
+   }
+
+   return compactText(fallbackNextAction) || packet.profileSignals.priorities[0] || packet.profileSignals.milestones[0] || packet.profileSignals.requirements[0] || "";
+}
+
+function getProjectLeadReason(packet: ProjectIntelligencePacket, outcome: string) {
+   const stateSentences = getSituationalSentences(packet.currentState);
+   const urgent = getTimeSensitiveSituation(packet);
+   const causalClause = urgent.match(/\bso\s+(.+)$/i)?.[1]?.replace(/[.!?]+$/, "");
+   const supporting = stateSentences.find((sentence) => sentence !== urgent && !/^the remaining work includes/i.test(sentence) && getTextOverlapScore(sentence, outcome) < 2);
+   const dependency = getHighestPriorityDependency(packet);
+
+   if (causalClause) {
+      return `That matters because ${lowerSentenceStart(causalClause)}`;
+   }
+
+   if (dependency?.text && !outcome.toLowerCase().includes(dependency.text.toLowerCase())) {
+      return `It affects what can be decided or completed after it: ${lowerSentenceStart(dependency.text)}`;
+   }
+
+   if (supporting) {
+      return supporting;
+   }
+
+   if (packet.projectGoal) {
+      return `That is the clearest step that moves the project toward ${lowerSentenceStart(packet.projectGoal)}`;
+   }
+
+   return "Finishing it creates a clear handoff to the next unfinished part of the project";
+}
+
+function getLeadState(packet: ProjectIntelligencePacket) {
+   return packet.projectLeadState;
+}
+
+function buildNaturalNextActionGuidance(packet: ProjectIntelligencePacket, fallbackNextAction?: string): ProfileGuidanceDraft {
+   const lead = getLeadState(packet);
+   const nextMove = lead.nextMove || getFirstOpenProjectOutcome(packet, fallbackNextAction);
+   const after = lead.afterNextMove;
+
+   return {
+      currentUnderstanding: "",
+      assessment: lead.whyNow || `${nextMove} is the clearest unfinished outcome`,
+      recommendation: ensureSentence(nextMove),
+      reason: after ? `Once that is moving, ${lowerSentenceStart(after)}` : getProjectLeadReason(packet, nextMove),
+      watchOut: lead.risks.find((risk) => !/rsvp|attendance/i.test(risk)) || lead.risks[0] || "",
+      evidenceUsed: uniqueStrings([nextMove, lead.whyNow, after, ...lead.unresolvedWork.slice(0, 4)]),
+   };
+}
+
+function buildNaturalRiskGuidance(packet: ProjectIntelligencePacket, draft: ProfileGuidanceDraft): ProfileGuidanceDraft {
+   const lead = getLeadState(packet);
+   const visiblePriorityRisk = lead.risks.find((risk) => /rsvp|attendance/i.test(risk));
+   const lessObviousRisks = lead.risks.filter((risk) => risk !== visiblePriorityRisk);
+   const primary = lessObviousRisks[0] || visiblePriorityRisk;
+   const secondary = lessObviousRisks[1] || (visiblePriorityRisk !== primary ? visiblePriorityRisk : "");
+   const opportunity = lead.opportunities[0];
+
+   if (!primary) {
+      return {
+         ...draft,
+         assessment: "Nothing in the notes points to a hidden blocker yet, but ownership and validation are still worth checking",
+         recommendation: lead.nextMove ? ensureSentence(lead.nextMove) : draft.recommendation,
+         reason: opportunity || "Those are the two places where execution plans most often become fragile",
+         watchOut: "",
+         evidenceUsed: lead.unresolvedWork.slice(0, 5),
+      };
+   }
+
+   return {
+      ...draft,
+      currentUnderstanding: "",
+      assessment: primary,
+      recommendation: "",
+      reason: secondary || lead.whyNow || draft.reason,
+      watchOut: opportunity || "",
+      evidenceUsed: uniqueStrings([primary, secondary || "", opportunity || "", ...lead.unresolvedWork.slice(0, 4)]),
+   };
+}
+
+function getProjectLeadWorkLabel(value?: string) {
+   const clean = compactText(value, 900).replace(/[.!?]+$/, "");
+   const lower = clean.toLowerCase();
+
+   if (/rsvp|attendance reminder/.test(lower)) return "the RSVP reminder";
+   if (/it department|it team|a\/v support|reserve support/.test(lower)) return "IT A/V support";
+   if (/chair|delivery/.test(lower)) return "chair delivery";
+   if (/slideshow|retirement video|presentation equipment/.test(lower)) return "the slideshow test";
+
+   return lowerSentenceStart(clean);
+}
+
+function buildNaturalReadinessGuidance(packet: ProjectIntelligencePacket, draft: ProfileGuidanceDraft): ProfileGuidanceDraft {
+   const lead = getLeadState(packet);
+   const remaining = lead.unresolvedWork;
+
+   if (!remaining.length && packet.readiness.state === "complete") {
+      return {
+         ...draft,
+         currentUnderstanding: "",
+         assessment: "The project looks ready based on the work currently captured",
+         recommendation: "Run one final confirmation against the finished outcome before closing it",
+         reason: "That protects against a checked box hiding a missed handoff or validation step",
+         watchOut: lead.risks[0] || "",
+         evidenceUsed: uniqueStrings([lead.goal, ...packet.profileSignals.successCriteria]),
+      };
+   }
+
+   const labels = uniqueStrings(remaining.map(getProjectLeadWorkLabel), 6);
+   const first = labels[0] || getProjectLeadWorkLabel(lead.nextMove) || "the current priority";
+   const rest = labels.slice(1);
+   const rawRestLine = rest.length ? `${rest.slice(0, -1).join(", ")}${rest.length > 1 ? ", and " : ""}${rest[rest.length - 1]} also remain unresolved.` : "";
+   const restLine = rawRestLine ? `${rawRestLine.charAt(0).toUpperCase()}${rawRestLine.slice(1)}` : "";
+
+   return {
+      ...draft,
+      currentUnderstanding: "",
+      assessment: `Not yet. ${first.charAt(0).toUpperCase()}${first.slice(1)} is still unresolved. ${restLine}`.trim(),
+      recommendation: "",
+      reason: lead.whyNow || "The project is not ready until the remaining execution work is confirmed",
+      watchOut: lead.risks.find((risk) => !/rsvp|attendance/i.test(risk)) || lead.risks[0] || "",
+      evidenceUsed: uniqueStrings([...remaining.slice(0, 6), lead.whyNow]),
+   };
+}
+
 // ========================================
 // General reasoning profile
 // ========================================
 
 function buildGeneralGuidance(packet: ProjectIntelligencePacket, fallbackNextAction?: string): ProfileGuidanceDraft {
-   const signals = packet.profileSignals;
-   const dependency = getHighestPriorityDependency(packet);
-   const priority = signals.priorities[0];
-   const requirement = signals.requirements[0];
-   const currentUnderstanding = packet.currentState ? `${packet.projectTitle} is currently at ${packet.currentState}` : `${packet.projectTitle} has a defined project context but no reliable current state`;
-
-   if (signals.blockedItems.length) {
-      return {
-         currentUnderstanding,
-         assessment: "An explicit blocker is currently more important than adding new work",
-         recommendation: `Resolve the first blocker: ${signals.blockedItems[0]}`,
-         reason: "The blocker limits meaningful progress on the intended outcome",
-         watchOut: signals.blockedItems[1] || getReadinessWatchOut(packet),
-         evidenceUsed: signals.blockedItems.slice(0, 3),
-      };
-   }
-
-   if (dependency?.state === "unsatisfied") {
-      return {
-         currentUnderstanding,
-         assessment: "The next project decision is constrained by an unfinished dependency",
-         recommendation: getDependencyAction(dependency),
-         reason: "The dependency must be satisfied before later work can be judged accurately",
-         watchOut: getReadinessWatchOut(packet),
-         evidenceUsed: [dependency.text],
-      };
-   }
-
-   if (priority) {
-      return {
-         currentUnderstanding,
-         assessment: `The project already identifies ${priority} as its priority`,
-         recommendation: `Turn ${priority} into one measurable completed outcome`,
-         reason: "The declared priority is the best available basis for choosing the next action without inventing scope",
-         watchOut: "Do not split attention across lower-priority work until the outcome is testable",
-         evidenceUsed: [priority],
-      };
-   }
-
-   if (!packet.currentState) {
-      return {
-         currentUnderstanding,
-         assessment: "The intended project state is too vague for a confident recommendation",
-         recommendation: "Record the current state and the next required outcome in one concrete sentence",
-         reason: "The engine needs a before-and-after condition to distinguish useful progress from activity",
-         watchOut: "Avoid using broad labels such as planning or working on it without a visible result",
-         evidenceUsed: uniqueStrings([packet.projectGoal, signals.deliverable]),
-      };
-   }
-
-   return {
-      currentUnderstanding,
-      assessment: requirement ? `The next action should move the project toward its first explicit requirement: ${requirement}` : "The project has a current state, but no more specific workflow signal outranks the stated goal",
-      recommendation: compactText(fallbackNextAction) || (requirement ? `Complete the smallest verifiable part of this requirement: ${requirement}` : "Define one verifiable result that moves the project from its current state toward its goal"),
-      reason: "That creates a concrete decision point without pretending the project contains structure that was not provided",
-      watchOut: getReadinessWatchOut(packet) || "Watch for actions that create activity without changing the project state",
-      evidenceUsed: uniqueStrings([packet.currentState, requirement || "", packet.projectGoal]),
-   };
+   return buildNaturalNextActionGuidance(packet, fallbackNextAction);
 }
 
 function buildProfileGuidance(packet: ProjectIntelligencePacket, fallbackNextAction?: string) {
@@ -1392,7 +1676,15 @@ function getResearchReadinessIntentDraft(packet: ProjectIntelligencePacket, draf
 function lowerSentenceStart(value?: string) {
    const clean = compactText(value);
 
-   if (!clean || !/^[A-Z][a-z]/.test(clean)) {
+   if (!clean) {
+      return "";
+   }
+
+   if (/^A\s+/.test(clean)) {
+      return `a ${clean.slice(2)}`;
+   }
+
+   if (!/^[A-Z][a-z]/.test(clean)) {
       return clean;
    }
 
@@ -1463,15 +1755,7 @@ function applyIntent(intent: ProjectGuidanceIntent, packet: ProjectIntelligenceP
          return getPlanningRiskIntentDraft(packet, draft);
       }
 
-      const risk = getHighestRisk(packet);
-
-      return {
-         ...draft,
-         assessment: risk ? `The main current risk is ${risk.text}` : draft.watchOut || draft.assessment,
-         recommendation: draft.recommendation,
-         reason: risk ? `This risk is rated ${risk.severity} because it can weaken readiness or force rework` : draft.reason,
-         evidenceUsed: uniqueStrings([risk?.text || "", ...draft.evidenceUsed]),
-      };
+      return buildNaturalRiskGuidance(packet, draft);
    }
 
    if (intent === "decision") {
@@ -1501,11 +1785,7 @@ function applyIntent(intent: ProjectGuidanceIntent, packet: ProjectIntelligenceP
          return getPlanningReadinessIntentDraft(packet, draft);
       }
 
-      return {
-         ...draft,
-         assessment: getReadinessAssessment(packet),
-         reason: packet.readiness.reason || draft.reason,
-      };
+      return buildNaturalReadinessGuidance(packet, draft);
    }
 
    if (intent === "simplification") {
@@ -1538,27 +1818,563 @@ function applyIntent(intent: ProjectGuidanceIntent, packet: ProjectIntelligenceP
 function formatWatchOut(value?: string) {
    const clean = compactText(value);
 
-   if (!clean) {
+   if (!clean || /add the current state|record the current state|intended outcome|before-and-after condition/i.test(clean)) {
       return "";
    }
 
-   if (/^watch(?:\s+out)?(?:\s+for)?\s*:?/i.test(clean)) {
+   if (
+      /^(?:avoid|do not|don't|make sure|confirm|verify|watch|keep|book|send|test|coordinate|reserve|revisit|treat|use|finish|resolve|decide|define|write|the project should|the material should|the current option should|the active milestone should|i['’]d|i would)\b/i.test(
+         clean,
+      )
+   ) {
       return ensureSentence(clean);
    }
 
-   if (/^(?:avoid|buy|do not|don't|use|keep|make|verify|confirm|choose|each|run|limit|prefer)\b/i.test(clean)) {
+   if (/^(?:A|An|The|IT|A\/V)\s+/i.test(clean) || /\b(?:could|may|might|is not|are not|remains?|would)\b/i.test(clean)) {
       return ensureSentence(clean);
    }
 
-   return ensureSentence(`Watch for: ${lowerSentenceStart(clean)}`);
+   return ensureSentence(`One thing to keep an eye on is ${lowerSentenceStart(clean)}`);
 }
 
-function formatResponse(draft: ProfileGuidanceDraft) {
-   const firstParagraph = uniqueStrings([ensureSentence(draft.currentUnderstanding), ensureSentence(draft.assessment)]).join(" ");
-   const secondParagraph = uniqueStrings([ensureSentence(draft.recommendation), ensureSentence(draft.reason)]).join(" ");
-   const thirdParagraph = formatWatchOut(draft.watchOut);
+function formatResponse(draft: ProfileGuidanceDraft, intent?: ProjectGuidanceIntent) {
+   const directLookupIntents: ProjectGuidanceIntent[] = ["decision", "unresolved", "option-comparison", "hierarchy-comparison", "hierarchy-explanation", "material-tension", "material-decisions"];
 
-   return [firstParagraph, secondParagraph, thirdParagraph].filter(Boolean).join("\n\n");
+   if (intent && directLookupIntents.includes(intent)) {
+      return [draft.currentUnderstanding.trim(), draft.assessment.trim(), draft.recommendation.trim(), draft.reason.trim()].filter(Boolean).join("\n\n");
+   }
+
+   if (/^\d+\.\s/m.test(draft.assessment) && draft.assessment.includes("\n")) {
+      return [ensureSentence(draft.currentUnderstanding), draft.assessment.trim(), ensureSentence(draft.recommendation), ensureSentence(draft.reason)].filter(Boolean).join("\n\n");
+   }
+
+   const opening = ensureSentence(draft.currentUnderstanding);
+   const action = ensureSentence(draft.recommendation);
+   const assessment = ensureSentence(draft.assessment);
+   const reason = ensureSentence(draft.reason);
+   const watch = formatWatchOut(draft.watchOut);
+   const openingOverlapsAction = Boolean(opening && action && getTextOverlapScore(opening, action) >= 4);
+   const main = uniqueStrings([action, assessment, reason]).join(" ");
+
+   return [openingOverlapsAction ? "" : opening, main, watch].filter(Boolean).join("\n\n");
+}
+
+// ========================================
+// MK VIII — Canonical Project Understanding
+// Purpose:
+// Let Guidance reason from the shared project model instead of rebuilding
+// meaning from legacy evidence counts and readiness fields.
+// ========================================
+
+function hasCanonicalProjectUnderstanding(packet: ProjectIntelligencePacket) {
+   const understanding = packet.projectUnderstanding;
+
+   return Boolean(
+      understanding && understanding.version === "MK VIII" && (compactText(understanding.goal) || compactText(understanding.situation) || compactText(understanding.recommendedMove) || understanding.openWork.length || understanding.milestones.length),
+   );
+}
+
+function getCanonicalOpenWork(packet: ProjectIntelligencePacket) {
+   const understanding = packet.projectUnderstanding;
+   const unfinishedMilestones = understanding.milestones.filter((milestone) => milestone.status !== "complete").map((milestone) => milestone.title);
+
+   return uniqueStrings([...unfinishedMilestones, ...understanding.openWork], 8);
+}
+
+function getCanonicalPrimaryRisk(packet: ProjectIntelligencePacket) {
+   const understanding = packet.projectUnderstanding;
+   const risk = understanding.risks.find((item) => item.severity === "high") || understanding.risks.find((item) => item.severity === "medium") || understanding.risks[0];
+
+   if (!risk) {
+      return "";
+   }
+
+   const title = compactText(risk.title, 500);
+   const consequence = compactText(risk.consequence, 900);
+   const includeConsequence = Boolean(consequence && consequence.toLowerCase() !== title.toLowerCase() && getTextOverlapScore(title, consequence) < 4);
+
+   return compactText([title, includeConsequence ? consequence : ""].filter(Boolean).join(". "), 1200);
+}
+
+function getCanonicalMaterialCorpus(packet: ProjectIntelligencePacket) {
+   return compactText(
+      [
+         ...packet.materials.flatMap((material) => [material.title, material.summary, material.details, material.source]),
+         packet.projectTitle,
+         packet.projectGoal,
+         packet.currentState,
+         packet.projectUnderstanding.goal,
+         packet.projectUnderstanding.successState,
+         packet.projectUnderstanding.situation,
+         packet.projectUnderstanding.recommendedMove,
+         packet.projectUnderstanding.whyNow,
+         packet.projectUnderstanding.afterThis,
+         ...packet.projectUnderstanding.openWork,
+         ...packet.projectUnderstanding.completedWork,
+         ...packet.projectUnderstanding.decisions,
+         ...packet.projectUnderstanding.conversation.unresolvedQuestions,
+         ...packet.profileSignals.availableEvidence,
+         ...packet.profileSignals.decisions,
+         ...packet.profileSignals.options,
+         ...packet.profileSignals.assumptions,
+         ...packet.profileSignals.constraints,
+      ].join(" "),
+      64000,
+   );
+}
+
+function getCanonicalMaterialNames(packet: ProjectIntelligencePacket) {
+   return uniqueStrings(
+      packet.materials.map((material) => material.title),
+      5,
+   );
+}
+
+function getCanonicalMaterialTensions(packet: ProjectIntelligencePacket) {
+   return packet.projectUnderstanding.tensions.map((tension) => [tension.sideA, tension.sideB, tension.consequence, tension.decisionNeeded].filter(Boolean).join(" "));
+}
+
+function getCanonicalMaterialDecisions(packet: ProjectIntelligencePacket) {
+   const understanding = packet.projectUnderstanding;
+
+   return {
+      decided: understanding.confirmedDecisions.map((decision) => decision.statement),
+      unresolved: understanding.unresolvedDecisions.map((decision) => decision.statement),
+   };
+}
+
+function getCanonicalMaterialImpact(packet: ProjectIntelligencePacket, currentFocus: string) {
+   const understanding = packet.projectUnderstanding;
+   const selectedTitles = packet.materials.map((material) => material.title);
+   const affectedDecisions = uniqueStrings(
+      understanding.materials.flatMap((material) => material.decisionsAffected),
+      12,
+   );
+   const relatedMilestones = uniqueStrings(
+      understanding.materials.flatMap((material) => material.relatedMilestones),
+      12,
+   );
+   const tensions = understanding.tensions.slice(0, 3);
+
+   const additions = [
+      selectedTitles.length ? `The selected material adds evidence from ${selectedTitles.join(", ")}.` : "",
+      affectedDecisions.length ? `It affects these recorded decisions: ${affectedDecisions.join("; ")}.` : "",
+      relatedMilestones.length ? `It is connected to ${relatedMilestones.length} milestone${relatedMilestones.length === 1 ? "" : "s"}.` : "",
+      tensions.length ? `It introduces or clarifies ${tensions.length} project tension${tensions.length === 1 ? "" : "s"}.` : "",
+   ].filter(Boolean);
+
+   if (!additions.length) {
+      additions.push("The material adds reference context, but it does not yet change a recorded decision, milestone, or tension.");
+   }
+
+   const focusLine = currentFocus ? `For the current checkpoint—${currentFocus.replace(/[.!?]+$/, "")}—use only the evidence that changes a decision, risk, dependency, or completion check.` : "";
+
+   return [...additions, focusLine].filter(Boolean).join(" ");
+}
+
+function getCanonicalMaterialNextMove(packet: ProjectIntelligencePacket, currentFocus: string, afterThis: string) {
+   const understanding = packet.projectUnderstanding;
+   const unresolved = understanding.unresolvedDecisions[0];
+   const tension = understanding.tensions[0];
+
+   if (tension) {
+      return {
+         recommendation: tension.decisionNeeded,
+         reason: `${tension.consequence} Resolving it now keeps the current milestone from moving forward on conflicting assumptions.`,
+      };
+   }
+
+   if (unresolved) {
+      return {
+         recommendation: unresolved.statement,
+         reason: afterThis ? `This unresolved decision should be settled before the project moves to ${afterThis.replace(/[.!?]+$/, "")}.` : "This is the clearest unresolved decision tied to the current project state.",
+      };
+   }
+
+   return {
+      recommendation: currentFocus ? `Use the material to complete the current checkpoint: ${currentFocus.replace(/[.!?]+$/, "")}.` : understanding.recommendedMove || "Use the material to clarify the current project decision.",
+      reason: understanding.whyNow || "The material is useful only when it changes a current decision, risk, dependency, or completion check.",
+   };
+}
+
+function buildCanonicalProjectUnderstandingDraft(intent: ProjectGuidanceIntent, packet: ProjectIntelligencePacket, prompt = ""): ProfileGuidanceDraft | null {
+   if (!hasCanonicalProjectUnderstanding(packet)) {
+      return null;
+   }
+
+   const understanding = packet.projectUnderstanding;
+   const openWork = getCanonicalOpenWork(packet);
+   const primaryRisk = getCanonicalPrimaryRisk(packet);
+   const goal = compactText(understanding.goal || packet.projectGoal);
+   const situation = compactText(understanding.situation);
+   const nextMove = compactText(understanding.recommendedMove || packet.projectLeadState.nextMove);
+   const whyNow = compactText(understanding.whyNow || packet.projectLeadState.whyNow);
+   const afterThis = compactText(understanding.afterThis || packet.projectLeadState.afterNextMove);
+   const successState = compactText(understanding.successState);
+   const activeMilestone = understanding.milestones.find((milestone) => milestone.id === understanding.activeMilestoneId);
+   const currentFocus = compactText(activeMilestone?.title || nextMove);
+   const evidenceUsed = uniqueStrings(
+      [goal, situation, currentFocus, whyNow, afterThis, primaryRisk, ...understanding.timeline.map((item) => `${item.label}: ${item.dateText}`), ...openWork, ...packet.materials.map((material) => `${material.title}: ${material.summary}`)],
+      16,
+   );
+
+   if (intent === "material-impact") {
+      const materialNames = getCanonicalMaterialNames(packet);
+
+      return {
+         currentUnderstanding: materialNames.length ? `I’m using ${materialNames.join(", ")} as project context.` : "",
+         assessment: getCanonicalMaterialImpact(packet, currentFocus),
+         recommendation: "",
+         reason: "",
+         watchOut: "",
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "material-next") {
+      const materialMove = getCanonicalMaterialNextMove(packet, currentFocus, afterThis);
+
+      return {
+         currentUnderstanding: "The material does not replace the current milestone; it makes it more specific.",
+         assessment: materialMove.recommendation,
+         recommendation: "",
+         reason: materialMove.reason,
+         watchOut: "",
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "material-tension") {
+      const tensions = understanding.tensions;
+
+      return {
+         currentUnderstanding: "",
+         assessment: tensions.length ? tensions.map((tension, index) => `${index + 1}. ${tension.sideA} conflicts with ${tension.sideB}. ${tension.consequence}`).join("\n") : "I do not see a supported tension in the saved project evidence.",
+         recommendation: tensions[0]?.decisionNeeded || "",
+         reason: "",
+         watchOut: "",
+         evidenceUsed: uniqueStrings(
+            tensions.flatMap((tension) => tension.evidence.map((item) => item.quote)),
+            20,
+         ),
+      };
+   }
+
+   if (intent === "material-decisions") {
+      const decisions = getCanonicalMaterialDecisions(packet);
+      return {
+         currentUnderstanding: "",
+         assessment: normalizePrompt(prompt).includes("unresolved")
+            ? decisions.unresolved.length
+               ? decisions.unresolved.map((item, index) => `${index + 1}. ${item}`).join("\n")
+               : "The material does not leave a clear strategic decision unresolved."
+            : decisions.decided.length
+              ? decisions.decided.map((item, index) => `${index + 1}. ${item}`).join("\n")
+              : "The material does not record any clear final decisions yet.",
+         recommendation: normalizePrompt(prompt).includes("unresolved") || !decisions.unresolved.length ? "" : `Still unresolved:\n${decisions.unresolved.map((item, index) => `${index + 1}. ${item}`).join("\n")}`,
+         reason: "",
+         watchOut: "",
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "material-rationale") {
+      const tension = understanding.tensions[0];
+      const unresolved = understanding.unresolvedDecisions[0];
+
+      return {
+         currentUnderstanding: currentFocus ? `The current checkpoint is ${currentFocus.replace(/[.!?]+$/, "")}.` : "",
+         assessment: tension ? ensureSentence(`${tension.sideA} is in tension with ${tension.sideB}`) : unresolved ? ensureSentence(`The recommendation is addressing the unresolved decision: ${unresolved.statement}`) : ensureSentence(whyNow),
+         recommendation: tension?.decisionNeeded || unresolved?.statement || nextMove,
+         reason: understanding.whatItUnlocks || whyNow,
+         watchOut: tension?.consequence || understanding.watchOuts[0] || "",
+         evidenceUsed: uniqueStrings([...evidenceUsed, ...(tension?.evidence.map((item) => item.quote) || []), ...(unresolved?.evidence.map((item) => item.quote) || [])], 20),
+      };
+   }
+
+   if (intent === "material-recommendation") {
+      const materialMove = getCanonicalMaterialNextMove(packet, currentFocus, afterThis);
+      const tensions = understanding.tensions;
+      const decisions = getCanonicalMaterialDecisions(packet);
+
+      return {
+         currentUnderstanding: currentFocus ? ensureSentence(`The current checkpoint is ${currentFocus.replace(/[.!?]+$/, "")}`) : "",
+         assessment: tensions[0]
+            ? ensureSentence(`${tensions[0].sideA} is in tension with ${tensions[0].sideB}`)
+            : decisions.unresolved[0]
+              ? ensureSentence(`The main unresolved decision is ${decisions.unresolved[0]}`)
+              : "The selected material supports the current checkpoint without changing the project direction.",
+         recommendation: materialMove.recommendation,
+         reason: materialMove.reason,
+         watchOut: understanding.watchOuts[0] || "",
+         evidenceUsed: uniqueStrings(
+            [...evidenceUsed, ...understanding.confirmedDecisions.flatMap((decision) => decision.evidence.map((item) => item.quote)), ...understanding.unresolvedDecisions.flatMap((decision) => decision.evidence.map((item) => item.quote))],
+            20,
+         ),
+      };
+   }
+
+   if (intent === "milestone-focus") {
+      return {
+         currentUnderstanding: currentFocus ? `The saved current checkpoint is ${currentFocus.replace(/[.!?]+$/, "")}.` : "",
+         assessment: "That sounds like a move toward another progress checkpoint. Before switching, either finish the current checkpoint or mark it complete so Project Understanding and the homepage advance with you.",
+         recommendation: afterThis ? `The next saved checkpoint is ${afterThis.replace(/[.!?]+$/, "")}.` : "",
+         reason: whyNow,
+         watchOut: "",
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "rationale") {
+      return {
+         currentUnderstanding: currentFocus ? ensureSentence(currentFocus) : "",
+         assessment: whyNow || ensureSentence("This is the first unfinished checkpoint that the later work depends on"),
+         recommendation: afterThis ? ensureSentence(`Once it is settled, move to ${afterThis.replace(/[.!?]+$/, "")}`) : "",
+         reason: "",
+         watchOut: "",
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "progress-points") {
+      const points = understanding.milestones.map((milestone, index) => `${index + 1}. ${milestone.title}${milestone.status === "complete" ? " — complete" : milestone.status === "active" ? " — current" : ""}`);
+
+      return {
+         currentUnderstanding: "",
+         assessment: points.join("\n"),
+         recommendation: "",
+         reason: "",
+         watchOut: "",
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "relationship") {
+      const confirmed = understanding.confirmedDecisions.slice(0, 4);
+      const unresolved = understanding.unresolvedDecisions.slice(0, 3);
+      const options = understanding.options.slice(0, 3);
+      const relationships = understanding.dependencies.slice(0, 5);
+
+      const assessment = confirmed.length
+         ? confirmed.map((decision) => ensureSentence(decision.statement)).join(" ")
+         : relationships.length
+           ? relationships.map((dependency) => ensureSentence(`${dependency.before} informs ${dependency.after}`)).join(" ")
+           : "The project does not yet contain enough explicit evidence to define the relationship confidently.";
+
+      const recommendation = unresolved[0]?.statement ? ensureSentence(unresolved[0].statement) : options.length >= 2 ? ensureSentence(`Compare ${options[0].name} with ${options[1].name} against the project goal and constraints`) : nextMove;
+
+      return {
+         currentUnderstanding: "",
+         assessment,
+         recommendation,
+         reason: whyNow,
+         watchOut: understanding.watchOuts[0] || "",
+         evidenceUsed: uniqueStrings([...confirmed.flatMap((decision) => decision.evidence.map((evidence) => evidence.quote)), ...unresolved.flatMap((decision) => decision.evidence.map((evidence) => evidence.quote))]),
+      };
+   }
+
+   if (intent === "option-comparison" || intent === "hierarchy-comparison" || intent === "hierarchy-explanation") {
+      const options = understanding.options.slice(0, 4);
+      const tension = understanding.tensions[0];
+
+      if (!options.length) {
+         return {
+            currentUnderstanding: "",
+            assessment: "No explicit options are recorded yet, so there is nothing evidence-based to compare.",
+            recommendation: "",
+            reason: "",
+            watchOut: "",
+            evidenceUsed: [],
+         };
+      }
+
+      const assessment = options
+         .map((option, index) => {
+            const advantages = option.advantages.length ? ` Advantages: ${option.advantages.join("; ")}.` : "";
+            const disadvantages = option.disadvantages.length ? ` Disadvantages: ${option.disadvantages.join("; ")}.` : "";
+            return `${index + 1}. ${option.name}.${advantages}${disadvantages} ${option.fitWithGoal}`.trim();
+         })
+         .join("\n");
+
+      return {
+         currentUnderstanding: tension ? ensureSentence(`${tension.sideA} is in tension with ${tension.sideB}`) : "",
+         assessment,
+         recommendation: tension?.decisionNeeded || nextMove,
+         reason: whyNow,
+         watchOut: tension?.consequence || understanding.watchOuts[0] || "",
+         evidenceUsed: uniqueStrings(options.flatMap((option) => option.evidence.map((item) => item.quote))),
+      };
+   }
+
+   if (intent === "decision") {
+      const confirmed = understanding.confirmedDecisions.slice(0, 10);
+
+      return {
+         currentUnderstanding: "",
+         assessment: confirmed.length ? confirmed.map((decision, index) => `${index + 1}. ${decision.statement}`).join("\n") : "No confirmed decisions are explicitly recorded yet.",
+         recommendation: "",
+         reason: "",
+         watchOut: "",
+         evidenceUsed: uniqueStrings(
+            confirmed.flatMap((decision) => decision.evidence.map((evidence) => evidence.quote)),
+            20,
+         ),
+      };
+   }
+
+   if (intent === "conversation-summary") {
+      const completed = understanding.completedWork.length ? `Completed: ${understanding.completedWork.join(", ")}.` : "";
+      const decisions = understanding.decisions.length ? `Decided: ${understanding.decisions.join(", ")}.` : "";
+      const current = currentFocus ? `Current focus: ${currentFocus}.` : "";
+
+      return {
+         currentUnderstanding: "",
+         assessment: [completed, decisions, current].filter(Boolean).join(" ") || "The project has a clear current focus, but no completed decisions have been recorded yet.",
+         recommendation: "",
+         reason: "",
+         watchOut: "",
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "unresolved") {
+      const unresolved = understanding.unresolvedDecisions.slice(0, 8);
+
+      return {
+         currentUnderstanding: "",
+         assessment: unresolved.length ? unresolved.map((item, index) => `${index + 1}. ${item.statement}`).join("\n") : "No unresolved decisions are explicitly recorded.",
+         recommendation: "",
+         reason: "",
+         watchOut: "",
+         evidenceUsed: uniqueStrings(
+            unresolved.flatMap((item) => item.evidence.map((evidence) => evidence.quote)),
+            20,
+         ),
+      };
+   }
+
+   if (intent === "risk") {
+      const riskItems = understanding.risks
+         .filter((item, index, items) => items.findIndex((candidate) => candidate.title.toLowerCase() === item.title.toLowerCase()) === index)
+         .sort((left, right) => {
+            const leftObvious = /rsvp|attendance/i.test(left.title) ? 1 : 0;
+            const rightObvious = /rsvp|attendance/i.test(right.title) ? 1 : 0;
+            return leftObvious - rightObvious;
+         })
+         .slice(0, 3);
+      const primary = riskItems[0];
+      const secondary = riskItems[1];
+      const mitigation = compactText(primary?.mitigation || nextMove);
+
+      const assessment = primary
+         ? ensureSentence(primary.title)
+         : openWork.length > 1
+           ? ensureSentence(`The main thing to watch is the handoff between ${openWork[0]} and ${openWork[1]}; neither should be assumed complete until it is confirmed`)
+           : "I do not see a major hidden risk in the notes yet, but the current milestone still needs a clear confirmation before the project moves on.";
+
+      const reason = secondary ? ensureSentence(secondary.title) : "";
+      const watchOut = mitigation
+         ? ensureSentence(
+              mitigation
+                 .replace(/[.!?]+$/, "")
+                 .replace(/^book\b/i, "I’d book")
+                 .replace(/^confirm\b/i, "I’d confirm")
+                 .replace(/^send\b/i, "I’d send")
+                 .replace(/^test\b/i, "I’d test")
+                 .replace(/^coordinate\b/i, "I’d coordinate")
+                 .replace(/^(?!I’d\b)/, "I’d "),
+           )
+         : "";
+
+      return {
+         currentUnderstanding: "",
+         assessment,
+         recommendation: "",
+         reason,
+         watchOut,
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "readiness") {
+      const incomplete = openWork.slice(0, 5);
+
+      if (!incomplete.length && understanding.momentum === "complete") {
+         return {
+            currentUnderstanding: "",
+            assessment: successState ? ensureSentence(`Yes. ${successState}`) : "Yes. The project has reached its finished outcome.",
+            recommendation: "",
+            reason: "",
+            watchOut: "",
+            evidenceUsed,
+         };
+      }
+
+      const conciseItems = incomplete.map((item) => {
+         const lower = item.toLowerCase();
+
+         if (lower.includes("rsvp")) return "RSVP reminder";
+         if (lower.includes("slideshow") || lower.includes("retirement video")) return "slideshow test";
+         if (lower.includes("it department") || lower.includes("a/v support")) return "IT A/V support";
+         if (lower.includes("chair delivery")) return "chair delivery";
+
+         return item.replace(/^the\s+/i, "").trim();
+      });
+      const uniqueItems = uniqueStrings(conciseItems, 5);
+      const unresolvedSummary = uniqueItems.length === 1 ? uniqueItems[0] : uniqueItems.length === 2 ? `${uniqueItems[0]} and ${uniqueItems[1]}` : `${uniqueItems.slice(0, -1).join(", ")}, and ${uniqueItems[uniqueItems.length - 1]}`;
+
+      return {
+         currentUnderstanding: "",
+         assessment: ensureSentence(uniqueItems.length ? `Not yet. ${unresolvedSummary} ${uniqueItems.length === 1 ? "is" : "are"} still open` : "Not yet. The finished outcome has not been confirmed"),
+         recommendation: "",
+         reason: successState
+            ? ensureSentence(
+                 /day of the event|day-of execution|troubleshooting/i.test(successState)
+                    ? "Once those pieces are confirmed, the project is ready to shift fully into day-of execution instead of preparation and troubleshooting"
+                    : `Once those pieces are confirmed, ${successState.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}`,
+              )
+            : whyNow,
+         watchOut: "",
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "project-understanding") {
+      return {
+         currentUnderstanding: goal ? ensureSentence(goal) : "",
+         assessment: situation ? ensureSentence(situation) : "",
+         recommendation: nextMove,
+         reason: whyNow,
+         watchOut: primaryRisk,
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "simplification") {
+      return {
+         currentUnderstanding: situation ? ensureSentence(situation) : "",
+         assessment: currentFocus ? ensureSentence(`Keep the project centered on ${currentFocus.replace(/[.!?]+$/, "")}`) : "",
+         recommendation: nextMove,
+         reason: whyNow,
+         watchOut: primaryRisk,
+         evidenceUsed,
+      };
+   }
+
+   if (intent === "project-lead" || intent === "next-action" || intent === "general") {
+      const continuation = afterThis ? ensureSentence(`Once that is moving, ${afterThis.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}`) : "";
+
+      return {
+         currentUnderstanding: "",
+         assessment: nextMove,
+         recommendation: "",
+         reason: [whyNow, continuation].filter(Boolean).join(" "),
+         watchOut: primaryRisk && !/rsvp|attendance/i.test(primaryRisk) ? primaryRisk : "",
+         evidenceUsed,
+      };
+   }
+
+   return null;
 }
 
 // ========================================
@@ -1589,8 +2405,9 @@ export function buildProjectGuidance(input: ProjectGuidanceInput): ProjectGuidan
    }
 
    const profileDraft = buildProfileGuidance(packet, input.fallbackNextAction);
-   const draft = applyIntent(intent, packet, profileDraft, input.prompt);
-   const response = formatResponse(draft);
+   const canonicalDraft = buildCanonicalProjectUnderstandingDraft(intent, packet, input.prompt);
+   const draft = canonicalDraft || applyIntent(intent, packet, profileDraft, input.prompt);
+   const response = formatResponse(draft, intent);
    const confidence = Math.max(0, Math.min(98, Math.round(packet.confidence * 0.7 + packet.reasoningProfileConfidence * 0.3)));
 
    return {
@@ -1599,7 +2416,7 @@ export function buildProjectGuidance(input: ProjectGuidanceInput): ProjectGuidan
       response,
       judgment: draft.assessment,
       reason: draft.reason,
-      nextAction: draft.recommendation,
+      nextAction: draft.recommendation || packet.projectUnderstanding?.recommendedMove || packet.projectLeadState?.nextMove || "",
       watchOut: draft.watchOut,
       profile: packet.reasoningProfile,
       currentUnderstanding: draft.currentUnderstanding,

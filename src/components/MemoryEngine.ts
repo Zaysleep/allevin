@@ -1,6 +1,6 @@
 import { parseProjectDocument, readProjectMemory, type ParsedProjectDocument } from "@/lib/allevinProjectMemory";
 
-import { buildProjectIntelligencePacket, getEmptyProjectIntelligencePacket, type ProjectIntelligencePacket, type ProjectMaterialInput } from "@/lib/projectIntelligenceEngine";
+import { buildProjectIntelligencePacket, getEmptyProjectIntelligencePacket, type ProjectIntelligencePacket, type ProjectMaterialInput, type ProjectUnderstanding } from "@/lib/projectIntelligenceEngine";
 
 // ========================================
 // Memory Engine
@@ -395,6 +395,8 @@ const DELETED_PROJECT_KEYS_STORAGE_KEY = "allevin-project-deleted-keys";
 const CANVAS_STORAGE_KEY = "allevin-adaptive-work-canvas";
 
 const PROJECT_LIBRARY_STORAGE_KEY = "allevin-project-library";
+
+const ACTIVE_PROJECT_SELECTION_STORAGE_KEY = "allevin-active-project-selection-mkviii";
 
 const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
 
@@ -2196,7 +2198,7 @@ export function getActiveThreadAwareness(): ActiveThreadState {
 
          confidence: 40,
 
-         recommendedNextAction: "Start by creating a project or drafting in Canvas so ALLEVIN can understand what you are working on.",
+         recommendedNextAction: "Start by creating a project and adding working notes so ALLEVIN can understand what you are trying to accomplish.",
 
          suggestedDestination: "canvas",
 
@@ -3354,10 +3356,70 @@ function getSourceAwareCalendarCandidates(): SourceAwareActiveProject[] {
       });
 }
 
+function readActiveProjectSelectionForMemory() {
+   const selection = readObjectStorageSafe<{
+      projectId?: string;
+      title?: string;
+      updatedAt?: number;
+   }>(ACTIVE_PROJECT_SELECTION_STORAGE_KEY);
+
+   if (!selection) {
+      return null;
+   }
+
+   const projectId = sanitizeMemoryEngineId(selection.projectId);
+   const title = sanitizeMemoryEngineTitle(selection.title);
+
+   if (!projectId && !title) {
+      return null;
+   }
+
+   return {
+      projectId,
+      title,
+      updatedAt: typeof selection.updatedAt === "number" && Number.isFinite(selection.updatedAt) ? selection.updatedAt : 0,
+   };
+}
+
+function getPersistedSelectedProjectCandidate(projectCandidates: SourceAwareActiveProject[]) {
+   const selection = readActiveProjectSelectionForMemory();
+
+   if (!selection || !projectCandidates.length) {
+      return null;
+   }
+
+   const selectedTitleKey = getCanonicalProjectKey(selection.title);
+
+   const selected = projectCandidates.find((candidate) => {
+      const candidateTitleKey = getCanonicalProjectKey(candidate.title);
+
+      const titleMatch = Boolean(selectedTitleKey && candidateTitleKey && selectedTitleKey === candidateTitleKey);
+
+      const idMatch = Boolean(selection.projectId && (candidate.workflowId === selection.projectId || candidate.originBoardItemId === selection.projectId));
+
+      return idMatch || titleMatch;
+   });
+
+   if (!selected) {
+      return null;
+   }
+
+   return {
+      ...selected,
+      score: Math.max(selected.score, 5000),
+      reason: "The Projects workspace explicitly selected this project, so it is authoritative until the user selects another project.",
+   } satisfies SourceAwareActiveProject;
+}
+
 function getSourceAwareActiveProjectFromThreads(threads: ThreadMemoryObject[] = []) {
-   const candidates = [getSourceAwareCanvasCandidate(), ...getSourceAwareProjectLibraryCandidates(), ...getSourceAwareMaterialCandidates(), ...getSourceAwareThreadCandidates(threads), ...getSourceAwareCalendarCandidates()].filter(
-      Boolean,
-   ) as SourceAwareActiveProject[];
+   const projectCandidates = getSourceAwareProjectLibraryCandidates();
+   const selectedProject = getPersistedSelectedProjectCandidate(projectCandidates);
+
+   if (selectedProject) {
+      return selectedProject;
+   }
+
+   const candidates = [getSourceAwareCanvasCandidate(), ...projectCandidates, ...getSourceAwareMaterialCandidates(), ...getSourceAwareThreadCandidates(threads), ...getSourceAwareCalendarCandidates()].filter(Boolean) as SourceAwareActiveProject[];
 
    return candidates.sort((a, b) => b.score - a.score)[0] || null;
 }
@@ -3483,6 +3545,11 @@ export function getActiveProjectAwareness(): ActiveProjectAwareness {
 
 export function getProjectIntelligencePacket() {
    return getActiveProjectAwareness().projectIntelligence;
+}
+
+// MK VIII canonical read for Project workspace, AIDock, and future knowledge tools.
+export function getProjectUnderstanding(): ProjectUnderstanding {
+   return getActiveProjectAwareness().projectIntelligence.projectUnderstanding;
 }
 
 function buildThreadMemoryObjectFromSourceAwareCandidate(candidate: SourceAwareActiveProject, fallback?: ThreadMemoryObject): ThreadMemoryObject {

@@ -7,7 +7,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
    title: "Allevin",
-   description: "Adaptive AI workspace focused on reducing cognitive overload.",
+   description: "Allevin is a senior-level project assistant focused on reducing cognitive overload.",
 };
 
 export const viewport: Viewport = {
@@ -31,7 +31,7 @@ export default function RootLayout({
          <head>
             {/* ========================================
             Satoshi Font Import
-        ======================================== */}
+            ======================================== */}
             <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap" rel="stylesheet" />
          </head>
 

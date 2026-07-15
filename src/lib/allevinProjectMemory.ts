@@ -95,19 +95,31 @@ export type ProjectMemoryProjectType = "software" | "research" | "writing" | "pl
 
 export type ProjectMemoryProjectTypeSource = "explicit" | "document" | "legacy" | "unknown";
 
-export type ProjectRoadmapMemoryStatus = "not-started" | "in-progress" | "ready-for-review" | "blocked" | "completed" | "unknown";
+export type ProjectRoadmapMemoryStatus = "not-started" | "in-progress" | "ready-for-review" | "blocked" | "completed" | "archived" | "unknown";
 
 export interface ProjectRoadmapMemoryItem {
    id: string;
    order: number;
    title: string;
    status: ProjectRoadmapMemoryStatus;
+
+   // MK VIII milestone workspace fields.
+   goal: string;
+   whyItMatters: string;
+   startingPrompt: string;
+   workingContent: string;
+   decisions: string[];
+   openQuestions: string[];
+
    dependencies: string[];
    completionCriteria: string[];
+
+   createdAt: number;
+   updatedAt: number;
 }
 
 export interface CanonicalProjectMetadata {
-   schemaVersion: "MK VII";
+   schemaVersion: "MK VIII";
    projectType: ProjectMemoryProjectType;
    projectTypeSource: ProjectMemoryProjectTypeSource;
    currentState: string;
@@ -607,6 +619,10 @@ function sanitizeProjectRoadmapMemoryStatus(value?: string): ProjectRoadmapMemor
       case "done":
          return "completed";
 
+      case "archived":
+      case "archive":
+         return "archived";
+
       default:
          return "unknown";
    }
@@ -623,13 +639,23 @@ function createProjectRoadmapMemoryItem(value: Partial<ProjectRoadmapMemoryItem>
 
    const id = sanitizeProjectMemoryId(value.id) || `roadmap-${order}-${normalizeProjectKey(title) || "item"}`;
 
+   const now = Date.now();
+
    return {
       id,
       order,
       title,
       status: sanitizeProjectRoadmapMemoryStatus(value.status),
+      goal: sanitizeProjectMemorySummary(value.goal),
+      whyItMatters: sanitizeProjectMemorySummary(value.whyItMatters),
+      startingPrompt: sanitizeProjectMemorySummary(value.startingPrompt),
+      workingContent: sanitizeProjectMemoryBody(value.workingContent),
+      decisions: sanitizeProjectMemoryStringList(value.decisions, 40),
+      openQuestions: sanitizeProjectMemoryStringList(value.openQuestions, 40),
       dependencies: sanitizeProjectMemoryStringList(value.dependencies, 16),
-      completionCriteria: sanitizeProjectMemoryStringList(value.completionCriteria, 16),
+      completionCriteria: sanitizeProjectMemoryStringList(value.completionCriteria, 40),
+      createdAt: isValidProjectMemoryTimestamp(value.createdAt) ? Number(value.createdAt) : now,
+      updatedAt: isValidProjectMemoryTimestamp(value.updatedAt) ? Number(value.updatedAt) : now,
    };
 }
 
@@ -681,7 +707,15 @@ function buildRoadmapFromParsedDocument(parsed: ParsedProjectDocument) {
          title,
          status: "unknown" as const,
          dependencies: [],
+         goal: "",
+         whyItMatters: "",
+         startingPrompt: "",
+         workingContent: "",
+         decisions: [],
+         openQuestions: [],
          completionCriteria: [],
+         createdAt: Date.now(),
+         updatedAt: Date.now(),
       })),
    );
 }
@@ -703,8 +737,16 @@ function mergeProjectRoadmapMetadata(existing: ProjectRoadmapMemoryItem[] = [], 
                ...previous,
                ...item,
                status: item.status !== "unknown" ? item.status : previous.status,
+               goal: item.goal || previous.goal,
+               whyItMatters: item.whyItMatters || previous.whyItMatters,
+               startingPrompt: item.startingPrompt || previous.startingPrompt,
+               workingContent: item.workingContent || previous.workingContent,
+               decisions: item.decisions.length ? item.decisions : previous.decisions,
+               openQuestions: item.openQuestions.length ? item.openQuestions : previous.openQuestions,
                dependencies: item.dependencies.length ? item.dependencies : previous.dependencies,
                completionCriteria: item.completionCriteria.length ? item.completionCriteria : previous.completionCriteria,
+               createdAt: previous.createdAt || item.createdAt,
+               updatedAt: Math.max(previous.updatedAt || 0, item.updatedAt || 0, Date.now()),
             };
          })
          .concat(
@@ -754,7 +796,7 @@ function getCanonicalProjectMetadata(input: ProjectMemoryInput, existing?: Canon
         : sanitizeProjectMemoryStringList(existing?.implementationPreferences, 40);
 
    return {
-      schemaVersion: "MK VII",
+      schemaVersion: "MK VIII",
       projectType,
       projectTypeSource,
       currentState: sanitizeProjectMemorySummary(explicitMetadata?.currentState) || sanitizeProjectMemorySummary(parsed.currentState) || sanitizeProjectMemorySummary(existing?.currentState),
@@ -777,7 +819,7 @@ function sanitizeCanonicalProjectMetadata(value?: Partial<CanonicalProjectMetada
    const projectTypeSource: ProjectMemoryProjectTypeSource = value.projectTypeSource === "explicit" || value.projectTypeSource === "document" || value.projectTypeSource === "legacy" ? value.projectTypeSource : "unknown";
 
    const metadata: CanonicalProjectMetadata = {
-      schemaVersion: "MK VII",
+      schemaVersion: "MK VIII",
       projectType,
       projectTypeSource,
       currentState: sanitizeProjectMemorySummary(value.currentState),

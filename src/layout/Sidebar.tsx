@@ -6,16 +6,16 @@ import { useEffect, useState } from "react";
 
 import type { ElementType } from "react";
 
-import { House, NotebookPen, FolderKanban, CalendarDays } from "lucide-react";
+import { House, FolderKanban, CalendarDays } from "lucide-react";
 
 import { useWorkspace, type WorkspaceSystemStatus } from "@/components/WorkspaceContext";
 
 // ========================================
-// ALLEVIN MK VII Sidebar
+// ALLEVIN MK VIII Sidebar
 // Purpose:
 // Main navigation for the project workspace.
-// Projects hold the work, Canvas is for active writing,
-// and Calendar shows time blocks. AI response style now lives in AIDock.
+// Projects hold the work and Working Notes, Calendar protects time,
+// and the Dock guides each project toward completion.
 // ========================================
 
 type ProductModuleId = "home" | "canvas" | "calendar" | "integrations";
@@ -45,7 +45,7 @@ interface NavItem {
 const ACTIVE_PRODUCT_MODULE_STORAGE_KEY = "allevin-active-product-module";
 
 // ========================================
-// MK VII — Sidebar Route Sanitization
+// MK VIII — Sidebar Route Sanitization
 // ========================================
 
 const SIDEBAR_SANITIZE_LIMITS = {
@@ -105,7 +105,7 @@ const PRODUCT_NAV_EVENT_NAMES = [
    "allevin-nav-module-change",
 ];
 
-const WORKFLOW_EVENT_NAMES = ["allevin-send-to-canvas", "allevin-send-to-calendar", "allevin-calendar-readback", "allevin-internal-integration-suggestion"];
+const WORKFLOW_EVENT_NAMES = ["allevin-send-to-calendar", "allevin-calendar-readback", "allevin-internal-integration-suggestion"];
 
 // ========================================
 // Navigation
@@ -145,22 +145,6 @@ const navItems: NavItem[] = [
    },
 
    {
-      label: "Canvas",
-
-      icon: NotebookPen,
-
-      moduleId: "canvas",
-
-      targetId: "work-area",
-
-      workspaceView: "focus",
-
-      systemStatus: "focused-work-active",
-
-      assistantCue: "Active project work",
-   },
-
-   {
       label: "Calendar",
 
       icon: CalendarDays,
@@ -184,7 +168,7 @@ const navItems: NavItem[] = [
 function isProductModuleId(value?: string): value is ProductModuleId {
    const cleanValue = sanitizeSidebarRouteValue(value);
 
-   return cleanValue === "home" || cleanValue === "canvas" || cleanValue === "calendar" || cleanValue === "integrations";
+   return cleanValue === "home" || cleanValue === "calendar" || cleanValue === "integrations";
 }
 
 function getNavItemByModule(moduleId?: string) {
@@ -578,23 +562,26 @@ export default function Sidebar() {
             pointer-events-auto
             fixed
             bottom-3
-            left-3
-            right-3
+            left-1/2
             z-[100]
             flex
             min-h-14
+            w-[calc(100%-24px)]
+            max-w-[390px]
+            -translate-x-1/2
             items-center
             justify-between
             rounded-[20px]
             border
             border-[var(--border-subtle)]
             bg-[rgba(255,253,249,0.94)]
-            px-2
+            px-3
             py-2
             shadow-[var(--shadow-floating)]
             backdrop-blur-xl
 
             sm:min-h-16
+            sm:max-w-[430px]
 
             lg:bottom-auto
             lg:left-0
@@ -602,6 +589,8 @@ export default function Sidebar() {
             lg:top-0
             lg:h-screen
             lg:w-24
+            lg:max-w-none
+            lg:translate-x-0
             lg:flex-col
             lg:justify-start
             lg:rounded-none
@@ -662,11 +651,14 @@ export default function Sidebar() {
             className="
                grid
                w-full
-               grid-cols-4
+               max-w-[310px]
+               grid-cols-3
                items-center
-               gap-1
+               justify-self-center
+               gap-2
 
-               sm:gap-2
+               sm:max-w-[360px]
+               sm:gap-3
 
                lg:flex
                lg:flex-1
@@ -695,7 +687,7 @@ export default function Sidebar() {
                         group
                         relative
                         flex
-                        min-h-12
+                        min-h-11
                         w-full
                         shrink-0
                         flex-col
@@ -711,7 +703,7 @@ export default function Sidebar() {
                         transition-all
                         duration-200
 
-                        sm:min-h-14
+                        sm:min-h-12
 
                         lg:h-12
                         lg:w-12
@@ -809,7 +801,7 @@ export default function Sidebar() {
                   text-[var(--color-text-tertiary)]
                "
             >
-               MK VII
+               MK VIII
             </span>
          </div>
       </aside>

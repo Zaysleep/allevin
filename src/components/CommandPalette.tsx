@@ -1,7 +1,7 @@
 // ========================================
 // ALLEVIN Command Palette
 // Purpose:
-// Keyboard-first command layer for MK VII
+// Keyboard-first command layer for MK VIII
 // project-first navigation, references, schedule,
 // and simple workspace guidance.
 // ========================================
@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState, type ElementType } from "react";
 
-import { Command, Search, NotebookPen, House, CalendarDays, FolderKanban, ArrowRight, X } from "lucide-react";
+import { Command, Search, House, CalendarDays, FolderKanban, ArrowRight, X } from "lucide-react";
 
 import { useWorkspace, type WorkspaceSystemStatus } from "@/components/WorkspaceContext";
 
@@ -54,7 +54,7 @@ interface CommandItem {
 const commandGroupOrder: CommandGroup[] = ["Navigation"];
 
 // ========================================
-// MK VII — Command Palette Sanitization
+// MK VIII — Command Palette Sanitization
 // ========================================
 
 const COMMAND_SANITIZE_LIMITS = {
@@ -124,19 +124,6 @@ const commands: CommandItem[] = [
       activeView: "home",
       systemStatus: "workspace-stable",
       assistantCue: "Home opened.",
-   },
-
-   {
-      label: "Open Canvas",
-      description: "Open the writing space for your active project.",
-      group: "Navigation",
-      keywords: ["canvas", "draft", "write", "active work", "work surface", "focus", "continue", "start", "project"],
-      icon: NotebookPen,
-      moduleId: "canvas",
-      targetId: "work-area",
-      activeView: "focus",
-      systemStatus: "focused-work-active",
-      assistantCue: "Canvas opened. Continue your project here.",
    },
 
    {

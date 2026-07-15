@@ -10,8 +10,6 @@ import CommandPalette from "@/components/CommandPalette";
 
 import ClientHydrationGate from "@/components/ClientHydrationGate";
 
-import AdaptiveWorkCanvas from "@/components/AdaptiveWorkCanvas";
-
 import IntegrationAdapterLayer from "@/components/IntegrationAdapterLayer";
 
 import CalendarIntegrationPanel from "@/components/CalendarIntegrationPanel";
@@ -26,16 +24,18 @@ import { EnvironmentProvider } from "@/components/EnvironmentEngine";
 
 import { getAllevinDisplayName, hasAllevinUserProfile, saveAllevinUserProfile, resetAllevinTesterWorkspace } from "@/lib/allevinUserProfile";
 
+import { getActiveProjectAwareness } from "@/components/MemoryEngine";
+
 // ========================================
-// ALLEVIN MK VII Product Shell
+// ALLEVIN MK VIII Product Shell
 // Purpose:
 // Beginner-friendly project workspace layout.
-// MK VII keeps the first-use path clear:
-// Projects hold the work, Canvas shapes it,
-// Materials support it, and Calendar shows time blocks.
+// MK VIII keeps the product centered on three ideas:
+// Projects hold the work and materials, Calendar protects time,
+// and the Dock helps each project reach its finished outcome.
 // ========================================
 
-type ProductModuleId = "home" | "canvas" | "calendar" | "integrations";
+type ProductModuleId = "home" | "calendar" | "integrations";
 
 interface ProductModule {
    id: ProductModuleId;
@@ -61,12 +61,6 @@ const productModules: ProductModule[] = [
    },
 
    {
-      id: "canvas",
-
-      label: "Canvas",
-   },
-
-   {
       id: "calendar",
 
       label: "Calendar",
@@ -78,7 +72,7 @@ const productModules: ProductModule[] = [
 // ========================================
 
 function isProductModuleId(value?: string): value is ProductModuleId {
-   return value === "home" || value === "canvas" || value === "calendar" || value === "integrations";
+   return value === "home" || value === "calendar" || value === "integrations";
 }
 
 function getScrollTargetForModule(moduleId: ProductModuleId) {
@@ -91,9 +85,6 @@ function getScrollTargetForModule(moduleId: ProductModuleId) {
 
 function getModuleFromWorkflowEvent(eventName: string): ProductModuleId | null {
    switch (eventName) {
-      case "allevin-send-to-canvas":
-         return "canvas";
-
       case "allevin-prepare-integration":
       case "allevin-internal-integration-suggestion":
          return "integrations";
@@ -122,8 +113,8 @@ const LEGACY_PROJECT_MEMORY_STORAGE_KEY = "allevin-project-memory";
 const CALENDAR_EVENTS_STORAGE_KEY = "allevin-calendar-events-mki";
 
 // ========================================
-// MK VII — Page Shell Sanitization
-// Home reads stored Canvas, Projects, and Calendar data.
+// MK VIII — Page Shell Sanitization
+// Home reads stored Projects and Calendar data.
 // Treat stored text as untrusted before displaying it.
 // ========================================
 
@@ -292,9 +283,9 @@ function getHomeCalendarGlance() {
 
 function getGeneratedHomeGreeting() {
    const greetings = [
-      "ALLEVIN keeps your projects, active work, references, and schedule in one place.",
-      "Start with a project, continue the work in Canvas, and save useful notes or files as materials.",
-      "Choose a project, update it in Canvas, add materials, or schedule the next block of time.",
+      "ALLEVIN keeps your projects, Working Notes, materials, and schedule in one place.",
+      "Start with a project, keep the working notes and materials together, and use the Dock to decide what matters next.",
+      "Choose a project, update its Working Notes and progress points, add materials, or schedule the next focused block of time.",
       "Each project has one home. Projects stores the work, Canvas helps you shape it, and Calendar shows scheduled time.",
       "Keep it simple: choose a project, write in Canvas, save helpful materials, and schedule what needs time.",
    ];
@@ -576,51 +567,46 @@ function getHomeProjectKey(project: { title: string; body: string; source: strin
 
 function getHomeSuggestion(project: { title: string; body: string; source: string }) {
    if (!project.title) {
-      const starts = [
-         "Start in Projects by creating one project. Then open Canvas when you are ready to write or update the work.",
-         "Create or open a project first. ALLEVIN works best when notes, materials, schedule blocks, and Canvas updates stay connected.",
-         "Open Projects and choose what you are working on. Use Canvas for the active draft and Materials for references you want nearby.",
-         "Begin with one project. Add the goal, then use Canvas to shape the next update.",
-         "Projects is the starting point. Once the project exists, Canvas, Materials, and Calendar can stay connected to it.",
-      ];
+      return "Create a project and describe what you are trying to accomplish. ALLEVIN will turn that into editable Working Notes, progress points, and a clear starting move.";
+   }
 
-      return sanitizePageText(pickRandomItem(starts), PAGE_SANITIZE_LIMITS.suggestion);
+   try {
+      const awareness = getActiveProjectAwareness();
+      const understanding = awareness.projectIntelligence?.projectUnderstanding;
+
+      if (understanding) {
+         const recommendedMove = sanitizePageText(understanding.recommendedMove, PAGE_SANITIZE_LIMITS.suggestion);
+         const whyNow = sanitizePageText(understanding.whyNow, PAGE_SANITIZE_LIMITS.suggestion);
+
+         if (recommendedMove && whyNow) {
+            return sanitizePageText(`${recommendedMove}. ${whyNow}`, PAGE_SANITIZE_LIMITS.suggestion);
+         }
+
+         if (recommendedMove) {
+            return recommendedMove;
+         }
+      }
+   } catch {
+      // Fall through to the local note-based recommendation.
    }
 
    const lower = compactText(project.body).toLowerCase();
 
-   const hasActionLanguage = ["need to", "next step", "task", "update", "test", "create", "finish", "review", "build"].some((signal) => lower.includes(signal));
+   const nextSentence =
+      project.body
+         .split(/(?<=[.!?])\s+/)
+         .map((sentence) => compactText(sentence))
+         .find((sentence) => /\b(?:need to|needs to|next|should|must|confirm|send|build|review|test|finalize|schedule|create|write|collect)\b/i.test(sentence)) || "";
 
-   if (project.source === "Projects") {
-      const openings = [
-         `Open ${project.title} in Canvas and continue from the saved project.`,
-         `${project.title} is saved in Projects. Use Canvas for the next update so the project page stays clean.`,
-         `You can resume ${project.title} in Canvas, then keep supporting notes or files in Materials.`,
-         `The saved version of ${project.title} is ready. Open it in Canvas, update the work, and schedule time only if needed.`,
-      ];
-
-      return sanitizePageText(`${pickRandomItem(openings)} ${getGeneratedSuggestionTail()}`, PAGE_SANITIZE_LIMITS.suggestion);
+   if (nextSentence) {
+      return sanitizePageText(nextSentence, PAGE_SANITIZE_LIMITS.suggestion);
    }
 
-   if (hasActionLanguage) {
-      const openings = [
-         `${project.title} has a possible next action. Make that action specific, then schedule it if it needs protected time.`,
-         `${project.title} has enough direction to act on. Choose one next action and keep the rest as context.`,
-         `Choose one action from ${project.title} and make it clear enough to finish.`,
-         `Keep ${project.title} simple right now: choose one next action instead of making a bigger plan.`,
-      ];
-
-      return sanitizePageText(`${pickRandomItem(openings)} ${getGeneratedSuggestionTail()}`, PAGE_SANITIZE_LIMITS.suggestion);
+   if (lower.includes("goal") || lower.includes("success")) {
+      return "Review the current progress points and choose the first unfinished milestone that moves the project closer to its finished outcome.";
    }
 
-   const openings = [
-      `Keep shaping ${project.title} in Canvas until the next action is clear.`,
-      `${project.title} has a place to continue. Use Canvas for the active update and Materials for helpful references.`,
-      `For ${project.title}, keep the active work in Canvas and add only the references that help.`,
-      `Give ${project.title} one focused Canvas pass before scheduling it or saving the next update.`,
-   ];
-
-   return sanitizePageText(`${pickRandomItem(openings)} ${getGeneratedSuggestionTail()}`, PAGE_SANITIZE_LIMITS.suggestion);
+   return "Open the project, review the Working Notes, and choose one clear progress point to move forward.";
 }
 // ========================================
 // Home
@@ -691,15 +677,9 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
 
          setCalendarGlance(getHomeCalendarGlance());
 
-         setHomeSuggestionKey((currentKey) => {
-            if (currentKey === nextSuggestionKey) {
-               return currentKey;
-            }
+         setHomeSuggestionKey(nextSuggestionKey);
 
-            setHomeSuggestion(getHomeSuggestion(nextProject));
-
-            return nextSuggestionKey;
-         });
+         setHomeSuggestion(getHomeSuggestion(nextProject));
       }
 
       function refreshHomeContext() {
@@ -707,7 +687,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
             window.clearTimeout(refreshTimer);
          }
 
-         // Defer the Home refresh so project-memory events from Canvas/AIDock
+         // Defer the Home refresh so project-memory and Dock events
          // do not update Home state during another component's render/update cycle.
          refreshTimer = window.setTimeout(() => {
             refreshTimer = null;
@@ -738,6 +718,10 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
 
       window.addEventListener("allevin-project-library-update", refreshHomeContext);
 
+      window.addEventListener("allevin-project-progress-update", refreshHomeContext);
+
+      window.addEventListener("allevin-project-materials-update", refreshHomeContext);
+
       window.addEventListener("allevin-memory-update", refreshHomeContext);
 
       window.addEventListener("allevin-send-to-canvas", refreshHomeContext);
@@ -766,6 +750,10 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
          window.removeEventListener("allevin-project-memory-update", refreshHomeContext);
 
          window.removeEventListener("allevin-project-library-update", refreshHomeContext);
+
+         window.removeEventListener("allevin-project-progress-update", refreshHomeContext);
+
+         window.removeEventListener("allevin-project-materials-update", refreshHomeContext);
 
          window.removeEventListener("allevin-memory-update", refreshHomeContext);
 
@@ -798,7 +786,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
    }
 
    function handleTesterWorkspaceReset() {
-      const confirmed = window.confirm("Reset this test workspace? This clears saved Canvas, Projects, Calendar, and response style data in this browser only.");
+      const confirmed = window.confirm("Reset this test workspace? This clears saved Projects, Calendar, and response style data in this browser only.");
 
       if (!confirmed) {
          return;
@@ -821,24 +809,6 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
       window.setTimeout(() => {
          setResetNotice("");
       }, 2400);
-   }
-
-   function handleContinueLatestProjectInCanvas() {
-      const latestProjectPayload = getLatestProjectCanvasPayloadForHome();
-
-      setActiveModule("canvas");
-
-      if (!latestProjectPayload) {
-         return;
-      }
-
-      window.setTimeout(() => {
-         window.dispatchEvent(
-            new CustomEvent("allevin-send-to-canvas", {
-               detail: latestProjectPayload,
-            }),
-         );
-      }, 120);
    }
 
    if (!profileReady) {
@@ -865,7 +835,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                   Set up your studio.
                </h1>
 
-               <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--color-text-secondary)]">ALLEVIN uses your name for greetings. Your projects, references, active work, and schedule stay together in this browser.</p>
+               <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--color-text-secondary)]">ALLEVIN uses your name for greetings. Your projects, working notes, materials, and schedule stay together in this browser.</p>
 
                <form onSubmit={handleTesterProfileSubmit} className="mt-6 max-w-xl space-y-4">
                   <label className="block">
@@ -910,34 +880,26 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
    const steps = [
       {
          number: "1",
-
-         label: "Open Projects",
-
-         description: "Projects is where the work, schedule, and materials stay organized.",
+         label: "Tell ALLEVIN the goal",
+         description: "Create a project, give it a title, and describe what you are trying to accomplish.",
          module: "integrations" as ProductModuleId,
       },
       {
          number: "2",
-
-         label: "Continue in Canvas",
-
-         description: "Use Canvas to write, update, or shape the current project.",
-         module: "canvas" as ProductModuleId,
+         label: "Adjust the progress points",
+         description: "Review the Working Notes, milestones, open questions, and starting point ALLEVIN generates. Change anything that does not match your intent.",
+         module: "integrations" as ProductModuleId,
       },
       {
          number: "3",
-
-         label: "Add Materials",
-
-         description: "Save notes, documents, images, feedback, or references with a project.",
+         label: "Work with the Dock",
+         description: "Ask naturally, make decisions, and continue the conversation until the active milestone is complete.",
          module: "integrations" as ProductModuleId,
       },
       {
          number: "4",
-
-         label: "Schedule Time",
-
-         description: "Use Calendar to see events, deadlines, and focused work blocks.",
+         label: "Protect the time",
+         description: "Use Calendar for deadlines and focused work blocks that help the next move actually happen.",
          module: "calendar" as ProductModuleId,
       },
    ];
@@ -1000,29 +962,16 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                         {lastProject.title || "Your next project starts here."}
                      </h2>
 
-                     <div className="mt-7 grid grid-cols-1 gap-6 lg:grid-cols-2">
-                        <div className="studio-panel">
-                           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">You left off</p>
-
-                           <p className="mt-3 text-base leading-7 text-[var(--color-text-primary)]">
-                              {lastProject.body ? compactText(lastProject.body).slice(0, 260) : "Create or open a project, then use Canvas when you are ready to shape the work."}
-                              {lastProject.body && compactText(lastProject.body).length > 260 ? "..." : ""}
-                           </p>
-                        </div>
-
+                     <div className="mt-7">
                         <div className="studio-panel">
                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Your next move</p>
 
-                           <p className="mt-3 text-base leading-7 text-[var(--color-text-primary)]">{homeSuggestion}</p>
+                           <p className="mt-3 max-w-3xl text-base leading-7 text-[var(--color-text-primary)]">{homeSuggestion}</p>
                         </div>
                      </div>
 
                      <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
-                        <button onClick={handleContinueLatestProjectInCanvas} className="studio-button-primary w-full sm:w-auto sm:min-w-[168px]">
-                           Continue in Canvas
-                        </button>
-
-                        <button onClick={() => setActiveModule("integrations")} className="studio-button-secondary w-full sm:w-auto sm:min-w-[148px]">
+                        <button onClick={() => setActiveModule("integrations")} className="studio-button-primary w-full sm:w-auto sm:min-w-[148px]">
                            Open Projects
                         </button>
 
@@ -1046,7 +995,6 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                            Reset test workspace
                         </button>
                      </div>
-
                      {resetNotice && <p className="mt-4 text-sm text-[var(--color-text-secondary)]">{resetNotice}</p>}
                   </div>
 
@@ -1085,22 +1033,17 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                </div>
             </section>
 
-            {/* Studio tools */}
+            {/* MK VIII project flow */}
 
             <section>
-               <div className="mb-4 flex items-end justify-between gap-4 px-1 sm:px-2">
-                  <div>
-                     <h2 data-editorial-title="true" className="text-3xl sm:text-4xl">
-                        Keep the work moving.
-                     </h2>
-                  </div>
+               <div className="mb-4 px-1 sm:px-2">
+                  <h2 data-editorial-title="true" className="text-3xl sm:text-4xl">
+                     From goal to finished work.
+                  </h2>
                </div>
-
-               {/* ALLEVIN Dock starter guide */}
 
                <div
                   className="
-                     mb-6
                      overflow-hidden
                      rounded-[var(--radius-xl)]
                      border
@@ -1108,7 +1051,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                      bg-[var(--color-bg-soft)]
                   "
                >
-                  <div className="grid min-w-0 grid-cols-1 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.6fr)]">
+                  <div className="grid min-w-0 grid-cols-1 xl:grid-cols-[minmax(0,0.72fr)_minmax(0,1.9fr)]">
                      <div
                         className="
                            border-b
@@ -1119,98 +1062,77 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                            xl:border-r
                         "
                      >
-                        <p className="studio-eyebrow">ALLEVIN Dock starter guide</p>
+                        <p className="studio-eyebrow">How ALLEVIN works</p>
 
                         <h3 data-editorial-title="true" className="mt-3 text-2xl leading-tight sm:text-3xl">
-                           Use the Dock to find your next move.
+                           Start with the goal. Keep moving until it is finished.
                         </h3>
 
-                        <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">The ALLEVIN Dock works from your active project, Canvas, saved materials, and Calendar to understand the work and give you grounded guidance.</p>
+                        <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">
+                           ALLEVIN turns your description into a project foundation, helps you adjust the progress points, stays with you through the active milestone, and uses Calendar to protect the time.
+                        </p>
                      </div>
 
                      <div className="p-5 sm:p-6">
-                        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-                           <div>
-                              <span
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                           {steps.map((step) => (
+                              <button
+                                 key={step.label}
+                                 type="button"
+                                 onClick={() => setActiveModule(step.module)}
                                  className="
+                                    group
                                     flex
-                                    h-8
-                                    w-8
-                                    items-center
-                                    justify-center
-                                    rounded-full
+                                    h-full
+                                    min-w-0
+                                    flex-col
+                                    self-stretch
+                                    rounded-[var(--radius-lg)]
                                     border
                                     border-[var(--border-subtle)]
                                     bg-[var(--color-surface)]
-                                    text-sm
-                                    font-semibold
-                                    text-[var(--color-primary)]
+                                    p-4
+                                    text-left
+                                    transition-colors
+                                    hover:bg-white
                                  "
                               >
-                                 1
-                              </span>
+                                 <div className="flex w-full items-center justify-between gap-3">
+                                    <span
+                                       className="
+                                          flex
+                                          h-8
+                                          w-8
+                                          shrink-0
+                                          items-center
+                                          justify-center
+                                          rounded-full
+                                          border
+                                          border-[var(--border-subtle)]
+                                          bg-[var(--color-bg-soft)]
+                                          text-sm
+                                          font-semibold
+                                          text-[var(--color-primary)]
+                                       "
+                                    >
+                                       {step.number}
+                                    </span>
 
-                              <p className="mt-3 text-sm font-semibold text-[var(--color-text-primary)]">Share the outcome</p>
+                                    <span className="text-base text-[var(--color-text-tertiary)] transition-transform group-hover:translate-x-1">→</span>
+                                 </div>
 
-                              <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Start a project or explain what you want to finish, decide, research, write, or build.</p>
-                           </div>
+                                 <p className="mt-4 text-sm font-semibold text-[var(--color-text-primary)]">{step.label}</p>
 
-                           <div>
-                              <span
-                                 className="
-                                    flex
-                                    h-8
-                                    w-8
-                                    items-center
-                                    justify-center
-                                    rounded-full
-                                    border
-                                    border-[var(--border-subtle)]
-                                    bg-[var(--color-surface)]
-                                    text-sm
-                                    font-semibold
-                                    text-[var(--color-primary)]
-                                 "
-                              >
-                                 2
-                              </span>
-
-                              <p className="mt-3 text-sm font-semibold text-[var(--color-text-primary)]">Ask for direction</p>
-
-                              <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Ask what to work on next, what may be missing, or which option makes the most sense for the project.</p>
-                           </div>
-
-                           <div>
-                              <span
-                                 className="
-                                    flex
-                                    h-8
-                                    w-8
-                                    items-center
-                                    justify-center
-                                    rounded-full
-                                    border
-                                    border-[var(--border-subtle)]
-                                    bg-[var(--color-surface)]
-                                    text-sm
-                                    font-semibold
-                                    text-[var(--color-primary)]
-                                 "
-                              >
-                                 3
-                              </span>
-
-                              <p className="mt-3 text-sm font-semibold text-[var(--color-text-primary)]">Keep moving</p>
-
-                              <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Use the guidance in Canvas, add supporting materials, or schedule the next action when it needs dedicated time.</p>
-                           </div>
+                                 <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{step.description}</p>
+                              </button>
+                           ))}
                         </div>
 
                         <div className="mt-6 border-t border-[var(--border-subtle)] pt-5">
                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Try asking</p>
 
                            <div className="mt-3 flex flex-wrap gap-2">
-                              {["Start a new project.", "What should I work on next?", "What am I overlooking?", "Which option makes the most sense?", "Is this project ready to finish?"].map((prompt) => (
+                              {["What should I work on next?", "What am I overlooking?", "Why should I do that first?", "Is this project ready?", "What should I schedule next?"].map((prompt) => (
                                  <span
                                     key={prompt}
                                     className="
@@ -1232,70 +1154,6 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                         </div>
                      </div>
                   </div>
-               </div>
-
-               <div
-                  className="
-                     divide-y
-                     divide-[var(--border-subtle)]
-                     border-y
-                     border-[var(--border-subtle)]
-                     md:grid
-                     md:grid-cols-2
-                     md:divide-x
-                     md:divide-y-0
-                     xl:grid-cols-4
-                  "
-               >
-                  {steps.map((step) => (
-                     <button
-                        key={step.label}
-                        onClick={() => (step.module === "canvas" ? handleContinueLatestProjectInCanvas() : setActiveModule(step.module))}
-                        className="
-                           group
-                           flex
-                           min-h-[170px]
-                           flex-col
-                           items-start
-                           justify-between
-                           gap-6
-                           bg-transparent
-                           p-5
-                           text-left
-                           hover:bg-[rgba(255,255,255,0.48)]
-                           sm:p-6
-                        "
-                     >
-                        <div className="flex w-full items-center justify-between gap-4">
-                           <span
-                              className="
-                                 flex
-                                 h-9
-                                 w-9
-                                 items-center
-                                 justify-center
-                                 rounded-full
-                                 border
-                                 border-[var(--border-subtle)]
-                                 bg-[var(--color-surface)]
-                                 text-sm
-                                 font-semibold
-                                 text-[var(--color-primary)]
-                              "
-                           >
-                              {step.number}
-                           </span>
-
-                           <span className="text-lg text-[var(--color-text-tertiary)] transition-transform group-hover:translate-x-1">→</span>
-                        </div>
-
-                        <div>
-                           <p className="text-lg font-semibold text-[var(--color-text-primary)]">{step.label}</p>
-
-                           <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{step.description}</p>
-                        </div>
-                     </button>
-                  ))}
                </div>
             </section>
          </div>
@@ -1376,7 +1234,7 @@ export default function Home() {
             const detailTarget = sanitizeModuleEventValue(customEvent.detail?.target || customEvent.detail?.destination);
 
             const moduleId =
-               detailTarget === "canvas" ? "canvas" : detailTarget === "calendar" ? "calendar" : detailTarget === "projects" || detailTarget === "integrations" || detailTarget === "notes" ? "integrations" : getModuleFromWorkflowEvent(eventName);
+               detailTarget === "canvas" ? "integrations" : detailTarget === "calendar" ? "calendar" : detailTarget === "projects" || detailTarget === "integrations" || detailTarget === "notes" ? "integrations" : getModuleFromWorkflowEvent(eventName);
 
             if (moduleId) {
                activateModule(moduleId);
@@ -1551,11 +1409,6 @@ export default function Home() {
                               `}
                               >
                                  {/* Main workspace modules stay mounted when active so product events route cleanly. */}
-
-                                 <div id="canvas" className={activeModule === "canvas" ? "block min-w-0" : "hidden"}>
-                                    <AdaptiveWorkCanvas />
-                                 </div>
-
                                  <div id="calendar" className={activeModule === "calendar" ? "block min-w-0" : "hidden"}>
                                     <CalendarIntegrationPanel />
                                  </div>

@@ -13,94 +13,10 @@
 
 import { NextResponse } from "next/server";
 
-import type { AllevinLLMRequest, AllevinLLMResponse } from "@/lib/allevinLLMTypes";
+import type { AllevinContextPacket, AllevinLLMRequest, AllevinLLMResponse } from "@/lib/allevinLLMTypes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// ========================================
-// MK VI Context Packet Types
-// Kept local so this route does not require
-// immediate changes to allevinLLMTypes.ts.
-// ========================================
-
-type AllevinContextPacket = {
-   version?: string;
-
-   userIntent?: {
-      rawPrompt?: string;
-      normalizedPrompt?: string;
-      intentType?: string;
-   };
-
-   currentProject?: {
-      title?: string;
-      type?: string;
-      location?: string;
-      status?: string;
-      priority?: string;
-
-      body?: string;
-
-      // MK VII Project Awareness
-      currentState?: string;
-      goal?: string;
-      needsToAdd?: string;
-      immediateNextStep?: string;
-      buildOrder?: string[];
-      completionCriteria?: string[];
-      constraints?: string[];
-      implementationPreferences?: string[];
-
-      canvasContent?: string;
-      canvasUpdatedAt?: number;
-      projectUpdatedAt?: number;
-
-      latestProjectNote?: string;
-      recommendedNextAction?: string;
-   };
-
-   projects?: {
-      count?: number;
-      titles?: string[];
-      latestTitle?: string;
-   };
-
-   projectMaterials?: {
-      count?: number;
-      selectedTitles?: string[];
-      titles?: string[];
-      summaries?: string[];
-      usefulSignals?: string[];
-
-      // MK VII Project Awareness
-      selectedMaterialInsights?: string[];
-      selectedMaterialNextSteps?: string[];
-      recentMaterialInsights?: string[];
-      recentMaterialNextSteps?: string[];
-   };
-
-   calendar?: {
-      hasUpcomingEvents?: boolean;
-      nextEventSummary?: string;
-      todaySummary?: string;
-   };
-
-   cognition?: {
-      state?: string;
-      label?: string;
-      mood?: string;
-      momentum?: string;
-      suggestion?: string;
-      adapts?: string;
-   };
-
-   responseRules?: {
-      tone?: string;
-      format?: string;
-      avoid?: string[];
-   };
-};
 
 type MaterialInterpretationKind = "document" | "image" | "note" | "research" | "feedback" | "reference" | "unknown";
 
@@ -267,6 +183,107 @@ function sanitizeRouteTimestamp(value?: number) {
    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function sanitizeRouteEvidence(values?: Array<{ sourceType?: string; sourceId?: string; quote?: string }>) {
+   return Array.isArray(values)
+      ? values
+           .map((item) => ({ sourceType: sanitizeRouteSmallText(item?.sourceType), sourceId: sanitizeRouteSmallText(item?.sourceId), quote: sanitizeRouteText(item?.quote, ROUTE_SANITIZE_LIMITS.material) }))
+           .filter((item) => item.quote)
+           .slice(0, 40)
+      : [];
+}
+
+function sanitizeRouteDecisions(values?: Array<{ statement?: string; status?: "confirmed" | "unresolved" | "assumed"; evidence?: Array<{ sourceType?: string; sourceId?: string; quote?: string }>; affects?: string[] }>) {
+   return Array.isArray(values)
+      ? values
+           .map((item) => ({
+              statement: sanitizeRouteText(item?.statement, ROUTE_SANITIZE_LIMITS.material),
+              status: item?.status === "confirmed" || item?.status === "unresolved" || item?.status === "assumed" ? item.status : undefined,
+              evidence: sanitizeRouteEvidence(item?.evidence),
+              affects: sanitizeRouteStringArray(item?.affects, 20, ROUTE_SANITIZE_LIMITS.smallText),
+           }))
+           .filter((item) => item.statement)
+           .slice(0, 30)
+      : [];
+}
+
+function sanitizeRouteOptions(
+   values?: Array<{ name?: string; advantages?: string[]; disadvantages?: string[]; dependencies?: string[]; risks?: string[]; fitWithGoal?: string; evidence?: Array<{ sourceType?: string; sourceId?: string; quote?: string }> }>,
+) {
+   return Array.isArray(values)
+      ? values
+           .map((item) => ({
+              name: sanitizeRouteTitle(item?.name),
+              advantages: sanitizeRouteStringArray(item?.advantages, 12, ROUTE_SANITIZE_LIMITS.material),
+              disadvantages: sanitizeRouteStringArray(item?.disadvantages, 12, ROUTE_SANITIZE_LIMITS.material),
+              dependencies: sanitizeRouteStringArray(item?.dependencies, 12, ROUTE_SANITIZE_LIMITS.material),
+              risks: sanitizeRouteStringArray(item?.risks, 12, ROUTE_SANITIZE_LIMITS.material),
+              fitWithGoal: sanitizeRouteText(item?.fitWithGoal, ROUTE_SANITIZE_LIMITS.material),
+              evidence: sanitizeRouteEvidence(item?.evidence),
+           }))
+           .filter((item) => item.name)
+           .slice(0, 12)
+      : [];
+}
+
+function sanitizeRouteTensions(values?: Array<{ sideA?: string; sideB?: string; consequence?: string; decisionNeeded?: string; evidence?: Array<{ sourceType?: string; sourceId?: string; quote?: string }> }>) {
+   return Array.isArray(values)
+      ? values
+           .map((item) => ({
+              sideA: sanitizeRouteText(item?.sideA, ROUTE_SANITIZE_LIMITS.material),
+              sideB: sanitizeRouteText(item?.sideB, ROUTE_SANITIZE_LIMITS.material),
+              consequence: sanitizeRouteText(item?.consequence, ROUTE_SANITIZE_LIMITS.material),
+              decisionNeeded: sanitizeRouteNextStep(item?.decisionNeeded),
+              evidence: sanitizeRouteEvidence(item?.evidence),
+           }))
+           .filter((item) => item.sideA && item.sideB)
+           .slice(0, 12)
+      : [];
+}
+
+function sanitizeRouteUnderstanding(value?: AllevinLLMRequest["projectUnderstanding"]) {
+   if (!value) return undefined;
+   return {
+      goal: sanitizeRouteSummary(value.goal),
+      successState: sanitizeRouteSummary(value.successState),
+      situation: sanitizeRouteSummary(value.situation),
+      momentum: sanitizeRouteSmallText(value.momentum),
+      currentFocus: sanitizeRouteNextStep(value.currentFocus),
+      recommendedMove: sanitizeRouteNextStep(value.recommendedMove),
+      whyNow: sanitizeRouteSummary(value.whyNow),
+      whatItUnlocks: sanitizeRouteSummary(value.whatItUnlocks),
+      afterThis: sanitizeRouteNextStep(value.afterThis),
+      watchOuts: sanitizeRouteStringArray(value.watchOuts, 12, ROUTE_SANITIZE_LIMITS.material),
+      openWork: sanitizeRouteStringArray(value.openWork, 20, ROUTE_SANITIZE_LIMITS.material),
+      completedWork: sanitizeRouteStringArray(value.completedWork, 20, ROUTE_SANITIZE_LIMITS.material),
+      decisions: sanitizeRouteStringArray(value.decisions, 20, ROUTE_SANITIZE_LIMITS.material),
+      confirmedDecisions: sanitizeRouteDecisions(value.confirmedDecisions),
+      unresolvedDecisions: sanitizeRouteDecisions(value.unresolvedDecisions),
+      assumptions: sanitizeRouteDecisions(value.assumptions),
+      options: sanitizeRouteOptions(value.options),
+      tensions: sanitizeRouteTensions(value.tensions),
+      constraints: sanitizeRouteStringArray(value.constraints, 20, ROUTE_SANITIZE_LIMITS.material),
+      successCriteria: sanitizeRouteStringArray(value.successCriteria, 20, ROUTE_SANITIZE_LIMITS.material),
+      unresolvedQuestions: sanitizeRouteStringArray(value.unresolvedQuestions, 20, ROUTE_SANITIZE_LIMITS.material),
+      risks: sanitizeRouteStringArray(value.risks, 20, ROUTE_SANITIZE_LIMITS.material),
+      dependencies: sanitizeRouteStringArray(value.dependencies, 20, ROUTE_SANITIZE_LIMITS.material),
+      evidence: sanitizeRouteEvidence(value.evidence),
+      activeMilestone: value.activeMilestone
+         ? {
+              id: sanitizeRouteSmallText(value.activeMilestone.id),
+              title: sanitizeRouteTitle(value.activeMilestone.title),
+              goal: sanitizeRouteSummary(value.activeMilestone.goal),
+              whyItMatters: sanitizeRouteSummary(value.activeMilestone.whyItMatters),
+              startingPrompt: sanitizeRouteSummary(value.activeMilestone.startingPrompt),
+              workingContent: sanitizeRouteBody(value.activeMilestone.workingContent),
+              decisions: sanitizeRouteStringArray(value.activeMilestone.decisions, 30, ROUTE_SANITIZE_LIMITS.material),
+              openQuestions: sanitizeRouteStringArray(value.activeMilestone.openQuestions, 30, ROUTE_SANITIZE_LIMITS.material),
+              completionEvidence: sanitizeRouteStringArray(value.activeMilestone.completionEvidence, 30, ROUTE_SANITIZE_LIMITS.material),
+              status: sanitizeRouteSmallText(value.activeMilestone.status),
+           }
+         : undefined,
+   };
+}
+
 function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinContextPacket | undefined {
    if (!contextPacket) {
       return undefined;
@@ -334,6 +351,14 @@ function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinCon
          suggestion: sanitizeRouteNextStep(contextPacket.cognition?.suggestion),
          adapts: sanitizeRouteSmallText(contextPacket.cognition?.adapts),
       },
+      projectUnderstanding: sanitizeRouteUnderstanding(contextPacket.projectUnderstanding),
+      conversation: {
+         lastUserPrompt: sanitizeRouteText(contextPacket.conversation?.lastUserPrompt, ROUTE_SANITIZE_LIMITS.prompt),
+         lastAssistantResponse: sanitizeRouteText(contextPacket.conversation?.lastAssistantResponse, ROUTE_SANITIZE_LIMITS.context),
+         lastRecommendation: sanitizeRouteNextStep(contextPacket.conversation?.lastRecommendation),
+         currentTopic: sanitizeRouteSummary(contextPacket.conversation?.currentTopic),
+         requestedTransformation: sanitizeRouteSmallText(contextPacket.conversation?.requestedTransformation),
+      },
       responseRules: {
          tone: sanitizeRouteSmallText(contextPacket.responseRules?.tone),
          format: sanitizeRouteSmallText(contextPacket.responseRules?.format),
@@ -343,6 +368,8 @@ function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinCon
                  .filter(Boolean)
                  .slice(0, 12)
             : [],
+         depth: sanitizeRouteSmallText(contextPacket.responseRules?.depth),
+         groundedResponse: sanitizeRouteText(contextPacket.responseRules?.groundedResponse, 7000),
       },
    };
 }
@@ -359,7 +386,19 @@ function sanitizePayload(payload: AllevinLLMRequestWithContext): AllevinLLMReque
       projectStage: sanitizeRouteSmallText(payload.projectStage),
       currentLocation: sanitizeRouteSmallText(payload.currentLocation),
       priority: payload.priority === "low" || payload.priority === "medium" || payload.priority === "high" ? payload.priority : undefined,
-      maxWords: typeof payload.maxWords === "number" && Number.isFinite(payload.maxWords) ? Math.max(40, Math.min(260, payload.maxWords)) : undefined,
+      maxWords: typeof payload.maxWords === "number" && Number.isFinite(payload.maxWords) ? Math.max(40, Math.min(700, payload.maxWords)) : undefined,
+      responseStyle: payload.responseStyle === "direct" || payload.responseStyle === "conversational" || payload.responseStyle === "editorial" || payload.responseStyle === "detailed" ? payload.responseStyle : undefined,
+      groundedResponse: sanitizeRouteText(payload.groundedResponse, 7000),
+      conversation: payload.conversation
+         ? {
+              lastUserPrompt: sanitizeRouteText(payload.conversation.lastUserPrompt, ROUTE_SANITIZE_LIMITS.prompt),
+              lastAssistantResponse: sanitizeRouteText(payload.conversation.lastAssistantResponse, ROUTE_SANITIZE_LIMITS.context),
+              lastRecommendation: sanitizeRouteNextStep(payload.conversation.lastRecommendation),
+              currentTopic: sanitizeRouteSummary(payload.conversation.currentTopic),
+              requestedTransformation: sanitizeRouteSmallText(payload.conversation.requestedTransformation),
+           }
+         : undefined,
+      projectUnderstanding: sanitizeRouteUnderstanding(payload.projectUnderstanding),
       contextPacket: sanitizeContextPacket(payload.contextPacket),
       materialInterpretation: sanitizeMaterialInterpretationPayload(payload.materialInterpretation),
    };
@@ -412,6 +451,8 @@ function stringifyContextPacket(contextPacket?: AllevinContextPacket) {
          projectMaterials: safeContextPacket.projectMaterials || {},
          calendar: safeContextPacket.calendar || {},
          cognition: safeContextPacket.cognition || {},
+         projectUnderstanding: safeContextPacket.projectUnderstanding || {},
+         conversation: safeContextPacket.conversation || {},
          responseRules: safeContextPacket.responseRules || {},
       },
       null,
@@ -678,7 +719,7 @@ function getModeInstruction(mode: AllevinLLMMode | undefined) {
       case "material-interpretation":
          return "Interpret the selected material in a useful, user-facing way. Explain what it helps with, what details matter, and the next practical move. Keep the tone natural and do not sound like a lab report.";
       case "project-guidance":
-         return "Give project-aware guidance using the active project, Canvas, schedule, and available materials.";
+         return "Preserve and conversationally deliver the authoritative grounded project-lead answer. Do not replace its judgment.";
       case "calendar-to-task":
          return "Turn calendar or event context into one clear scheduling/task suggestion.";
       case "aidock-guidance":
@@ -730,7 +771,42 @@ function getProjectSpecificToneGuide(request: AllevinLLMRequestWithContext) {
       : `${baseRule} For general projects, keep the next move specific and reduce ambiguity without inventing domain details.`;
 }
 
+function buildProjectGuidanceDeliveryPrompt(request: AllevinLLMRequestWithContext) {
+   const groundedResponse = cleanText(request.groundedResponse || request.contextPacket?.responseRules?.groundedResponse || request.focus);
+   const understanding = request.projectUnderstanding || request.contextPacket?.projectUnderstanding;
+
+   return `
+You are ALLEVIN MK VIII's conversational delivery layer.
+
+USER QUESTION:
+${cleanText(request.conversation?.lastUserPrompt || request.contextPacket?.userIntent?.rawPrompt || request.userInstruction)}
+
+AUTHORITATIVE GROUNDED ANSWER:
+${groundedResponse}
+
+PROJECT UNDERSTANDING:
+${JSON.stringify(understanding || {}, null, 2)}
+
+Rules:
+- Preserve the active milestone, confirmed decisions, unresolved decisions, named options, tensions, recommendation, reason, and what it unlocks.
+- Answer the exact user question.
+- Do not introduce a different recommendation.
+- Do not turn confirmed facts into uncertainty.
+- Do not claim a decision, option, or tension exists unless it appears above.
+- Do not recommend completed work.
+- Do not add metaphors, jokes, motivational filler, productivity slogans, or generic advice.
+- Never use breadcrumbs, universe, ice cream, journey, magic, chaos, gremlins, or "break it into manageable steps."
+- If the grounded answer says no supported decision, option, or tension exists, preserve that limitation.
+- Return ONLY valid JSON with title, focus, usefulContext, nextStep, summary, confidence.
+- Put the complete conversational answer in focus.
+   `.trim();
+}
+
 function buildPrompt(request: AllevinLLMRequestWithContext) {
+   if (request.mode === "project-guidance" && cleanText(request.groundedResponse || request.contextPacket?.responseRules?.groundedResponse || request.focus)) {
+      return buildProjectGuidanceDeliveryPrompt(request);
+   }
+
    const contextPacketText = stringifyContextPacket(request.contextPacket);
    const materialInterpretationText = stringifyMaterialInterpretation(request.materialInterpretation);
 
@@ -894,6 +970,79 @@ function clampConfidence(value: unknown) {
    return Math.max(0, Math.min(100, value));
 }
 
+function getProjectGuidanceGroundedResponse(request: AllevinLLMRequestWithContext) {
+   return cleanText(request.groundedResponse || request.contextPacket?.responseRules?.groundedResponse || request.focus);
+}
+
+function boundaryTokens(value?: string) {
+   const stop = new Set(["about", "after", "again", "because", "before", "current", "project", "should", "their", "there", "these", "this", "through", "using", "what", "when", "where", "which", "with", "work"]);
+   return new Set(
+      compactText(value)
+         .toLowerCase()
+         .split(/[^a-z0-9]+/)
+         .filter((token) => token.length >= 4 && !stop.has(token)),
+   );
+}
+
+function boundaryOverlap(left?: string, right?: string) {
+   const leftTokens = boundaryTokens(left);
+   const rightTokens = boundaryTokens(right);
+   if (!leftTokens.size) return 1;
+   let overlap = 0;
+   leftTokens.forEach((token) => {
+      if (rightTokens.has(token)) overlap += 1;
+   });
+   return overlap / leftTokens.size;
+}
+
+function projectGuidanceCandidatePassesBoundary(request: AllevinLLMRequestWithContext, candidate?: string) {
+   const grounded = getProjectGuidanceGroundedResponse(request);
+   const cleanCandidate = cleanText(candidate);
+   const lower = cleanCandidate.toLowerCase();
+   const understanding = request.projectUnderstanding || request.contextPacket?.projectUnderstanding;
+   if (!grounded || !cleanCandidate) return false;
+
+   const banned = [
+      /\bbreadcrumbs?\b/i,
+      /\buniverse'?s way\b/i,
+      /\bice cream flavors?\b/i,
+      /\bjourney\b/i,
+      /\bmagic\b/i,
+      /\bgremlins?\b/i,
+      /\bchaos\b/i,
+      /\bbreak (?:it|things) into manageable steps\b/i,
+      /\bfocus on what matters\b/i,
+      /\balign with (?:your|the) goals?\b/i,
+      /\bprioritize effectively\b/i,
+      /\bstreamline your workflow\b/i,
+   ];
+   if (banned.some((pattern) => pattern.test(cleanCandidate))) return false;
+
+   const required = [
+      understanding?.activeMilestone?.title,
+      ...(understanding?.confirmedDecisions || []).map((item) => item.statement),
+      ...(understanding?.options || []).map((item) => item.name),
+      ...(understanding?.tensions || []).flatMap((item) => [item.sideA, item.sideB]),
+      understanding?.recommendedMove,
+   ]
+      .map((item) => compactText(item))
+      .filter(Boolean)
+      .slice(0, 12);
+
+   const preserved = required.filter((statement) => {
+      const words = statement
+         .toLowerCase()
+         .split(/[^a-z0-9]+/)
+         .filter((word) => word.length >= 5)
+         .slice(0, 5);
+      return words.some((word) => lower.includes(word));
+   });
+
+   const requiredMinimum = Math.min(required.length, 2);
+   const lengthRatio = cleanCandidate.length / Math.max(grounded.length, 1);
+   return boundaryOverlap(grounded, cleanCandidate) >= 0.32 && lengthRatio >= 0.45 && preserved.length >= requiredMinimum;
+}
+
 // ========================================
 // Route
 // ========================================
@@ -943,7 +1092,7 @@ export async function POST(request: Request) {
          body: JSON.stringify({
             model,
             temperature: payload.mode === "aidock-guidance" || payload.mode === "material-interpretation" ? 0.42 : 0.35,
-            max_tokens: payload.mode === "material-interpretation" ? 620 : 420,
+            max_tokens: payload.mode === "project-guidance" ? Math.max(520, Math.min(1200, Math.round((payload.maxWords || 520) * 1.65))) : payload.mode === "material-interpretation" ? 620 : 420,
             response_format: { type: "json_object" },
             messages: buildOpenAIMessages(payload),
          }),
@@ -964,6 +1113,25 @@ export async function POST(request: Request) {
       }
 
       const parsed = parseLLMJson(content);
+
+      if (payload.mode === "project-guidance" && !projectGuidanceCandidatePassesBoundary(payload, parsed.focus || parsed.summary || parsed.usefulContext)) {
+         const groundedResponse = getProjectGuidanceGroundedResponse(payload);
+         return NextResponse.json(
+            sanitizeLLMResult({
+               ok: true,
+               mode: payload.mode as AllevinLLMResponse["mode"],
+               source: payload.source,
+               title: sanitizeRouteTitle(payload.title || getContextProjectTitle(payload)),
+               focus: sanitizeRouteSummary(groundedResponse),
+               usefulContext: sanitizeRouteSummary(payload.usefulContext),
+               nextStep: sanitizeRouteNextStep(payload.nextStep || getContextNextAction(payload)),
+               summary: sanitizeRouteSummary(groundedResponse),
+               confidence: 88,
+               usedFallback: true,
+            }),
+            { status: 200 },
+         );
+      }
 
       const result: AllevinLLMResponse = sanitizeLLMResult({
          ok: true,
