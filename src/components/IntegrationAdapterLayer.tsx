@@ -345,6 +345,12 @@ interface ProjectMilestone {
    workingContent: string;
    decisions: string[];
    openQuestions: string[];
+
+   // Hidden milestone intelligence. The Progress list stays light, while
+   // AIDock and the milestone workspace can reason from real dependencies,
+   // completion checks, and recorded evidence.
+   dependencies: string[];
+   completionCriteria: string[];
    completionEvidence: string[];
 
    order: number;
@@ -1246,189 +1252,1553 @@ function inferProjectTrackingStatus(project: ProjectLibraryItem): ProjectTrackin
 
 function splitProjectDescriptionSentences(value?: string) {
    return sanitizeProjectBody(value)
-      .split(/(?<=[.!?])\s+|\n{2,}/)
-      .map((sentence) => sanitizeProjectBody(sentence))
+      .replace(/\r/g, "\n")
+      .replace(/\n{2,}/g, "\n")
+      .split(/(?<=[.!?])\s+|\n+|;\s+(?=[A-Z0-9])/)
+      .map((sentence) => compactText(sentence))
       .filter(Boolean);
 }
 
-function normalizeProjectCheckpoint(value?: string) {
-   return sanitizeProjectTitle(
-      sanitizeProjectBody(value)
-         .replace(/^(?:before launch|before release|to finish|i need to|we need to|need to|needs to|must|should)\s*/i, "")
-         .replace(/^(?:and|then)\s+/i, "")
-         .replace(/[.;]+$/g, ""),
-   );
-}
+const PROJECT_INTAKE_FILLER_PATTERNS = [
+   /^(?:so|okay|alright|basically|essentially|honestly|currently|right now)\b\s*,?\s*/i,
+   /^(?:i just wanted to say|i wanted to explain|the idea is that|what i am thinking is|what i'm thinking is)\b\s*/i,
+   /^(?:also|another thing is|one more thing is|and then)\b\s*/i,
+];
 
-function extractProjectDescriptionMilestones(description?: string) {
-   const clean = sanitizeProjectBody(description);
-   const actionVerbs = "(?:finalize|define|decide|confirm|create|build|write|research|collect|design|implement|test|validate|prepare|deploy|launch|review|coordinate|schedule|organize|document|choose|establish|clarify)";
-   const source =
-      clean.match(/(?:before\s+(?:launch|release|deployment)|to\s+(?:launch|finish|complete|deliver))[^,.]*,\s*(?:i|we)\s+need\s+to\s+([\s\S]*?)(?=\n\n|success\s+means|$)/i)?.[1] ||
-      clean.match(/(?:i|we)\s+need\s+to\s+([\s\S]*?)(?=\n\n|success\s+means|$)/i)?.[1] ||
-      "";
+function cleanProjectIntakeStatement(value?: string, limit = 520) {
+   let clean = sanitizeProjectBody(value)
+      .replace(/^(?:[-*•]|\d+[.)])\s*/, "")
+      .replace(/\s+/g, " ")
+      .trim();
 
-   const candidates: string[] = [];
+   PROJECT_INTAKE_FILLER_PATTERNS.forEach((pattern) => {
+      clean = clean.replace(pattern, "");
+   });
 
-   if (source) {
-      const splitPattern = new RegExp(`(?:,\\s+|\\s+and\\s+)(?=${actionVerbs}\\b)`, "gi");
+   clean = clean
+      .replace(/^(?:and|but)\s+/i, "")
+      .replace(/\b(?:you know|kind of|sort of)\b/gi, "")
+      .replace(/\s+/g, " ")
+      .replace(/^[,;:\s]+|[,;:\s]+$/g, "")
+      .trim();
 
-      candidates.push(
-         ...source
-            .split(splitPattern)
-            .map((item) => normalizeProjectCheckpoint(item))
-            .filter(Boolean),
-      );
+   if (!clean) {
+      return "";
    }
 
-   if (!candidates.length) {
-      for (const sentence of splitProjectDescriptionSentences(clean)) {
-         if (!new RegExp(`\\b${actionVerbs}\\b`, "i").test(sentence)) {
-            continue;
-         }
+   const clipped = clean.length > limit ? `${clean.slice(0, limit).trim()}…` : clean;
+   return `${clipped.charAt(0).toUpperCase()}${clipped.slice(1)}`;
+}
 
-         const checkpoint = normalizeProjectCheckpoint(sentence.replace(/^(?:before launch|before release)[^,]*,\s*/i, "").replace(/^(?:i|we)\s+/i, ""));
+function getProjectIntakeStatementKey(value?: string) {
+   return cleanProjectIntakeStatement(value, 700)
+      .toLowerCase()
+      .replace(/\b(?:the|a|an|this|that|project|should|will|must|needs?|need|want|would|could)\b/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+}
 
-         if (checkpoint && checkpoint.length <= 220) {
-            candidates.push(checkpoint);
-         }
+function uniqueProjectIntakeStatements(values: string[], limit = 8) {
+   const result: string[] = [];
+   const keys: string[] = [];
+
+   for (const value of values) {
+      const clean = cleanProjectIntakeStatement(value);
+      const key = getProjectIntakeStatementKey(clean);
+
+      if (!clean || clean.length < 8 || !key || keys.some((existing) => existing === key || existing.includes(key) || key.includes(existing))) {
+         continue;
+      }
+
+      keys.push(key);
+      result.push(clean.replace(/[.!?]+$/, ""));
+
+      if (result.length >= limit) {
+         break;
       }
    }
 
-   const seen = new Set<string>();
+   return result;
+}
 
-   return candidates
-      .map((candidate) =>
-         candidate
-            .replace(/^and\s+/i, "")
-            .replace(/\s+/g, " ")
-            .replace(/[.;]+$/g, "")
-            .trim(),
+function splitProjectIntakeClauses(value?: string) {
+   return splitProjectDescriptionSentences(value)
+      .flatMap((sentence) => sentence.split(/,\s+(?=(?:and\s+)?(?:i|we|it|this|that)\b)|\s+(?:and then|also)\s+/i).map((part) => cleanProjectIntakeStatement(part)))
+      .filter(Boolean);
+}
+
+function projectStatementIsUncertain(value: string) {
+   return /\b(?:may|might|could|possibly|probably|perhaps|thinking about|considering|not sure|unsure|do not know|don't know|does not know|doesn't know|still need to (?:decide|choose|confirm|determine|select|finalize)|need to (?:decide|choose|confirm|determine|select|finalize)|have not (?:yet )?(?:decided|chosen|confirmed|selected|finalized)|has not (?:yet )?(?:decided|chosen|confirmed|selected|finalized)|haven't (?:decided|chosen|confirmed|selected|finalized)|hasn't (?:decided|chosen|confirmed|selected|finalized)|not decided|not chosen|not confirmed|not finalized|whether|which approach|what should|who should)\b/i.test(
+      value,
+   );
+}
+
+function projectStatementIsCurrentFact(value: string) {
+   const clean = cleanProjectIntakeStatement(value, 900);
+   if (!clean) return false;
+
+   if (/\b(?:have|has|had|we|i)\s+(?:already\s+)?(?:decided|chosen|selected|confirmed|committed)\b|\b(?:has|have)\s+been\s+(?:decided|chosen|selected|confirmed)\b/i.test(clean)) {
+      return false;
+   }
+
+   return (
+      projectStatementIsSituation(clean) ||
+      /\b(?:currently includes?|currently contains?|current lease ends?|lease ends? in|already own|already have|(?:i|we)\s+(?:already\s+)?have\s+(?!already\s+(?:decided|chosen|selected|confirmed))|(?:i|we)\s+do\s+not\s+(?:yet\s+)?have|collection includes?|collection contains?|consists of|is spread across|are spread across|stored across|some .{0,100} (?:have|include|contain)|many .{0,80} do not|total number of .{0,80} (?:is|are) not known|not yet inventoried|nothing has been)\b/i.test(
+         clean,
       )
-      .filter((candidate) => {
-         const key = candidate.toLowerCase();
+   );
+}
 
-         if (!candidate || seen.has(key) || /^success means\b/i.test(candidate)) {
-            return false;
-         }
+function projectStatementIsDecision(value: string) {
+   const clean = cleanProjectIntakeStatement(value);
 
-         seen.add(key);
-         return true;
-      })
-      .slice(0, 8);
+   if (!clean || projectStatementIsUncertain(clean) || /\b(?:do not|don't|cannot|can't|would|could|may|might)\b/i.test(clean)) {
+      return false;
+   }
+
+   if (/\b(?:need|needs|must|has|have)\s+to\s+come\s+before\b/i.test(clean)) {
+      return true;
+   }
+
+   return /\b(?:will|will be|is scheduled|is set|has been chosen|has been selected|has been decided|has been confirmed|is confirmed|is approved|uses|will use|built with|using|deployed through|deployed on|hosted on|comes before|takes priority|is the priority|remains|will remain|includes|will include|excludes|will exclude|must preserve|must remain)\b/i.test(
+      clean,
+   );
+}
+
+function projectStatementIsSuccess(value: string) {
+   return /\b(?:success means|success would mean|success looks like|success will mean|successful when|project is successful when|done means|done when|complete when|ready when|must be true|should feel|should allow|should help|should be able to|users? can|ready to share|ready to launch)\b/i.test(
+      value,
+   );
+}
+
+function projectStatementIsSituation(value: string) {
+   return /\b(?:currently|right now|at the moment|early in|early planning|planning stage|draft stage|research underway|waiting for|implementation in progress|in progress|not started|already|nothing has been|have not|has not|haven't|hasn't|no .{0,80}\b(?:selected|chosen|confirmed|completed|started|finalized))\b/i.test(
+      value,
+   );
+}
+
+function projectStatementIsConstraint(value: string) {
+   return /\b(?:budget|deadline|time limit|within\s+\d+|only|cannot|can't|do not|don't|must|needs? to|required|requirement|constraint|accessible|accessibility|wcag|privacy|security|legal|policy|emissions|insurance|safety|reliability|maintenance|compatibility|platform|browser|mobile|keyboard|screen reader|quality|service|resale|noise|sound limits?|sound should|sound must|sound cannot|quiet[- ]hours?|walkways?|entrances?|emergency access|shared space|environment|small team|solo developer|one volunteer|one person|single person|comfort|fitment|support|maintainability|avoid|preserve|without)\b/i.test(
+      value,
+   );
+}
+
+function projectStatementIsGoal(value: string) {
+   return (
+      /\b(?:start|starting|build|building|create|creating|design|designing|plan|planning|organize|organizing|launch|launching|write|writing|research|researching|develop|developing|prepare|preparing|complete|completing|produce|producing|improve|improving|replace|replacing|introduce|introducing|modify|modifying|upgrade|upgrading|deliver|delivering|establish|establishing)\b/i.test(
+         value,
+      ) &&
+      !/\b(?:do not|don't|avoid|without|cannot|can't)\b/i.test(value) &&
+      !projectStatementIsSuccess(value) &&
+      !projectStatementIsSituation(value)
+   );
+}
+
+function stripProjectIntakeLead(value: string) {
+   return cleanProjectIntakeStatement(value)
+      .replace(/^(?:i|we)\s+(?:want|would like|would love|plan|hope|need)\s+to\s+/i, "")
+      .replace(/^(?:the goal is to|my goal is to|our goal is to)\s+/i, "")
+      .replace(/^(?:start|create|set up)\s+(?:a\s+)?project\s+(?:around|about|to)\s+/i, "")
+      .replace(/[.!?,;:\s]+$/, "")
+      .trim();
+}
+
+function normalizeProjectQuestionSubject(value: string) {
+   return cleanProjectIntakeStatement(value, 220)
+      .replace(/^(?:and|or)\s+/i, "")
+      .replace(/^(?:the\s+)?question\s+of\s+/i, "")
+      .replace(/[.!?]+$/, "")
+      .trim();
+}
+
+function makeProjectIntakeQuestion(value: string) {
+   let clean = normalizeProjectQuestionSubject(value)
+      .replace(/^(?:i|we)\s+(?:still\s+)?need\s+to\s+(?:decide|choose|confirm|determine|figure out|clarify|select|finalize)\s+/i, "")
+      .replace(/^(?:i|we)\s+(?:am|are)\s+not\s+sure\s+(?:about\s+)?/i, "")
+      .replace(/^(?:i|we)\s+(?:have|has)\s+not\s+(?:yet\s+)?(?:chosen|decided|confirmed|selected|finalized)\s+/i, "")
+      .trim();
+
+   if (!clean) return "";
+   if (/^(?:who|what|when|where|why|how|which|is|are|can|should|will|does|do)\b/i.test(clean)) return `${clean.charAt(0).toUpperCase()}${clean.slice(1)}?`;
+   if (/^whether\s+/i.test(clean)) {
+      const subject = clean.replace(/^whether\s+/i, "").trim();
+      return subject ? `Should ${subject.charAt(0).toLowerCase()}${subject.slice(1)}?` : "";
+   }
+   const roleMatch = clean.match(/^(?:the\s+)?(?:actual\s+)?(purpose|role|scope|direction|priority)\s+of\s+(.+)$/i);
+   if (roleMatch) return `What ${roleMatch[1].toLowerCase()} should ${roleMatch[2]} have?`;
+   const budgetMatch = clean.match(/^(?:the\s+)?(?:final\s+)?budgets?\s+(?:for|of)\s+(.+)$/i);
+   if (budgetMatch) return `What is the budget for ${budgetMatch[1]}?`;
+   const targetMatch = clean.match(/^(.+?)\s+targets?$/i);
+   if (targetMatch) return `What should the ${targetMatch[1].toLowerCase()} target be?`;
+   const specMatch = clean.match(/^(.+?)\s+specifications?$/i);
+   if (specMatch) return `What specifications should be used for ${specMatch[1].toLowerCase()}?`;
+   if (/^(?:exact\s+)?(?:parts?|options?|tools?|vendors?|sources?|systems?|platforms?|methods?|approaches?)$/i.test(clean)) return `Which ${clean.toLowerCase()} should be chosen?`;
+   if (/^(?:final\s+)?(?:budgets?|requirements?|dates?|owners?|locations?|limits?)$/i.test(clean)) return `What are the ${clean.toLowerCase()}?`;
+   return `What still needs to be decided about ${clean.charAt(0).toLowerCase()}${clean.slice(1)}?`;
+}
+
+function splitProjectDecisionItems(value: string) {
+   const normalized = cleanProjectIntakeStatement(value, 900)
+      .replace(/\s+or\s+whether\s+/gi, ", whether ")
+      .replace(/\s+and\s+whether\s+/gi, ", whether ");
+
+   return normalized
+      .split(/,\s*(?=(?:which|what|whether|who|how|the|a|an|exact|final|ride|wheel|exhaust|installation|budget|timeline|deadline|owner|platform|tool|location)\b)|\s+and\s+(?=(?:which|what|whether|who|how)\b)/i)
+      .map((item) => normalizeProjectQuestionSubject(item))
+      .filter((item) => item.length >= 4);
+}
+
+function extractProjectSuccessCriteria(description: string) {
+   const clean = sanitizeProjectBody(description);
+   const marker = /(?:success\s+(?:means|would\s+mean|looks\s+like|will\s+mean)|the\s+project\s+is\s+successful\s+when|done\s+means|done\s+when|complete\s+when)\s*[:,-]?\s*/i;
+   const match = marker.exec(clean);
+
+   if (!match) {
+      return uniqueProjectIntakeStatements(splitProjectDescriptionSentences(clean).filter(projectStatementIsSuccess), 5);
+   }
+
+   const tail = clean.slice(match.index + match[0].length).split(/\n{2,}|\b(?:current situation|confirmed decisions|open questions|constraints|working notes|initial milestones|recommended starting point)\s*:/i)[0];
+   const criteria = splitProjectDescriptionSentences(tail)
+      .map((sentence) => stripProjectIntakeLead(sentence.replace(/^(?:success\s+)?(?:would\s+)?mean\s*/i, "").replace(/^(?:and|also)\s+/i, "")))
+      .filter((sentence) => sentence.length >= 10);
+
+   return uniqueProjectIntakeStatements(criteria, 6);
+}
+
+function normalizeConfirmedProjectDecision(value: string) {
+   const original = cleanProjectIntakeStatement(value, 700)
+      .replace(/[.!?]+$/, "")
+      .trim();
+   if (!original || projectStatementIsSuccess(original) || projectStatementIsCurrentFact(original)) return "";
+
+   const explicitDecision = original.match(/^(?:i|we)\s+(?:have|had)\s+(?:already\s+)?decided\s+that\s+(.+)$/i);
+   if (explicitDecision) {
+      const statement = explicitDecision[1].trim();
+      return statement ? `${statement.charAt(0).toUpperCase()}${statement.slice(1)}` : "";
+   }
+
+   const phaseBudget = original.match(/^(?:i|we)\s+(?:would like|want|plan|intend)\s+to\s+keep\s+(.+?)\s+(?:under|below|within|at)\s+(\$[\d,]+(?:\.\d{1,2})?)/i);
+   if (phaseBudget) {
+      const rawSubject = phaseBudget[1].replace(/^(?:the\s+)?/i, "").trim();
+      const subject = rawSubject.replace(/\s+budget$/i, "").trim();
+      return `The ${subject ? `${subject} ` : ""}budget will stay at or below ${phaseBudget[2]}`;
+   }
+
+   const limitedFirstVersion = original.match(/^(?:the\s+)?(?:event|project|first\s+(?:version|phase|release|setup))\s+should\s+(?:probably\s+)?be\s+limited\s+to\s+(.+?)(?:\s+for\s+the\s+first\s+(?:version|phase|event))?$/i);
+   if (limitedFirstVersion && !/\bprobably\b/i.test(original)) {
+      const scope = limitedFirstVersion[1]
+         .replace(/\s+for\s+the\s+first\s+(?:version|phase|event)$/i, "")
+         .replace(/\s+and\s+should\s+/i, " and will ")
+         .trim();
+      return `The first version will be limited to ${scope}`;
+   }
+
+   const noPublicPromotion = original.match(/^(?:i|we)\s+(?:do not|don't)\s+want\s+to\s+(?:promote|advertise|publish|share)\s+(?:it|the\s+event|the\s+project)?\s*publicly\s+until\s+(.+)$/i);
+   if (noPublicPromotion) {
+      return `The first version will not be promoted publicly until ${noPublicPromotion[1]}`;
+   }
+
+   const firstVersionFocus = original.match(/^(?:the\s+)?(?:first|initial)\s+(?:version|phase|release|setup)\s+(?:should\s+|will\s+)?(?:focus\s+on|start\s+with|cover)\s+(.+)$/i);
+   if (firstVersionFocus && !/\b(?:probably|may|might|considering)\b/i.test(original)) {
+      return `The first version will focus on ${firstVersionFocus[1]}`;
+   }
+
+   const firstVersionAvoid = original.match(/^(?:the\s+)?(?:first|initial)\s+(?:version|phase|release|setup)\s+(?:should\s+not|will\s+not|must\s+not)\s+(.+)$/i);
+   if (firstVersionAvoid) {
+      return `The first version will not ${firstVersionAvoid[1]}`;
+   }
+
+   const firstVersionSupport = original.match(/^(?:the\s+)?(?:first|initial)\s+(?:version|phase|release|setup)\s+(?:should\s+(?:probably\s+)?|will\s+)?(?:support|include|cover|handle)\s+(.+)$/i);
+   if (firstVersionSupport && !/\bprobably\b/i.test(original)) return `The first version will support ${firstVersionSupport[1]}`;
+
+   const limitedRule = original.match(/^(.+?)\s+should\s+be\s+limited\s+to\s+(.+)$/i);
+   if (limitedRule && !/\bprobably\b/i.test(original)) {
+      return `${limitedRule[1].replace(/^./, (character) => character.toUpperCase())} will be limited to ${limitedRule[2]}`;
+   }
+
+   const preservationRule = original.match(/^(?:i|we)\s+want\s+(.+?)\s+to\s+(preserve|retain|remain|use|support|include|protect)\s+(.+)$/i);
+   if (preservationRule && !/\b(?:probably|may|might|considering)\b/i.test(original)) {
+      const subject = preservationRule[1].replace(/^the\s+/i, "").trim();
+      return `${subject.replace(/^./, (character) => character.toUpperCase())} will ${preservationRule[2].toLowerCase()} ${preservationRule[3]}`;
+   }
+
+   const excludedAtFirst = original.match(/^(.+?)\s+should\s+be\s+excluded\s+(?:at\s+first|from\s+the\s+first\s+(?:version|phase|release|setup))$/i);
+   if (excludedAtFirst) return `${excludedAtFirst[1].replace(/^./, (character) => character.toUpperCase())} will be excluded from the first phase`;
+
+   const excludedScope = original.match(/^(?:i|we)\s+(?:do not|don't)\s+need\s+(?:the\s+first\s+(?:version|phase|release|setup)\s+)?to\s+(?:support|include|cover|handle)\s+(.+)$/i);
+   if (excludedScope) return `The first version will not include ${excludedScope[1]}`;
+
+   if (/\b(?:garage|room|space|workspace|studio|shop)\b/i.test(original) && /\b(?:cannot|can't)\s+dedicate\s+(?:the\s+)?(?:entire|whole)\b/i.test(original)) {
+      return "The space will remain available for more than one use";
+   }
+
+   if (projectStatementIsUncertain(original)) return "";
+   if (!projectStatementIsDecision(original) && !/\bshould\s+(?:be|remain|use|include|exclude|preserve|avoid|support)\b/i.test(original)) return "";
+   return original.trim();
+}
+
+function splitProjectQuestionList(value: string) {
+   const clean = cleanProjectIntakeStatement(value, 1600).replace(/\s+(?:or|and)\s+(?=(?:whether|which|what|how|where|who|when)\b)/gi, ", ");
+
+   const hasInterrogativeClauses = /\b(?:whether|how|what|which|where|who|when)\b/i.test(clean);
+   const parts = hasInterrogativeClauses ? clean.split(/,\s*(?=(?:whether|how|what|which|where|who|when)\b)|\s+and\s+(?=(?:whether|how|what|which|where|who|when)\b)/i) : clean.split(/,\s*|\s+and\s+/i);
+
+   return parts.map((item) => normalizeProjectQuestionSubject(item)).filter((item) => item.length >= 4);
+}
+
+function makeProjectGapQuestion(value: string) {
+   const clean = normalizeProjectQuestionSubject(value)
+      .replace(/^(?:the\s+)?(?:exact\s+)?/i, "")
+      .replace(/\s+(?:have|has)\s+not\s+been\s+(?:finalized|decided|confirmed|selected|chosen)$/i, "")
+      .replace(/\s+yet$/i, "")
+      .trim();
+
+   if (!clean) return "";
+
+   const whetherAllows = clean.match(/^whether\s+(.+?)\s+allows?\s+(.+)$/i);
+   if (whetherAllows) return `Will ${whetherAllows[1]} allow ${whetherAllows[2]}?`;
+
+   const whetherIs = clean.match(/^whether\s+(.+?)\s+is\s+(.+)$/i);
+   if (whetherIs) return `Is ${whetherIs[1]} ${whetherIs[2]}?`;
+
+   const naturalEventQuestions: Array<[RegExp, string]> = [
+      [/^(?:a\s+)?date$/i, "What date should the event use?"],
+      [/^(?:the\s+)?movie(?:\s+choice)?$/i, "Which movie should be shown?"],
+      [/^(?:the\s+)?equipment\s+setup$/i, "What equipment setup should be used?"],
+      [/^(?:the\s+)?(?:exact\s+)?courtyard\s+location$/i, "Which courtyard location should be used?"],
+      [/^(?:the\s+)?attendance\s+estimate$/i, "What attendance estimate should the first event plan for?"],
+      [/^(?:the\s+)?sound\s+limits?$/i, "What sound limits apply?"],
+      [/^(?:the\s+)?weather\s+backup$/i, "What is the weather backup plan?"],
+      [/^(?:the\s+)?cleanup\s+responsibilit(?:y|ies)$/i, "Who is responsible for cleanup?"],
+      [/^(?:the\s+)?management\s+approval$/i, "What approval is required from management?"],
+      [/^(?:the\s+)?licensing$/i, "What licensing is required?"],
+      [/^(?:the\s+)?power$/i, "Is power available where the project will operate?"],
+   ];
+   const naturalEventQuestion = naturalEventQuestions.find(([pattern]) => pattern.test(clean));
+   if (naturalEventQuestion) return naturalEventQuestion[1];
+
+   const naturalProjectQuestions: Array<[RegExp, string]> = [
+      [/^(?:the\s+)?priority\s+collection$/i, "Which collection should be handled first?"],
+      [/^(?:the\s+)?priority\s+(?:set|batch|sample|case|group)$/i, "Which starting set, batch, sample, case, or group should be handled first?"],
+      [/^(?:the\s+)?inventory\s+(?:method|approach|system)$/i, "What inventory method should be used?"],
+      [/^(?:the\s+)?(?:file[- ]?)?naming\s+(?:system|approach|convention)$/i, "What naming system should be used?"],
+      [/^(?:the\s+)?folder\s+structure$/i, "How should the folders be organized?"],
+      [/^(?:the\s+)?(?:metadata\s+)?fields?$/i, "Which metadata fields are required?"],
+      [/^(?:the\s+)?(?:metadata\s+)?approach$/i, "How should metadata be recorded?"],
+      [/^(?:the\s+)?(?:quality|scanning|digitization|capture|review)\s+standards?$/i, "What quality and handling standards should be used?"],
+      [/^(?:the\s+)?privacy\s+rules?$/i, "What privacy and access rules apply?"],
+      [/^(?:the\s+)?access\s+rules?$/i, "What access rules apply?"],
+      [/^(?:the\s+)?(?:family[- ]?|stakeholder[- ]?|peer[- ]?)?review\s+process$/i, "How should review input be collected and resolved?"],
+      [/^(?:the\s+)?identification\s+process$/i, "How should unknown or incomplete details be identified and resolved?"],
+      [/^(?:the\s+)?backup\s+plan$/i, "What backup plan should be used?"],
+      [/^(?:the\s+)?preservation\s+supplies$/i, "Which preservation supplies are needed?"],
+      [/^(?:the\s+)?book\s+format$/i, "What format should the final book use?"],
+      [/^(?:the\s+)?(?:printing|book)\s+(?:service|vendor|provider)$/i, "Which printing service or provider should be used?"],
+      [/^(?:the\s+)?(?:first|initial)\s+(?:tool|resource|item)\s+list$/i, "Which tools, resources, or items should be included in the first set?"],
+      [/^(?:the\s+)?(?:borrowing|checkout|check-out)\s+records?$/i, "How should borrowing and return records be kept?"],
+      [/^(?:the\s+)?labels?$/i, "How should the resources or items be labeled?"],
+      [/^(?:the\s+)?storage\s+location$/i, "Where should the first version be stored?"],
+      [/^(?:the\s+)?volunteer\s+ownership$/i, "Who will own day-to-day maintenance?"],
+      [/^(?:the\s+)?pilot\s+length$/i, "How long should the pilot run?"],
+      [/^(?:the\s+)?(?:exact\s+)?budget$/i, "How should the available budget be allocated?"],
+      [/^(?:the\s+)?target\s+neighborhood$/i, "Which neighborhoods fit the commute, budget, and daily-life needs?"],
+      [/^(?:the\s+)?apartment$/i, "Which apartment best fits the confirmed must-haves and budget?"],
+      [/^(?:the\s+)?(?:exact\s+)?move\s+date$/i, "What move date best fits the lease and notice timeline?"],
+      [/^(?:the\s+)?lease\s+overlap$/i, "Can the budget support one week of lease overlap?"],
+      [/^(?:the\s+)?mover$/i, "Which mover should handle the large furniture?"],
+      [/^(?:the\s+)?packing\s+schedule$/i, "What packing schedule fits the available weekends?"],
+      [/^(?:the\s+)?utility\s+dates?$/i, "When should each utility be transferred or started?"],
+      [/^(?:the\s+)?address[- ]change\s+checklist$/i, "Which address changes must be completed, and when?"],
+      [/^(?:the\s+)?disposal\s+plan$/i, "What should be kept, sold, donated, or replaced?"],
+      [/^(?:the\s+)?cleaning\s+responsibilit(?:y|ies)$/i, "Who will clean and document the old apartment?"],
+      [/^(?:the\s+)?contingency\s+plan$/i, "What is the fallback if approval, moving day, or internet setup is delayed?"],
+      [/^(?:the\s+)?final\s+budget$/i, "What is the final relocation budget?"],
+   ];
+   const naturalProjectQuestion = naturalProjectQuestions.find(([pattern]) => pattern.test(clean));
+   if (naturalProjectQuestion) return naturalProjectQuestion[1];
+
+   const genericMethod = clean.match(/^(.+?)\s+(method|approach|system|process|workflow)$/i);
+   if (genericMethod) {
+      const rawSubject = genericMethod[1].replace(/^(?:the|a|an)\s+/i, "").trim();
+      const subject = rawSubject.replace(/^./, (character) => character.toLowerCase());
+      return genericMethod[2].toLowerCase() === "process" || genericMethod[2].toLowerCase() === "workflow" ? `How should the ${subject} ${genericMethod[2].toLowerCase()} work?` : `What ${subject} ${genericMethod[2].toLowerCase()} should be used?`;
+   }
+
+   const genericStructure = clean.match(/^(.+?)\s+(structure|model|framework|plan)$/i);
+   if (genericStructure) {
+      const rawSubject = genericStructure[1].replace(/^(?:the|a|an)\s+/i, "").trim();
+      const subject = rawSubject.replace(/^./, (character) => character.toLowerCase());
+      return genericStructure[2].toLowerCase() === "plan" ? `What ${subject} plan should be used?` : `How should the ${subject} ${genericStructure[2].toLowerCase()} be organized?`;
+   }
+
+   const genericStandards = clean.match(/^(.+?)\s+(standards?|criteria|rules?|requirements?)$/i);
+   if (genericStandards) {
+      const rawSubject = genericStandards[1].replace(/^(?:the|a|an)\s+/i, "").trim();
+      const subject = rawSubject.replace(/^./, (character) => character.toLowerCase());
+      return `What ${subject} ${genericStandards[2].toLowerCase()} should apply?`;
+   }
+
+   const processFor = clean.match(/^(?:the\s+)?process\s+for\s+(.+)$/i);
+   if (processFor) return `How should ${processFor[1]} be handled?`;
+
+   const howLong = clean.match(/^how\s+long\s+(.+?)\s+should\s+(.+)$/i);
+   if (howLong) return `How long should ${howLong[1]} ${howLong[2]}?`;
+
+   const insuranceRules = clean.match(/^(?:whether\s+)?(?:the\s+)?(?:building['’]s\s+)?insurance\s+or\s+lease\s+rules\s+(.+)$/i);
+   if (insuranceRules) return "What insurance or lease restrictions apply?";
+
+   const whetherWill = clean.match(/^whether\s+(i|we|he|she|they|the project|the team)\s+will\s+(.+)$/i);
+   if (whetherWill) {
+      const subject = /^i$/i.test(whetherWill[1]) ? "I" : whetherWill[1];
+      return `Should ${subject} ${whetherWill[2]}?`;
+   }
+
+   const whetherShould = clean.match(/^whether\s+(.+?)\s+should\s+(.+)$/i);
+   if (whetherShould) return `Should ${whetherShould[1]} ${whetherShould[2]}?`;
+
+   const howShould = clean.match(/^how\s+(.+?)\s+should\s+(.+)$/i);
+   if (howShould) return `How should ${howShould[1]} ${howShould[2]}?`;
+
+   const howCan = clean.match(/^how\s+(.+?)\s+can\s+(.+)$/i);
+   if (howCan) return `How can ${howCan[1]} ${howCan[2]}?`;
+
+   const whereCan = clean.match(/^where\s+(.+?)\s+can\s+(.+)$/i);
+   if (whereCan) return `Where can ${whereCan[1]} ${whereCan[2]}?`;
+
+   if (/^(?:whether|how|what|which|where|who|when)\b/i.test(clean)) return makeProjectIntakeQuestion(clean);
+   if (/\b(?:capacity|sufficient|safe|adequate)\b/i.test(clean)) return `What must be confirmed about ${clean.charAt(0).toLowerCase()}${clean.slice(1)}?`;
+   if (/\b(?:layout|plan|approach|format|method|tool|equipment|workbench|surface|location|date|owner|responsibility|budget|scope|priority|requirements?|needs?)\b/i.test(clean)) {
+      return `What should be decided about ${clean.charAt(0).toLowerCase()}${clean.slice(1)}?`;
+   }
+   return makeProjectIntakeQuestion(clean);
+}
+
+function isProjectResourceGap(value: string) {
+   return /^(?:i|we)\s+(?:do not|don't)\s+(?:own|have|currently have)|\b(?:do not|don't)\s+have\s+(?:a|an|any)\b/i.test(value);
+}
+
+function joinProjectLabels(labels: string[]) {
+   const values: string[] = [];
+   const seen = new Set<string>();
+   for (const label of labels) {
+      const clean = label.trim().toLowerCase();
+      if (!clean || seen.has(clean)) continue;
+      seen.add(clean);
+      values.push(clean);
+   }
+   if (!values.length) return "";
+   if (values.length === 1) return values[0];
+   if (values.length === 2) return `${values[0]} and ${values[1]}`;
+   return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+}
+
+function isEventProjectIntake(description: string) {
+   const source = sanitizeProjectBody(description);
+   if (/\b(?:event|movie night|film night|gathering|meetup|party|festival|ceremony|conference|fair)\b/i.test(source) || /\b(?:film|movie|public)\s+screening\b/i.test(source)) return true;
+
+   const logistics = [
+      /\b(?:event date|date should|choose a date|scheduled for|schedule the)\b/i,
+      /\b(?:attendees?|guests?|attendance estimate|rsvp)\b/i,
+      /\b(?:venue|courtyard|viewing area|seating layout|stage|room booking)\b/i,
+      /\b(?:quiet hours?|sound limits?|weather backup|rain plan)\b/i,
+      /\b(?:projector|screen|outdoor speakers?|microphone|pa system)\b/i,
+   ];
+
+   return logistics.filter((pattern) => pattern.test(source)).length >= 3;
+}
+
+function inferEventProjectOpenQuestions(description: string) {
+   if (!isEventProjectIntake(description)) return [];
+
+   const source = sanitizeProjectBody(description);
+   const questions: string[] = [];
+   const add = (condition: boolean, question: string) => {
+      if (condition) questions.push(question);
+   };
+
+   add(/\b(?:management approval|apartment management|venue management|building management|management.{0,50}(?:allow|approve)|approval.{0,40}(?:event|required)|building rules?)\b/i.test(source), "What approval is required from management?");
+   add(/\b(?:public performance license|performance rights?|screening rights?|licens(?:e|ing))\b/i.test(source), "Is a public performance license required?");
+   add(/\b(?:have not|has not|haven't|hasn't|not)\b.{0,70}\bdate\b|\bdate\b.{0,50}\b(?:unresolved|not finalized|not chosen)\b/i.test(source), "What date should the event use?");
+   add(/\battendance estimate\b|\bexpected attendance\b|\bhow many (?:people|residents|guests|attendees)\b/i.test(source), "What attendance estimate should the first event plan for?");
+   add(/\b(?:have not|has not|haven't|hasn't|not)\b.{0,70}\bmovie\b|\bmovie choice\b.{0,50}\b(?:unresolved|not finalized|not chosen)\b/i.test(source), "Which movie should be shown?");
+   add(
+      /\b(?:equipment setup|screen|outdoor speakers?|projector setup|equipment)\b.{0,80}\b(?:unresolved|not finalized|not chosen|borrow|rent|minimal|simple setup)\b|\b(?:borrow|rent)\b.{0,50}\bequipment\b/i.test(source),
+      "What equipment setup should be used?",
+   );
+   add(/\bprojector\b.{0,100}\b(?:bright enough|brightness|outdoor)\b/i.test(source), "Is the existing projector bright enough for the planned outdoor setting?");
+   add(/\b(?:courtyard location|viewing area|exact courtyard location|exact location)\b/i.test(source), "Which courtyard or viewing location can support access, power, and emergency clearance?");
+   add(/\b(?:power is available|power available|availability of power|outlets? near|electrical access)\b/i.test(source), "Is power available at the viewing area?");
+   add(/\b(?:quiet[- ]hour rules?|sound limits?|sound should not disturb|noise limits?|nearby apartments)\b/i.test(source), "What quiet-hour and sound limits apply?");
+   add(/\b(?:seating layout|chairs? or blankets?|bring their own chairs?|walkways?|entrances?|emergency access)\b/i.test(source), "What seating layout preserves walkways, entrances, and emergency access?");
+   add(/\b(?:weather backup|weather contingency|rain plan|weather plan)\b/i.test(source), "What is the weather backup plan?");
+   add(/\b(?:cleanup responsibilities?|cleanup supplies?|responsible for cleanup|restore the shared space)\b/i.test(source), "Who is responsible for setup, cleanup, and restoring the shared space?");
+   add(/\b(?:borrow equipment|rent (?:it|equipment)|keep the event small enough|simple setup|minimal setup)\b/i.test(source), "Should equipment be borrowed, rented, or kept to a minimal setup?");
+
+   return uniqueProjectIntakeStatements(questions, 16);
+}
+
+function inferEventProjectWorkingAssumptions(description: string) {
+   if (!isEventProjectIntake(description)) return [];
+
+   const source = sanitizeProjectBody(description);
+   const assumptions: string[] = [];
+   const firstEventScope = source.match(/(?:the\s+)?event\s+should\s+(?:probably\s+)?be\s+limited\s+to\s+(.+?)(?:\s+for\s+the\s+first\s+(?:version|event|phase))?[.!?]/i);
+   if (firstEventScope) {
+      assumptions.push(`Working assumption: The first event will be limited to ${firstEventScope[1].replace(/\s+for\s+the\s+first\s+(?:version|event|phase)$/i, "").trim()}`);
+   }
+
+   if (/\bbring their own chairs? or blankets?\b/i.test(source)) {
+      assumptions.push("Working assumption: Attendees will bring their own chairs or blankets");
+   }
+
+   if (/\b(?:borrow equipment|rent (?:it|equipment)|keep the event small enough to use a simple setup)\b/i.test(source)) {
+      assumptions.push("Working assumption: Use the smallest viable equipment setup until attendance and site requirements are confirmed");
+   }
+
+   return uniqueProjectIntakeStatements(assumptions, 4);
+}
+
+function inferGeneralProjectWorkingAssumptions(description: string) {
+   const assumptions: string[] = [];
+
+   for (const sentence of splitProjectDescriptionSentences(description)) {
+      const clean = cleanProjectIntakeStatement(sentence, 420)
+         .replace(/[.!?]+$/, "")
+         .trim();
+      if (!clean) continue;
+
+      const probable = clean.match(/^(?:the\s+)?(.+?)\s+should\s+probably\s+(.+)$/i);
+      if (probable) {
+         assumptions.push(`Working assumption: ${probable[1].replace(/^./, (character) => character.toUpperCase())} will ${probable[2]}`);
+         continue;
+      }
+
+      const considering = clean.match(/^(?:i|we)\s+(?:am|are)\s+considering\s+(?:starting\s+with|using|choosing|focusing\s+on)\s+(.+)$/i);
+      if (considering) {
+         assumptions.push(`Working candidate: ${considering[1]}`);
+         continue;
+      }
+
+      const likelyStart = clean.match(/^(?:i|we)\s+(?:would|may|might)\s+(?:start|begin)\s+with\s+(.+)$/i);
+      if (likelyStart) {
+         assumptions.push(`Working candidate: ${likelyStart[1]}`);
+         continue;
+      }
+
+      const provisional = clean.match(/^(?:for\s+now|for\s+the\s+first\s+(?:version|phase|release|pass))\s*,?\s*(.+)$/i);
+      if (provisional && !projectStatementIsDecision(clean)) {
+         assumptions.push(`Working assumption: ${provisional[1]}`);
+      }
+   }
+
+   return uniqueProjectIntakeStatements(assumptions, 5);
 }
 
 function inferProjectDraftGoal(title: string, description: string) {
-   const sentences = splitProjectDescriptionSentences(description);
-   const deliverableSentence = sentences.find((sentence) => /\b(?:first public-facing deliverable|deliverable|build|create|launch|write|research|organize|design)\b/i.test(sentence));
-   const opening = sentences[0] || description;
+   const cleanDescription = sanitizeProjectBody(description);
+   const sentences = splitProjectDescriptionSentences(cleanDescription);
+   const explicit = cleanDescription.match(/(?:project goal|goal|objective)\s*:\s*([^\n]+)/i)?.[1];
+   const directProjectSentence = sentences.find((sentence) =>
+      /^(?:i|we)\s+(?:want|would like|plan|hope|need)\s+to\s+(?:build|create|organize|design|develop|launch|write|research|prepare|improve|replace|introduce|upgrade|deliver|establish|preserve|set up)\b/i.test(sentence),
+   );
+   const explicitSentence = sentences.find((sentence) => /^(?:the\s+)?(?:main\s+)?goal\s+is\s+to\b/i.test(sentence));
+   const startAround = cleanDescription.match(/\b(?:start|create|set up)\s+(?:a\s+)?project\s+(?:around|about|to)\s+([^.!?]+)/i)?.[1];
+   const candidate = explicit || directProjectSentence || explicitSentence || startAround || sentences.find(projectStatementIsGoal) || sentences[0] || `Complete ${title}`;
 
-   if (deliverableSentence && deliverableSentence !== opening) {
-      return sanitizeProjectBody(`${opening} ${deliverableSentence}`);
-   }
+   let goal = stripProjectIntakeLead(candidate)
+      .replace(/^(?:the\s+)?(?:main\s+)?goal\s+is\s+to\s+/i, "")
+      .replace(/\bbut\s+(?:i|we)\s+[\s\S]*$/i, "")
+      .replace(/[,\s]+$/, "")
+      .trim();
 
-   return sanitizeProjectBody(opening || `Complete ${title}.`);
+   if (/^have\s+(?:a|an)\s+/i.test(goal)) goal = goal.replace(/^have\s+/i, "Create ");
+
+   const verbMap: Record<string, string> = {
+      Modifying: "Modify",
+      Building: "Build",
+      Creating: "Create",
+      Designing: "Design",
+      Planning: "Plan",
+      Organizing: "Organize",
+      Launching: "Launch",
+      Writing: "Write",
+      Researching: "Research",
+      Developing: "Develop",
+      Preparing: "Prepare",
+      Improving: "Improve",
+      Replacing: "Replace",
+      Introducing: "Introduce",
+      Upgrading: "Upgrade",
+      Delivering: "Deliver",
+      Establishing: "Establish",
+   };
+   const firstWord = goal.split(/\s+/)[0] || "";
+   if (verbMap[firstWord]) goal = `${verbMap[firstWord]}${goal.slice(firstWord.length)}`;
+
+   return sanitizeProjectBody(
+      goal.length > 320
+         ? `${goal
+              .slice(0, 317)
+              .replace(/\s+\S*$/, "")
+              .trim()}…`
+         : goal,
+   );
 }
 
 function inferProjectDraftSuccess(description: string) {
-   const explicit = sanitizeProjectBody(description).match(/success\s+means\s+([\s\S]*?)(?=\n\n|$)/i)?.[1];
-
-   if (explicit) {
-      return sanitizeProjectBody(explicit).replace(/[.]+$/, "") + ".";
-   }
-
-   return "The intended outcome is complete, the important requirements have been verified, and the user can confidently share or use the result.";
+   return extractProjectSuccessCriteria(description);
 }
 
-function inferProjectDraftSituation(description: string, milestones: string[]) {
-   const sentences = splitProjectDescriptionSentences(description);
-   const situation =
-      sentences.find((sentence) => /\b(?:before launch|before release|currently|right now|still need|need to finalize|need to define|first public-facing deliverable)\b/i.test(sentence)) ||
-      milestones[0] ||
-      "The project has a clear direction and now needs its first checkpoint confirmed.";
+function inferProjectDraftSituation(description: string) {
+   return uniqueProjectIntakeStatements(
+      splitProjectDescriptionSentences(description)
+         .filter((statement) => projectStatementIsCurrentFact(statement) && !projectStatementIsSuccess(statement))
+         .map((statement) => cleanProjectIntakeStatement(statement, 360)),
+      6,
+   );
+}
 
-   return sanitizeProjectBody(situation);
+function isParticipantProgramProjectIntake(value?: string) {
+   const clean = sanitizeProjectBody(value);
+   if (!clean || /\b(?:software program|computer program|degree program|academic program of study)\b/i.test(clean)) return false;
+   if (/\b(?:lend|lending|borrow|borrowing|check[- ]?out|returns?|tool[- ]lending|shared resource|resource library)\b/i.test(clean)) return false;
+
+   const programSignal = /\b(?:program|pilot|mentorship|mentoring|peer support|cohort|volunteer initiative|service initiative)\b/i.test(clean);
+   const participantSignal = /\b(?:participants?|students?|mentors?|mentees?|volunteers?|clients?|members?|pairs?|coordinator|applications?|eligibility|matching|orientation|recruitment|meetings?)\b/i.test(clean);
+   const operatingSignal = /\b(?:create|start|launch|run|operate|set up|pair|match|recruit|train|orient|manage|coordinate)\b/i.test(clean);
+
+   return programSignal && participantSignal && operatingSignal;
+}
+
+function inferParticipantProgramOpenQuestions(description: string) {
+   const source = sanitizeProjectBody(description);
+   if (!isParticipantProgramProjectIntake(source)) return [] as string[];
+
+   const questions: string[] = [];
+   const add = (supported: boolean, value: string) => {
+      if (supported) questions.push(value);
+   };
+
+   add(/\b(?:not approved|approval|approve|sponsor(?:ed|ship)?)\b/i.test(source), "What approval is required before the program can launch?");
+   add(/\b(?:department|owner|ownership|oversee|sponsor|coordinator)\b/i.test(source), "Which department or role will own the program day to day?");
+   add(/\b(?:privacy|personal information|private phone numbers?|data minimization|what information can be collected)\b/i.test(source), "What participant information can be collected, who can see it, and how should it be protected?");
+   add(/\b(?:background checks?|volunteers? require training|screening)\b/i.test(source), "Do volunteers require screening, background checks, or additional training?");
+   add(/\b(?:report|reporting|escalat|outside the .* role|boundaries|emergency support)\b/i.test(source), "Which situations must be reported or escalated, and to whom?");
+   add(/\b(?:apply|application questions?|applications?)\b/i.test(source), "How should participants apply, and which questions are necessary?");
+   add(/\b(?:eligibility|first year|completed at least|who can join|who should participate)\b/i.test(source), "What eligibility rules should be used for each participant role?");
+   add(/\b(?:match|matching|paired|pairing|pairs?)\b/i.test(source), "How should participants be matched, and which criteria matter most?");
+   add(/\b(?:how often|meeting expectations?|meetings? should|regular contact)\b/i.test(source), "How often should participants meet or check in?");
+   add(/\b(?:in person|online|virtual|meeting format)\b/i.test(source), "Should meetings happen in person, online, or both?");
+   add(/\b(?:communication|phone numbers?|contact information|message|messaging)\b/i.test(source), "Which communication method protects privacy and is easy to manage?");
+   add(/\b(?:orientation|mentor training|volunteer training|active listening|campus resources)\b/i.test(source), "What must the orientation or training cover before participants begin?");
+   add(/\b(?:incentive|stipend|service hours?|recognition|compensation)\b/i.test(source), "What incentive, recognition, or compensation should be offered?");
+   add(/\b(?:pairing is not working|stops? responding|leaves? during|reassignment|rematch|missed meetings?)\b/i.test(source), "What happens when a match is not working, someone stops responding, or a participant leaves?");
+   add(/\b(?:recruitment plan|recruit|recruiting)\b/i.test(source), "What recruitment plan should be used?");
+   add(/\b(?:pilot dates?|start date|end date|when should the pilot|timeline)\b/i.test(source), "When should the pilot start and end?");
+   add(/\b(?:budget allocation|under \$[\d,]+|below \$[\d,]+|stay under \$[\d,]+)\b/i.test(source), "How should the pilot budget be allocated?");
+   add(/\b(?:evaluation measures?|survey|midpoint check|participation records?|comments?|continue, change, or stop)\b/i.test(source), "Which simple measures will show whether the pilot should continue, change, or stop?");
+
+   return uniqueProjectIntakeStatements(questions, 20);
+}
+
+function inferExplicitProjectCommitments(description: string) {
+   const commitments: string[] = [];
+   const source = sanitizeProjectBody(description);
+
+   for (const sentence of splitProjectDescriptionSentences(source)) {
+      const clean = cleanProjectIntakeStatement(sentence, 900)
+         .replace(/[.!?]+$/, "")
+         .trim();
+      if (!clean) continue;
+
+      const decided = clean.match(/^(?:i|we)\s+(?:have|had)\s+(?:already\s+)?decided\s+that\s+(.+)$/i);
+      if (decided) {
+         const statement = decided[1].trim();
+         if (statement) commitments.push(`${statement.charAt(0).toUpperCase()}${statement.slice(1)}`);
+      }
+
+      const deadline = clean.match(/\b(?:finish|complete|deliver|launch|publish|produce|have)\s+(.+?)\s+(?:within|in no more than)\s+((?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:days?|weeks?|months?))\b/i);
+      if (deadline) {
+         const deliverable = deadline[1]
+            .replace(/^(?:the\s+)?/i, "")
+            .replace(/\s+and\s+keep[\s\S]*$/i, "")
+            .trim();
+         if (deliverable) commitments.push(`The ${deliverable} will be finished within ${deadline[2]}`);
+      }
+
+      const budget = clean.match(/\bkeep\s+(?:the\s+)?(.+?)\s+(?:under|below|within|at\s+or\s+below)\s+(\$[\d,]+(?:\.\d{1,2})?)/i);
+      const stayUnderBudget = clean.match(/^(?:the\s+)?(.+?)\s+should\s+stay\s+(?:under|below|at\s+or\s+below)\s+(\$[\d,]+(?:\.\d{1,2})?)/i);
+      const matchedBudget = budget || stayUnderBudget;
+      if (matchedBudget && !/\b(?:already\s+)?decided\s+that\b/i.test(clean)) {
+         const subject = matchedBudget[1]
+            .replace(/^first\s+phase$/i, "first-phase budget")
+            .replace(/\s+budget$/i, " budget")
+            .trim();
+         const label = /budget$/i.test(subject) ? subject : `${subject} budget`;
+         commitments.push(`The ${label} will stay at or below ${matchedBudget[2]}`);
+      }
+   }
+
+   return uniqueProjectIntakeStatements(commitments, 8);
+}
+
+function inferProjectDraftDecisions(description: string) {
+   return uniqueProjectIntakeStatements(
+      [
+         ...splitProjectDescriptionSentences(description)
+            .filter((statement) => !projectStatementIsCurrentFact(statement) && !projectStatementIsGoal(statement))
+            .map(normalizeConfirmedProjectDecision)
+            .filter(Boolean),
+         ...inferExplicitProjectCommitments(description),
+      ],
+      12,
+   );
 }
 
 function inferProjectDraftOpenQuestions(description: string) {
-   const lower = sanitizeProjectBody(description).toLowerCase();
    const questions: string[] = [];
 
-   if (!/\b(?:audience|customer|reader|user|visitor|stakeholder)\b/.test(lower)) {
-      questions.push("Who is the primary audience for the finished project?");
+   for (const sentence of splitProjectDescriptionSentences(description)) {
+      const clean = cleanProjectIntakeStatement(sentence, 1800)
+         .replace(/[.!?]+$/, "")
+         .trim();
+      if (!clean) continue;
+
+      if (/\?$/.test(clean)) {
+         questions.push(makeProjectIntakeQuestion(clean));
+         continue;
+      }
+
+      const approvalGap = clean.match(/^(.+?)\s+(?:has|have)\s+not\s+(?:yet\s+)?approved\s+(.+?)(?:\s+yet)?$/i);
+      if (approvalGap) {
+         const approver = approvalGap[1].trim().replace(/^The\s+/i, "the ");
+         const rawSubject = approvalGap[2].replace(/\s+yet$/i, "").trim();
+         const subject = /^(?:the\s+)?idea$/i.test(rawSubject) ? "the project" : rawSubject;
+         questions.push(`Will ${approver} approve ${subject}?`);
+         continue;
+      }
+
+      const explicitDecision = clean.match(/\b(?:still\s+)?need\s+to\s+(?:decide|choose|confirm|determine|select|finalize|figure out|clarify)\s+(.+)$/i);
+      if (explicitDecision) {
+         splitProjectQuestionList(explicitDecision[1]).forEach((item) => questions.push(makeProjectGapQuestion(item)));
+         continue;
+      }
+
+      const unresolved = clean.match(/\b(?:have|has)\s+not\s+(?:yet\s+)?(?:decided|chosen|confirmed|selected|finalized)\s+(.+?)(?:\s+yet)?$/i);
+      if (unresolved) {
+         splitProjectQuestionList(unresolved[1]).forEach((item) => questions.push(makeProjectGapQuestion(item)));
+         continue;
+      }
+
+      const unresolvedList = clean.match(/^(.+?)\s+(?:are|remain)\s+(?:still\s+)?unresolved$/i);
+      if (unresolvedList) {
+         splitProjectQuestionList(unresolvedList[1]).forEach((item) => questions.push(makeProjectGapQuestion(item)));
+         continue;
+      }
+
+      const unknown = clean.match(/\b(?:do|does)\s+not\s+know\s+((?:whether|how|what|which|where|who|when)\s+.+)$/i);
+      if (unknown) {
+         splitProjectQuestionList(unknown[1]).forEach((item) => questions.push(makeProjectGapQuestion(item)));
+         continue;
+      }
+
+      const unsure = clean.match(/\b(?:am|are|is)\s+not\s+sure\s+((?:what|which|whether|who|how|where|when)\s+.+)$/i);
+      if (unsure) {
+         splitProjectQuestionList(unsure[1]).forEach((item) => questions.push(makeProjectGapQuestion(item)));
+         continue;
+      }
+
+      const needToKnow = clean.match(/\b(?:need|needs)\s+to\s+(?:understand|confirm|know|determine|verify|find out)\s+((?:whether|how|what|which|where|who|when)\s+.+)$/i);
+      if (needToKnow) {
+         splitProjectQuestionList(needToKnow[1]).forEach((item) => questions.push(makeProjectGapQuestion(item)));
+         continue;
+      }
+
+      const notFinalized = clean.match(/(.+?)\s+(?:have|has)\s+not\s+been\s+(?:finalized|decided|confirmed|selected|chosen)$/i);
+      if (notFinalized) splitProjectQuestionList(notFinalized[1]).forEach((item) => questions.push(makeProjectGapQuestion(item)));
    }
 
-   if (!/\b(?:deadline|launch date|due date|by [a-z]+day|by \w+ \d+|timeline)\b/.test(lower)) {
-      questions.push("Is there a target date or outside deadline that should shape the order of work?");
+   const programQuestions = inferParticipantProgramOpenQuestions(description);
+   const eventQuestions = inferEventProjectOpenQuestions(description);
+   const unique = uniqueProjectIntakeStatements([...programQuestions, ...eventQuestions, ...questions.filter(Boolean)], 48);
+   const result: string[] = [];
+   const topic = (value: string) => {
+      const lower = value.toLowerCase();
+      const topics: Array<[RegExp, string]> = [
+         [/\b(?:program can launch|pilot can launch|college approve|program approval|approval is required|still needs to be decided about approval)\b/i, "approval"],
+         [/\b(?:department or role will own|department ownership|formally oversee|day-to-day owner|program owner)\b/i, "program-owner"],
+         [/\b(?:participant information|what information can be collected|protect.*information|privacy(?: and access)? rules?)\b/i, "privacy"],
+         [/\b(?:background checks?|screening|additional training)\b/i, "program-screening"],
+         [/\b(?:reported or escalated|report or escalate|reporting boundaries|escalation boundaries|situations must be reported)\b/i, "program-escalation"],
+         [/\b(?:participants? apply|application questions?|application process)\b/i, "program-applications"],
+         [/\b(?:eligibility(?: rules?)?|who can join|who should participate)\b/i, "program-eligibility"],
+         [/\b(?:participants? be matched|matching criteria|pairing criteria)\b/i, "program-matching"],
+         [/\b(?:how often should|meeting expectations?|regular contact)\b/i, "program-meeting-frequency"],
+         [/\b(?:in person, online|meeting format|in person or online)\b/i, "program-meeting-mode"],
+         [/\b(?:communication method|communication tools?|private phone numbers?)\b/i, "program-communication"],
+         [/\b(?:orientation or training|mentor training|volunteer training)\b/i, "program-training"],
+         [/\b(?:incentives?|stipend|service hours?|recognition|compensation)\b/i, "program-incentive"],
+         [/\b(?:match is not working|stops responding|participant leaves|reassignment|rematch)\b/i, "program-reassignment"],
+         [/\brecruitment plan\b/i, "program-recruitment"],
+         [/\bpilot start and end|pilot dates?\b/i, "program-dates"],
+         [/\b(?:pilot budget|budget allocation)\b/i, "program-budget"],
+         [/\b(?:simple measures|evaluation measures?|survey|continue, change, or stop)\b/i, "program-evaluation"],
+         [/\b(?:approval|approve|management approval|apartment management.{0,40}allow|management.{0,40}allow|approve the event|approval.{0,24}required from management)\b/i, "approval"],
+         [/\b(?:public performance license|licensing|required license)\b/i, "licensing"],
+         [/\bdate\b/i, "date"],
+         [/\battendance estimate\b/i, "attendance"],
+         [/\bmovie\b/i, "movie"],
+         [/\b(?:bright enough|projector brightness|outdoor brightness)\b/i, "projector-brightness"],
+         [/\b(?:borrowed|rented|minimal setup|equipment sourcing)\b/i, "equipment-sourcing"],
+         [/\b(?:equipment setup|equipment|screen|speakers?|projector)\b/i, "event-equipment"],
+         [/\b(?:courtyard location|viewing area|exact location)\b/i, "event-location"],
+         [/\bquiet[- ]hour rules?\b/i, "quiet-hours"],
+         [/\b(?:electrical|power|outlets?)\b/i, "electrical"],
+         [/\b(?:sound limits?|sound should|noise)\b/i, "sound"],
+         [/\bseating\b/i, "seating"],
+         [/\bweather backup\b/i, "weather"],
+         [/\bcleanup\b/i, "cleanup"],
+         [/\b(?:public promotion|promoted publicly|advertised publicly)\b/i, "promotion-scope"],
+         [/\blighting\b/i, "lighting"],
+         [/\bventilation\b/i, "ventilation"],
+         [/\bdust\b/i, "dust"],
+         [/\b(?:flammable|finishes?|material storage)\b/i, "materials"],
+         [/\blayout\b/i, "layout"],
+         [/\bstorage\b/i, "storage"],
+         [/\bworkbench\b/i, "workbench"],
+         [/\b(?:major tool|first tool|power tool)\b/i, "tool"],
+         [/\bfirst projects?\b/i, "first-projects"],
+         [/\b(?:priority collection|first collection|starting collection|collection should be handled first)\b/i, "priority-collection"],
+         [/\binventory\b/i, "inventory"],
+         [/\b(?:file[- ]?naming|naming system|naming convention)\b/i, "naming"],
+         [/\b(?:folder structure|folders? be organized)\b/i, "folder-structure"],
+         [/\bmetadata\b/i, "metadata"],
+         [/\b(?:scanning|digitization|capture)\s+(?:standards?|quality)|\bquality and handling standards?\b/i, "quality-standards"],
+         [/\b(?:privacy|access rules?)\b/i, "privacy"],
+         [/\b(?:review process|review input|identification process|unknown details?|identifying unknown)\b/i, "review-identification"],
+         [/\bbackup\b/i, "backup"],
+         [/\bpreservation supplies?\b/i, "preservation-supplies"],
+         [/\b(?:book format|printing service|book service|provider)\b/i, "finished-output"],
+         [/\b(?:exact budget|budget allocation)\b/i, "budget-allocation"],
+         [/\b(?:first tool list|first resource set|tools? belong in the first|resources? should be included)\b/i, "resource-set"],
+         [/\b(?:borrowing records?|return records?|checkout records?|check-out records?)\b/i, "recordkeeping"],
+         [/\b(?:items? will be labeled|resources? or items? be labeled|labels?|labeling)\b/i, "labeling"],
+         [/\b(?:volunteer ownership|day-to-day maintenance|who will own)\b/i, "ownership"],
+         [/\b(?:target neighborhood|neighborhoods? fit)\b/i, "target-neighborhood"],
+         [/\b(?:which apartment|apartment best fits)\b/i, "apartment-choice"],
+         [/\b(?:move date|lease and notice timeline)\b/i, "move-date"],
+         [/\b(?:lease overlap|week of overlap)\b/i, "lease-overlap"],
+         [/\b(?:which mover|mover should)\b/i, "mover"],
+         [/\bpacking schedule\b/i, "packing-schedule"],
+         [/\butility.*(?:transferred|started|dates?)\b/i, "utility-dates"],
+         [/\baddress changes?\b/i, "address-changes"],
+         [/\b(?:kept|sold|donated|replaced|disposal plan)\b/i, "disposal-plan"],
+         [/\b(?:clean and document|cleaning responsibilities?)\b/i, "cleaning"],
+         [/\b(?:fallback|contingency plan)\b/i, "contingency"],
+         [/\bfinal relocation budget\b/i, "relocation-budget"],
+         [/\b(?:loan length|how long should loans? last)\b/i, "loan-length"],
+         [/\b(?:pilot length|how long should the pilot)\b/i, "pilot-length"],
+      ];
+      return topics.find(([pattern]) => pattern.test(lower))?.[1] || "";
+   };
+
+   for (const item of unique) {
+      const itemTopic = topic(item);
+      if (itemTopic && result.some((existing) => topic(existing) === itemTopic)) continue;
+      if (result.some((existing) => getProjectIntakeSemanticOverlap(existing, item) >= 0.6)) continue;
+      result.push(item);
+      if (result.length >= 20) break;
    }
 
-   if (!/\b(?:call to action|cta|next action|conversion|what should visitors do)\b/.test(lower) && /\b(?:website|site|landing page|homepage)\b/.test(lower)) {
-      questions.push("What should someone understand or do after viewing the finished website?");
-   }
-
-   return questions.slice(0, 3);
+   return result;
 }
 
-function inferSeniorProjectStartingPoint(description: string, milestones: string[], llmNextStep?: string) {
-   const lower = sanitizeProjectBody(description).toLowerCase();
-   const first = milestones[0] || "Clarify the finished outcome";
+function normalizeProjectConstraint(value: string) {
+   let clean = cleanProjectIntakeStatement(value, 520)
+      .replace(/[.!?]+$/, "")
+      .trim();
+   if (!clean) return "";
 
-   if (/\bbrand\b/.test(lower) && /\b(?:product|ecosystem|parent brand|parent company)\b/.test(lower)) {
-      return "Define the company promise and how each product fits within the ecosystem first. That decision should guide the page hierarchy, feature-story emphasis, and copy before implementation begins.";
+   if (/\bwithout\s+(?:knowing|understanding|deciding|confirming)\b/i.test(clean)) return "";
+
+   let transformed = false;
+   const comparativeLead = clean.match(/\bbut\s+(?:i|we)\s+know\s+(.+?)\s+matter(?:s)?\s+more\s+than\s+(.+)$/i);
+   const directComparative = clean.match(/^(.+?)\s+matter(?:s)?\s+more\s+than\s+(.+)$/i);
+   const comparative = comparativeLead || directComparative;
+
+   if (comparative) {
+      clean = `Prioritize ${comparative[1]} over ${comparative[2]}`;
+      transformed = true;
+   } else {
+      const negativeAfterBut = clean.match(/\bbut\s+(?:i|we)\s+(?:do not|don't)\s+want\s+(?:them|it|the project|the result|the work|the output)?\s*(?:to\s+)?(.+)$/i);
+      const directNegative = clean.match(/^(?:i|we)\s+(?:also\s+)?(?:do not|don't)\s+want\s+(?:them|it|the project|the result|the work|the output)?\s*(?:to\s+)?(.+)$/i);
+      const accountMatch = clean.match(/^(?:i|we)\s+(?:also\s+)?need\s+to\s+(?:think about|account for|consider)\s+(.+)$/i);
+      const projectAccountMatch = clean.match(/^.+?\s+needs?\s+to\s+account\s+for\s+(.+)$/i);
+      const withoutMatch = clean.match(/\bwithout\s+(.+)$/i);
+
+      if (negativeAfterBut || directNegative) {
+         clean = `Avoid ${(negativeAfterBut || directNegative)![1]}`;
+         transformed = true;
+      } else if (accountMatch || projectAccountMatch) {
+         clean = `Account for ${(accountMatch || projectAccountMatch)![1]}`;
+         transformed = true;
+      } else if (withoutMatch) {
+         clean = `Avoid ${withoutMatch[1]}`;
+         transformed = true;
+      }
    }
 
-   if (/\b(?:research|source|evidence|citation)\b/.test(lower)) {
-      return `Start with ${first.replace(/[.]+$/, "")}. This establishes the evidence or framing the later work depends on.`;
+   const onePersonCapacity = clean.match(/^(?:i|we)\s+(?:also\s+)?want\s+(.+?)\s+(?:to\s+be\s+)?simple\s+enough\s+that\s+(?:one|a single)\s+(?:volunteer|person|owner|operator)\s+can\s+(.+)$/i);
+   if (onePersonCapacity) {
+      clean = `Keep ${onePersonCapacity[1]} simple enough for one person to ${onePersonCapacity[2]}`;
+      transformed = true;
    }
 
-   if (/\b(?:website|app|software|platform|product)\b/.test(lower)) {
-      return `Start with ${first.replace(/[.]+$/, "")}. Locking that decision first will reduce design and implementation rework later.`;
+   clean = clean
+      .replace(/^avoid\s+lose\b/i, "Avoid losing")
+      .replace(/^avoid\s+spend\b/i, "Avoid spending")
+      .replace(/^avoid\s+build\b/i, "Avoid building")
+      .replace(/^avoid\s+give\b/i, "Avoid giving")
+      .replace(/^avoid\s+buy\b/i, "Avoid buying")
+      .replace(/\bor\s+buy\b/gi, "or buying")
+      .replace(/^avoid\s+turn\b/i, "Avoid turning")
+      .replace(/^avoid\s+choose\b/i, "Avoid choosing")
+      .replace(/^avoid\s+become\b/i, "Avoid becoming")
+      .replace(/^avoid\s+make\b/i, "Avoid making")
+      .replace(/^avoid\s+look\b/i, "Avoid looking")
+      .replace(/^avoid\s+feel\b/i, "Avoid feeling")
+      .replace(/^avoid\s+force\b/i, "Avoid forcing")
+      .replace(/^avoid\s+interfere\b/i, "Avoid interfering")
+      .replace(/^avoid\s+ruin\b/i, "Avoid ruining")
+      .replace(/^avoid\s+resemble\b/i, "Avoid resembling")
+      .replace(/^avoid\s+collect\b/i, "Avoid collecting")
+      .replace(/^avoid\s+endless feedback to delay\b/i, "Avoid letting endless feedback delay")
+      .replace(/\bor\s+feel\s+like\s+(?:i|we)\s+(?:am|are)\s+forcing\s+(?:it|them)\s+to\s+be\s+something\s+(?:it|they)\s+(?:is|are)\s+not\b/gi, "or forcing a direction that does not fit")
+      .replace(/\bor\s+feel\b/gi, "or feeling")
+      .replace(/,\s*become\b/gi, ", becoming")
+      .replace(/\s+or\s+end\s+up\b/gi, ", or ending up")
+      .replace(/,\s*,+/g, ",")
+      .replace(/\s+/g, " ")
+      .trim();
+
+   const privacyExposure = clean.match(/^privacy matters because\s+(.+?)\s+should\s+not\s+expose\s+(.+?)(?:\s+to\s+everyone)?$/i);
+   if (privacyExposure) {
+      clean = `Protect ${privacyExposure[2]} from broad access`;
+      transformed = true;
+   } else if (/^privacy matters$/i.test(clean)) {
+      clean = "Protect sensitive information and limit access to the intended audience";
+      transformed = true;
    }
 
+   if (!transformed && /^(?:i|we)\s+(?:also\s+)?(?:want|would like|am thinking|are thinking)\b/i.test(clean)) return "";
+   if (!clean || clean.length < 8 || /^preserve\s+(?:knowing|understanding)\b/i.test(clean)) return "";
+   if (clean.length > 180)
+      clean =
+         clean
+            .slice(0, 177)
+            .replace(/\s+\S*$/, "")
+            .trim() + "…";
+   return `${clean.charAt(0).toUpperCase()}${clean.slice(1)}`;
+}
+
+function inferProjectDraftConstraints(description: string, decisions: string[]) {
+   const decisionKeys = new Set(decisions.map(getProjectIntakeStatementKey));
+
+   return uniqueProjectIntakeStatements(
+      splitProjectDescriptionSentences(description)
+         .filter(
+            (statement) =>
+               projectStatementIsConstraint(statement) &&
+               !projectStatementIsCurrentFact(statement) &&
+               !projectStatementIsGoal(statement) &&
+               !isProjectResourceGap(statement) &&
+               !projectStatementIsUncertain(statement) &&
+               !projectStatementIsSuccess(statement) &&
+               !/\b(?:need|needs)\s+to\s+(?:understand|confirm|know|determine|verify|find out)\b/i.test(statement) &&
+               !/\b(?:do|does)\s+not\s+know\s+(?:whether|how|what|which|where|who|when)\b/i.test(statement) &&
+               !/\b(?:are|remain)\s+(?:still\s+)?unresolved\b/i.test(statement) &&
+               !/\bmay\s+need\s+to\s+cover\b/i.test(statement),
+         )
+         .map(normalizeProjectConstraint)
+         .filter((statement) => {
+            if (!statement) return false;
+            const key = getProjectIntakeStatementKey(statement);
+            if (decisionKeys.has(key)) return false;
+            const tokens = new Set(key.split(/\s+/).filter((token) => token.length > 2));
+            return !decisions.some((decision) => {
+               const decisionTokens = new Set(
+                  getProjectIntakeStatementKey(decision)
+                     .split(/\s+/)
+                     .filter((token) => token.length > 2),
+               );
+               let shared = 0;
+               tokens.forEach((token) => {
+                  if (decisionTokens.has(token)) shared += 1;
+               });
+               return tokens.size > 0 && decisionTokens.size > 0 && shared / Math.min(tokens.size, decisionTokens.size) >= 0.65;
+            });
+         }),
+      6,
+   );
+}
+
+function getProjectIntakeSemanticOverlap(leftValue: string, rightValue: string) {
+   const toTokens = (value: string) =>
+      new Set(
+         getProjectIntakeStatementKey(value)
+            .split(/\s+/)
+            .filter((token) => token.length > 2),
+      );
+   const left = toTokens(leftValue);
+   const right = toTokens(rightValue);
+   if (!left.size || !right.size) return 0;
+   let shared = 0;
+   left.forEach((token) => {
+      if (right.has(token)) shared += 1;
+   });
+   return shared / Math.min(left.size, right.size);
+}
+
+function normalizeProjectCheckpoint(value?: string) {
+   const clean = stripProjectIntakeLead(value || "")
+      .replace(/^(?:before\s+.+?,\s*)/i, "")
+      .replace(/^(?:and|then|but)\s+/i, "")
+      .replace(/^(?:i|we)\s+(?:need|should|must|want|plan)\s+to\s+/i, "")
+      .replace(/[.;]+$/g, "")
+      .trim();
+   if (!clean || /^(?:or|and|but|become|interfere|avoid|without)\b/i.test(clean)) return "";
+   const title = `${clean.charAt(0).toUpperCase()}${clean.slice(1)}`;
+   return sanitizeProjectTitle(title.length > 90 ? `${title.slice(0, 87).replace(/\s+\S*$/, "")}…` : title);
+}
+
+function getProjectMilestoneSubject(question: string) {
+   const clean = cleanProjectIntakeStatement(question, 220)
+      .replace(/[.?]+$/, "")
+      .trim();
+   const role = clean.match(/^What\s+(?:purpose|role|scope|direction)\s+should\s+(.+?)\s+have$/i);
+   if (role) return role[1].trim();
+   const first = clean.match(/^Which\s+(.+?)\s+should\s+(?:receive attention|go|come|be handled)\s+first$/i);
+   if (first) return first[1].trim();
+   return "";
+}
+
+function getProjectOptionLabel(sentences: string[]) {
+   const labels: Array<[RegExp, string]> = [
+      [/\bparts?\b/i, "parts"],
+      [/\btools?\b/i, "tools"],
+      [/\bvendors?\b/i, "vendors"],
+      [/\bsources?\b/i, "sources"],
+      [/\bmaterials?\b/i, "materials"],
+      [/\bplatforms?\b/i, "platforms"],
+      [/\bapproaches?\b/i, "approaches"],
+      [/\boptions?\b/i, "options"],
+   ];
+   const found = labels.filter(([pattern]) => sentences.some((item) => pattern.test(item))).map(([, label]) => label);
+   const specific = found.filter((label) => label !== "options");
+   const selected = (specific.length ? specific : found).slice(0, 3);
+   if (!selected.length) return "options";
+   if (selected.length === 1) return selected[0];
+   if (selected.length === 2) return `${selected[0]} and ${selected[1]}`;
+   return `${selected.slice(0, -1).join(", ")}, and ${selected[selected.length - 1]}`;
+}
+
+function normalizeProjectMilestoneSubject(value?: string) {
+   return sanitizeProjectTitle(value)
+      .replace(/^both\s+/i, "each ")
+      .replace(/^the\s+/i, "")
+      .replace(/[.?]+$/, "")
+      .trim();
+}
+
+function getProjectComparisonCriteria(description: string) {
+   const criteria: Array<[RegExp, string]> = [
+      [/\b(?:price|cost|budget)\b/i, "cost"],
+      [/\bquality\b/i, "quality"],
+      [/\b(?:compatibility|compatible|fitment)\b/i, "compatibility"],
+      [/\b(?:installation|install|setup)\b/i, "installation needs"],
+      [/\b(?:maintenance|serviceability|servicing)\b/i, "maintenance impact"],
+      [/\b(?:reliability|dependability)\b/i, "reliability"],
+      [/\b(?:accessibility|wcag|keyboard navigation|screen reader)\b/i, "accessibility"],
+      [/\b(?:risk|safety)\b/i, "risk"],
+      [/\b(?:performance|speed|handling)\b/i, "performance"],
+      [/\b(?:credibility|credible|evidence quality)\b/i, "evidence quality"],
+   ];
+
+   return criteria
+      .filter(([pattern]) => pattern.test(description))
+      .map(([, label]) => label)
+      .slice(0, 4);
+}
+
+interface HumanCoordinationMilestones {
+   constraints: string;
+   outcome: string;
+   sequence: string;
+   budget: string;
+   options: string;
+   preparation: string;
+   execution: string;
+   closeout: string;
+}
+
+function getHumanCoordinationMilestones(source: string): HumanCoordinationMilestones {
+   const relocationProject =
+      /\b(?:move|moving|relocat(?:e|ion|ing)|new apartment|old apartment|lease ends?|give notice|movers?|moving costs?)\b/i.test(source) && /\b(?:apartment|lease|rent|housing|utilities?|address changes?|neighborhood|commute)\b/i.test(source);
+
+   if (relocationProject) {
+      return {
+         constraints: "Lock down the move timeline and lease deadlines",
+         outcome: "Decide what the new apartment needs to have",
+         sequence: "Plan the move, responsibilities, and backup options",
+         budget: "Set the relocation budget",
+         options: "Compare neighborhoods, apartments, and movers",
+         preparation: "Book the move and get the logistics ready",
+         execution: "Move in and get the essentials working",
+         closeout: "Close out the old apartment and finish the move",
+      };
+   }
+
+   const travelProject = /\b(?:trip|travel|flight|hotel|lodging|itinerary|passport|destination)\b/i.test(source) && /\b(?:book|booking|depart|return|travel dates?|transportation)\b/i.test(source);
+
+   if (travelProject) {
+      return {
+         constraints: "Lock down the travel dates and hard limits",
+         outcome: "Decide what the trip needs to include",
+         sequence: "Plan the itinerary, responsibilities, and backup options",
+         budget: "Set the trip budget",
+         options: "Compare routes, stays, and travel options",
+         preparation: "Book the trip and prepare the essentials",
+         execution: "Take the trip and handle the first-day setup",
+         closeout: "Finish the remaining follow-up and review the trip",
+      };
+   }
+
+   return {
+      constraints: "Confirm the deadlines and hard limits",
+      outcome: "Decide what a good finished result needs to include",
+      sequence: "Plan the order of work, responsibilities, and backup options",
+      budget: "Set the working budget and resource priorities",
+      options: "Compare the main options and providers",
+      preparation: "Book what is needed and prepare the logistics",
+      execution: "Carry out the plan and get the essentials working",
+      closeout: "Finish the loose ends and review the result",
+   };
+}
+
+function extractProjectDescriptionMilestones(description?: string, openQuestions: string[] = []) {
+   const cleanDescription = sanitizeProjectBody(description);
+   const source = [cleanDescription, ...openQuestions].join("\n");
+   const result: string[] = [];
+
+   const add = (value: string, supported: boolean) => {
+      if (!supported) return;
+      const clean = normalizeProjectCheckpoint(value);
+      if (clean && !result.some((item) => getProjectIntakeSemanticOverlap(item, clean) >= 0.72)) result.push(clean);
+   };
+
+   const has = (pattern: RegExp) => pattern.test(source);
+   const eventProject = isEventProjectIntake(source);
+   const workspaceTransformation =
+      (has(/\b(?:garage|workspace|work area|shop space|studio space|workbench|work surface)\b/i) && has(/\b(?:convert|turn|set up|organize|build|layout|install|mobile|folding|permanent)\b/i)) ||
+      (has(/\b(?:garage|workspace|work area)\b/i) && has(/\b(?:tool storage|shop vacuum|table saw|miter saw|track saw|dust collection|workbench)\b/i));
+   const physicalWorkspace = !eventProject && workspaceTransformation;
+   const firstUseNeed = has(/\b(?:first|initial|exact)\s+projects?\b|\bprojects?\s+(?:the\s+)?(?:space|workspace|setup|first version)\s+(?:must|should|will)\s+support\b|\bprojects?\s+(?:i|we)\s+actually\s+want\s+to\s+complete\b/i);
+   const complianceNeed = has(/\b(?:permit|license|licensing|legal|regulation|policy|insurance|inspection|compliance|approved facility)\b/i);
+   const safetyNeed = has(/\b(?:safety|safe|electrical|power|outlets?|lighting|ventilation|dust|noise|flammable|fire|refrigeration|water|wastewater|structural)\b/i);
+   const layoutNeed = has(/\b(?:layout|storage plan|workbench|work surface|mobile tool stands?|mount tools?|portable|permanent|clear enough space|larger items|access path|floor space)\b/i);
+   const explicitAudienceNeed = has(/\b(?:target audience|primary audience|target users?|customers?|participants?|guests?|readers?|viewers?|listeners?|stakeholders?)\b/i);
+   const scopeNeed = has(/\b(?:first version|first release|initial phase|first phase|pilot scope|minimum viable|exact first projects?|initial scope)\b/i);
+   const discoveryNeed = has(/\b(?:find out|identify|learn|understand|assess|inspect|audit|baseline|requirements review|risk assessment|have not researched|need to verify|need to confirm)\b/i);
+   const governanceNeed = has(/\b(?:privacy|personal information|sensitive information|data sharing|security|permission|consent|rights|source attribution|fact-checking|access rules?)\b/i);
+   const formatNeed = has(/\b(?:format|approach|method|platform|channel|transport|narrated|interview-based|portable setup|permanent setup)\b/i);
+   const workflowNeed = has(/\b(?:workflow|process|service flow|one person|solo|staffing|capacity|throughput|setup and cleanup|setup|cleanup|handoff|responsible for|ownership)\b/i);
+   const budgetNeed = has(/\b(?:budget|under\s+\$[\d,]+|below\s+\$[\d,]+|first phase under|initial investment|startup cost)\b/i);
+   const commercialNeed = has(/\b(?:pricing|price per|break-even|break even|margin|revenue|sales volume|customer demand|profitable|commercial viability)\b/i);
+   const equipmentNeed = has(/\b(?:major tool|power tool|equipment|tools?|materials?|parts?|hardware|software|recording equipment|safety equipment)\b/i);
+   const buildNeed = has(/\b(?:build|install|set up|create|produce|assemble|organize|implement|develop|draft|record|publish)\b/i);
+   const validationNeed = has(/\b(?:test|validate|verify|review|drill|rehearse|pilot|usability|quality check|real evidence|measure|feedback|success would mean|complete several real projects?|use the space)\b/i);
+
+   if (eventProject) {
+      const approvalNeed = complianceNeed || has(/\b(?:management approval|building rules?|quiet hours?|public performance license|permission)\b/i);
+      const dateScopeWeatherNeed = has(/\b(?:date|attendance estimate|residents?|invited guests?|weather backup|rain plan|first version)\b/i);
+      const siteEquipmentNeed = has(/\b(?:courtyard|location|walkways?|entrances?|emergency access|power|projector|screen|speakers?|sound|equipment)\b/i);
+      const eventPlanNeed = has(/\b(?:movie choice|family-friendly movie|seating|chairs?|blankets?|snacks?|cleanup|communications?|invite|invited)\b/i);
+
+      add("Confirm approval, licensing, and operating rules", approvalNeed || true);
+      add("Set the date, attendance scope, and weather backup", dateScopeWeatherNeed);
+      add("Confirm the viewing area, access, power, sound, and equipment", siteEquipmentNeed);
+      add("Set the event budget and sourcing plan", budgetNeed);
+      add("Finalize the movie, seating, communication, and cleanup plan", eventPlanNeed || workflowNeed);
+      add("Run the event and review what to change", validationNeed || true);
+   } else if (physicalWorkspace) {
+      add("Choose the first projects the workspace must support", firstUseNeed || scopeNeed);
+      const safetyLabels: string[] = [];
+      if (has(/\b(?:electrical|power|outlets?)\b/i)) safetyLabels.push("power");
+      if (has(/\blighting\b/i)) safetyLabels.push("lighting");
+      if (has(/\bventilation\b/i)) safetyLabels.push("ventilation");
+      if (has(/\bdust\b/i)) safetyLabels.push("dust control");
+      if (has(/\bnoise\b/i)) safetyLabels.push("noise control");
+      if (has(/\b(?:flammable|fire|finishes?)\b/i)) safetyLabels.push("safe material storage");
+      const safetySubject = joinProjectLabels(safetyLabels.slice(0, 4));
+      add(safetySubject ? `Check ${safetySubject} needs` : "Check the workspace safety and infrastructure requirements", safetyNeed);
+      add("Plan a flexible layout for work, storage, and access", layoutNeed);
+      add("Set the first-phase budget and upgrade priorities", budgetNeed);
+      add("Choose the first major tool and required safety equipment", equipmentNeed && has(/\b(?:which major tool|first major tool|table saw|miter saw|track saw|power tool|safety equipment)\b/i));
+      add("Build and organize the first usable setup", buildNeed || layoutNeed || equipmentNeed);
+      add("Complete real projects and review what needs to change", validationNeed);
+   } else {
+      const circulationOrServiceProject = has(/\b(?:lend|lending|borrow|borrowing|loan|loans|check[- ]?out|returns?|membership program|service program|volunteer[- ]run|shared resource)\b/i);
+      const collectionCoreNeed = has(/\b(?:family archive|photo archive|document archive|digital archive|historical archive|collection|catalog|repository|media library|record collection|photo collection|document collection|artifacts?|specimens?)\b/i);
+      const collectionMaterialNeed = has(/\b(?:photographs?|photos?|letters?|certificates?|historical documents?|family records?|physical records?|albums?)\b/i);
+      const collectionOperationNeed = has(/\b(?:inventory|catalog|digitize|scan|metadata|file[- ]?naming|folder structure|identify unknown|preserv|archival|backup)\b/i);
+      const collectionOrCatalogProject = !circulationOrServiceProject && (collectionCoreNeed || (collectionMaterialNeed && collectionOperationNeed && has(/\b(?:organize|preserve|catalog|archive|digitize|inventory)\b/i)));
+      const preservationNeed = has(/\b(?:preserv|archival|fragile|original image|historical accuracy|damage cleanup|protect the original|safely returned|long-term storage)\b/i);
+      const organizationNeed = has(/\b(?:file[- ]?naming|naming system|folder structure|metadata|tagging|catalog|organization system|indexing|classification)\b/i);
+      const backupOrStorageNeed = has(/\b(?:backup|backed up|cloud storage|local drives?|external drives?|storage structure|more than one place|redundant storage)\b/i);
+      const reviewOrIdentificationNeed = has(/\b(?:identify unknown|unknown people|unknown items|review with|family review|stakeholder review|collect their input|annotations?|fact checking|resolve unknown)\b/i);
+      const qualityStandardNeed = has(/\b(?:quality standard|useful quality|resolution|scanning standard|capture standard|editing should be limited|acceptance criteria|professional(?:ly)? scanned|specialist handling)\b/i);
+      const secondaryDeliverableNeed = has(/\b(?:printed book|memory book|report|presentation|exhibit|portfolio|publication|shareable version|final deliverable)\b/i);
+      const softwareProject = has(/\b(?:software|app|website|web application|browser[- ]based|api|codebase|database|user flow|frontend|backend)\b/i);
+      const participantProgramProject = isParticipantProgramProjectIntake(source);
+      const explicitResearchArtifact = has(/\b(?:research question|research brief|literature review|evidence review|credible sources?|citations?|bibliography|research findings?|field observations?|research interviews?)\b/i);
+      const structuredResearchStudy = has(/\b(?:study design|data collection plan|research methods?|hypothesis|sample size|control group|analysis plan)\b/i) && has(/\b(?:research|study|findings?|data|evidence)\b/i);
+      const researchDeliverablePair = has(/\b(?:research paper|research report|evidence report|literature review|source-based brief|research findings report)\b/i);
+      const researchProject = !participantProgramProject && !has(/\b(?:not|without)\b.{0,28}\b(?:research study|complicated research|formal study)\b/i) && (explicitResearchArtifact || structuredResearchStudy || researchDeliverablePair);
+      const narrativeProject = has(/\b(?:story|novel|short story|picture book|children['’]s book|screenplay|script|comic|graphic novel|characters?|plot|story arc|ending|manuscript)\b/i) && !researchProject;
+      const writingProject = (narrativeProject || has(/\b(?:article|essay|newsletter|copywriting|manuscript|draft|write|writing|book)\b/i)) && !collectionOrCatalogProject && !researchProject;
+      const illustratedNarrativeProject = narrativeProject && has(/\b(?:illustrated|illustrations?|artwork|visual style|character sketches?|page layouts?|picture[- ]book|page-by-page|spreads?)\b/i);
+      const storyStructureNeed = narrativeProject && has(/\b(?:story structure|story arc|plot|tension|ending|character change|emotional progression|what finally helps|how .* changes?)\b/i);
+      const pageFlowNeed = narrativeProject && has(/\b(?:page-by-page|page plan|page range|picture[- ]book format|spreads?|24-to-32-page|24 to 32 page)\b/i);
+      const manuscriptNeed = writingProject && has(/\b(?:manuscript|complete draft|word count|under \d+ words?|script|text draft)\b/i);
+      const visualApproachNeed = illustratedNarrativeProject && has(/\b(?:illustration process|visual style|create all the illustrations|hand-drawn|digital artwork|hire an illustrator|artwork process)\b/i);
+      const visualProductionNeed = illustratedNarrativeProject && has(/\b(?:finished artwork|illustrations?|page layouts?|typography|text difficult to see|pictures?)\b/i);
+      const audienceReviewNeed = has(/\b(?:read aloud|review the manuscript|reviewers?|beta readers?|family members to review|child before final|observe where|feedback)\b/i);
+      const publicationNeed = has(/\b(?:printer|printing service|book-making service|print-ready|file requirements|proof copies?|printed proof|paper options|delivery times?|minimum quantities?)\b/i);
+      const serviceOrProgramProject =
+         circulationOrServiceProject ||
+         participantProgramProject ||
+         has(/\b(?:create|launch|run|operate|start|design|set up)\b.{0,90}\b(?:service|program|pilot)\b|\b(?:service|program|pilot)\b.{0,90}\b(?:participants?|clients?|intake|delivery|pilot|operations?|applications?|matching|orientation|recruitment)\b/i);
+      const coordinationSignalCount = [
+         /\b(?:deadline|timeline|within \d+ (?:days?|weeks?|months?)|by [A-Z][a-z]+ \d{1,2})\b/i,
+         /\b(?:budget|cost|deposit|fees?|quotes?|afford)\b/i,
+         /\b(?:schedule|sequence|before|after|dependency|depends on)\b/i,
+         /\b(?:vendor|provider|contractor|mover|service|appointment|booking)\b/i,
+         /\b(?:responsible|ownership|family members?|stakeholders?|coordinate|handoff)\b/i,
+         /\b(?:contingency|backup plan|risk|delay|cancellation|fallback)\b/i,
+         /\b(?:location|destination|housing|lease|utilities|transportation|travel|move|relocat|transition)\b/i,
+      ].filter((pattern) => pattern.test(source)).length;
+      const coordinationPlanningProject =
+         !softwareProject &&
+         !researchProject &&
+         !writingProject &&
+         !collectionOrCatalogProject &&
+         !serviceOrProgramProject &&
+         coordinationSignalCount >= 3 &&
+         has(/\b(?:plan|prepare|coordinate|organize|arrange|move|relocat|transition|change|complete)\b/i);
+      const comparisonNeed = has(/\b(?:compare|choose between|options?|quotes?|providers?|vendors?|services?|approaches?)\b/i);
+      const transitionExecutionNeed = has(/\b(?:move|relocat|transition|switch|change over|cut over|handoff|first day|first week|go live)\b/i);
+      const coordinationLanguage = getHumanCoordinationMilestones(source);
+      const explicitFirstSet = has(/\b(?:first|priority|initial|pilot|sample|meaningful)\s+(?:collection|set|batch|group|case|segment|folder|archive|records?|materials?|items?)\b|\bfocus\s+on\s+one\b/i);
+
+      if (participantProgramProject) {
+         const programLabel = has(/\bpilot\b/i) ? "pilot" : "program";
+         add(`Get the ${programLabel} approved and assign an owner`, true);
+         add("Set privacy, role boundaries, and escalation rules", true);
+         add(has(/\b(?:apply|application|eligibility|match|matching|pairing)\b/i) ? "Finalize applications, eligibility, and matching" : "Finalize participant eligibility and intake", true);
+         add(has(/\b(?:orientation|training|active listening|resource guide|coordinator support)\b/i) ? "Prepare orientation and coordinator support" : "Prepare staff and volunteer support", true);
+         const scheduledService = has(/\b(?:rides?|drivers?|transportation|pickups?|drop[- ]?offs?|deliveries?|appointments?|shifts?|scheduled sessions?)\b/i);
+         add(
+            scheduledService
+               ? "Set communication, scheduling, and exception rules"
+               : has(/\b(?:communication|meetings?|check-ins?|missed meetings?|reassignment|stops? responding|leaves? during)\b/i)
+                 ? "Set communication, meeting, and exception rules"
+                 : "Set day-to-day operating and exception rules",
+            true,
+         );
+         add(`Set the ${programLabel} budget, dates, and recruitment plan`, budgetNeed || true);
+         add(`Recruit participants and run the ${programLabel}`, true);
+         add(`Review the ${programLabel} and decide what changes next`, validationNeed || true);
+         return result.slice(0, 8);
+      }
+
+      if (coordinationPlanningProject) {
+         add(coordinationLanguage.constraints, true);
+      } else if (complianceNeed) {
+         add(has(/\b(?:insurance|lease rules?)\b/i) ? "Confirm approval, insurance, and operating rules" : "Confirm permissions, legal requirements, and operating rules", true);
+      }
+
+      if (serviceOrProgramProject) {
+         add(circulationOrServiceProject ? "Choose and inventory the first resource set" : "Define the first service scope and who it must support", true);
+      } else if (collectionOrCatalogProject && explicitFirstSet) {
+         add("Choose and inventory the first collection", true);
+      } else if (softwareProject) {
+         add("Define the smallest complete user flow", scopeNeed || true);
+      } else if (researchProject) {
+         add("Confirm the research question and evidence standard", scopeNeed || discoveryNeed || true);
+      } else if (narrativeProject) {
+         add(storyStructureNeed ? "Define the story arc and emotional progression" : "Define the narrative promise and complete story arc", true);
+      } else if (writingProject) {
+         add("Confirm the purpose, audience, and central argument", scopeNeed || explicitAudienceNeed || true);
+      } else if (serviceOrProgramProject && explicitAudienceNeed) {
+         add("Define the first service scope and who it must support", scopeNeed || true);
+      } else if (coordinationPlanningProject) {
+         add(coordinationLanguage.outcome, true);
+      } else {
+         add("Choose the first useful scope and define what it must prove", scopeNeed || explicitAudienceNeed || collectionOrCatalogProject || true);
+      }
+
+      if (serviceOrProgramProject) {
+         add(circulationOrServiceProject ? "Define eligibility, privacy, safety, and exception rules" : "Define eligibility, privacy, quality, and service rules", governanceNeed || safetyNeed || circulationOrServiceProject);
+      } else if (collectionOrCatalogProject && (governanceNeed || organizationNeed || reviewOrIdentificationNeed)) {
+         add("Define privacy, naming, metadata, and identification rules", true);
+      } else if (governanceNeed && !coordinationPlanningProject) {
+         const governanceLabels: string[] = [];
+         if (has(/\b(?:privacy|personal information|sensitive information|access rules?)\b/i)) governanceLabels.push("privacy and access");
+         if (has(/\b(?:permission|consent|rights|source attribution)\b/i)) governanceLabels.push("permission and rights");
+         if (has(/\b(?:evidence|fact-checking|source quality)\b/i)) governanceLabels.push("evidence");
+         add(`Set the ${joinProjectLabels(governanceLabels) || "information and governance"} rules`, true);
+      }
+
+      if (qualityStandardNeed || preservationNeed) {
+         add(collectionOrCatalogProject ? "Set quality standards and specialist-handling criteria" : "Set the quality and acceptance standards", true);
+      } else if (coordinationPlanningProject && discoveryNeed) {
+         add("Confirm the facts, blockers, and dependencies that shape the plan", true);
+      } else if (discoveryNeed && !researchProject && !collectionOrCatalogProject && !serviceOrProgramProject && !writingProject) {
+         add("Gather the facts and requirements that later decisions depend on", true);
+      }
+
+      if (serviceOrProgramProject && circulationOrServiceProject) {
+         add("Choose the storage, labeling, and recordkeeping approach", true);
+      } else if (collectionOrCatalogProject && (organizationNeed || backupOrStorageNeed)) {
+         add("Choose the organization, storage, and backup structure", true);
+      } else if (softwareProject && (formatNeed || organizationNeed || backupOrStorageNeed)) {
+         add("Choose the technical structure and data model", true);
+      } else if (narrativeProject && pageFlowNeed) {
+         add("Build the page-by-page story map", true);
+      } else if (writingProject && formatNeed) {
+         add("Choose the structure and delivery format", true);
+      } else if ((formatNeed || organizationNeed || backupOrStorageNeed) && !coordinationPlanningProject) {
+         add("Choose the structure and operating approach", true);
+      }
+
+      if (serviceOrProgramProject && circulationOrServiceProject) {
+         add("Define the intake, checkout, return, and ownership workflow", true);
+      } else if (coordinationPlanningProject) {
+         add(coordinationLanguage.sequence, true);
+      } else if (!collectionOrCatalogProject && !writingProject && workflowNeed) {
+         add("Define the workflow, capacity, and ownership", true);
+      }
+
+      add(commercialNeed ? "Build the budget, pricing, and viability model" : coordinationPlanningProject ? coordinationLanguage.budget : "Set the first-phase budget and resource priorities", (budgetNeed || commercialNeed) && !narrativeProject);
+
+      if (equipmentNeed && !collectionOrCatalogProject && !serviceOrProgramProject && !writingProject && !coordinationPlanningProject) {
+         add("Choose the tools, equipment, and materials that fit the confirmed requirements", true);
+      }
+
+      if (serviceOrProgramProject) {
+         add(circulationOrServiceProject ? "Set up and run the first lending pilot" : "Set up and run the first service pilot", buildNeed || validationNeed || true);
+         add("Review the pilot and decide what should continue, change, or stop", validationNeed || true);
+      } else if (collectionOrCatalogProject) {
+         add("Process and organize the priority collection", buildNeed || true);
+         add("Review the collection, resolve unknown details, and preserve the finished set", reviewOrIdentificationNeed || preservationNeed || secondaryDeliverableNeed);
+         add("Test access, backups, and whether the workflow can be repeated", validationNeed || backupOrStorageNeed || true);
+      } else if (softwareProject) {
+         add("Build the first end-to-end version", buildNeed || true);
+         add("Test the flow with realistic user scenarios", validationNeed || true);
+      } else if (researchProject) {
+         add("Collect and organize the required evidence", discoveryNeed || true);
+         add("Build the argument or deliverable from the evidence", buildNeed || true);
+         add("Review the result against the research question and evidence standard", validationNeed || true);
+      } else if (narrativeProject) {
+         add(manuscriptNeed ? "Draft and revise the complete manuscript" : "Draft and revise the complete story", buildNeed || true);
+         if (visualApproachNeed) {
+            add("Choose the visual approach and production plan", true);
+         }
+         if (illustratedNarrativeProject || visualProductionNeed) {
+            add("Create the illustrations and page layouts", true);
+         }
+         if (audienceReviewNeed || validationNeed) {
+            add("Run focused read-aloud and visual-comprehension reviews", true);
+         }
+         if (publicationNeed) {
+            add("Prepare print-ready files and choose the production service", true);
+            add("Order and review the first proof", true);
+         } else {
+            add("Finalize the complete publishable version", true);
+         }
+      } else if (writingProject) {
+         add("Draft the complete piece", buildNeed || true);
+         add("Revise it against the intended outcome", validationNeed || true);
+      } else if (coordinationPlanningProject) {
+         add(coordinationLanguage.options, comparisonNeed);
+         add(coordinationLanguage.preparation, true);
+         add(transitionExecutionNeed ? coordinationLanguage.execution : "Carry out the plan", true);
+         add(coordinationLanguage.closeout, validationNeed || true);
+      } else {
+         add("Create the first usable version", buildNeed || true);
+         add("Test the result in realistic conditions and review the evidence", validationNeed || true);
+      }
+   }
+
+   return result.slice(0, 8);
+}
+
+function buildDependencyAwareMilestones(description: string, openQuestions: string[], constraints: string[]) {
+   const result = extractProjectDescriptionMilestones(description, openQuestions);
+   if (result.length) return result;
+
+   const clean = sanitizeProjectBody([description, ...openQuestions, ...constraints].join("\n"));
+   if (/\b(?:software|app|website|web application|browser-based|api|code)\b/i.test(clean)) {
+      return ["Define the smallest complete user flow", "Build the first end-to-end version", "Test the flow with realistic user scenarios"];
+   }
+   if (/\b(?:research question|research brief|literature review|evidence review|credible sources?|citations?|bibliography|study design|research findings?)\b/i.test(clean)) {
+      return ["Confirm the research question and evidence standard", "Collect and organize the required evidence", "Review the findings against the research question"];
+   }
+   if (/\b(?:story|novel|picture book|children['’]s book|screenplay|script|comic|graphic novel|characters?|plot|ending|manuscript)\b/i.test(clean)) {
+      return ["Define the story arc and emotional progression", "Draft and revise the complete manuscript", "Test the story with its intended audience"];
+   }
+   if (/\b(?:article|book|essay|writing|draft|newsletter|copywriting)\b/i.test(clean)) {
+      return ["Confirm the purpose, audience, and central message", "Draft the complete piece", "Revise it against the intended outcome"];
+   }
+   return ["Define the finished outcome and the first dependency", "Create the smallest usable version", "Validate it against the success criteria"];
+}
+
+function inferSeniorProjectStartingPoint(milestones: string[], openQuestions: string[], constraints: string[], llmNextStep?: string) {
+   const first = milestones[0] || "Define the finished outcome and first dependency";
    const cleanLLMNextStep = sanitizeProjectNextStep(llmNextStep);
 
-   if (cleanLLMNextStep && !/^(?:let'?s|get started|start by defining what success looks like)/i.test(cleanLLMNextStep)) {
+   if (cleanLLMNextStep && cleanLLMNextStep.length <= 420 && !/^(?:let'?s|get started|start by defining what success looks like|choose the first move|act as|identify the first dependency-aware checkpoint)/i.test(cleanLLMNextStep)) {
       return cleanLLMNextStep;
    }
 
-   return `Start with ${first.replace(/[.]+$/, "")}. It is the first checkpoint that gives the rest of the project a reliable direction.`;
+   let reason = "It resolves the earliest dependency the later work relies on.";
+   if (/\b(?:choose|select)\b.{0,40}\b(?:first|priority|initial)\b.{0,40}\b(?:collection|set|batch|sample|case|group)\b|\binventory\b.{0,30}\b(?:first|priority|initial)\b/i.test(first)) {
+      reason = "One bounded starting set reveals the real volume, condition, information gaps, access needs, and workflow demands before the project scales.";
+   } else if (/\b(?:move timeline|lease deadlines?)\b/i.test(first)) {
+      reason = "The lease end, notice window, approval timing, and move window determine when the project can safely commit without creating a housing gap or unnecessary overlap.";
+   } else if (/\b(?:deadlines? and hard limits|travel dates? and hard limits|external constraints?|commitments?|decision deadlines?)\b/i.test(first)) {
+      reason = "The fixed dates, rules, and irreversible commitments determine which options are realistic and what must happen first.";
+   } else if (/\bfirst projects?\b|\bprojects? the workspace must support\b/i.test(first)) {
+      reason = "The first real projects determine the work surface, cutting needs, storage, tool choices, and space the initial setup actually needs.";
+   } else if (/\b(?:approval|insurance|licensing|operating rules?|management|permission)\b/i.test(first)) {
+      if (/\binsurance\b/i.test(first)) {
+         reason = "Approval, insurance, and operating conditions determine whether the program can proceed and what rules the first version must follow.";
+      } else if (/\b(?:event|movie|screening|quiet hours?|venue|courtyard)\b/i.test([...openQuestions, ...constraints].join(" "))) {
+         reason = "Management approval, licensing, quiet-hour rules, and shared-space requirements determine whether and how the event can happen, so confirm them before choosing a date, movie, or equipment setup.";
+      } else {
+         reason = "Permissions and operating requirements determine whether the project can proceed and which later choices are actually allowed.";
+      }
+   } else if (/\b(?:power|lighting|ventilation|dust control|noise control|safety|infrastructure|legal|operating requirements?)\b/i.test(first)) {
+      reason = "Those checks can rule out unsafe layouts, purchases, or operating choices before money or permanent effort is committed.";
+   } else if (/\b(?:layout|storage|access|work surface|workbench)\b/i.test(first)) {
+      reason = "The arrangement must support the intended work while preserving the space's other uses.";
+   } else if (/\b(?:budget|resource priorities|upgrade priorities)\b/i.test(first)) {
+      reason = "It keeps early spending tied to the work the first version must support.";
+   } else if (/\b(?:scope|who it must serve|what it must prove)\b/i.test(first)) {
+      reason = "That defines what the first version is responsible for and prevents the project from expanding without evidence.";
+   } else if (/\b(?:pilot|program)\s+approved|assign an owner/i.test(first)) {
+      reason = "Formal ownership, approval, privacy, and escalation rules determine whether participant recruitment and matching can begin safely.";
+   } else if (/\b(?:research|compare|evaluate|options|requirements|facts)\b/i.test(first)) {
+      reason = "It gives the later decisions enough evidence to avoid preventable rework.";
+   }
+
+   return `Start with ${first.replace(/[.]+$/, "")}. ${reason}`;
+}
+
+function makeProjectWorkingNoteReadable(value: string) {
+   let clean = cleanProjectIntakeStatement(value, 260)
+      .replace(/[.!?]+$/, "")
+      .trim();
+   if (!clean || /^(?:for|about|regarding)\s+.{1,80}$/i.test(clean)) return "";
+   if (/\b(?:are|remain)\s+(?:still\s+)?unresolved$/i.test(clean)) return "";
+   if (/^Nothing has been (?:booked|purchased|installed|started)/i.test(clean)) return "";
+
+   const priorityShift = clean.match(/\bbut\s+(?:i|we)\s+(?:probably\s+)?(?:should|need\s+to|must)\s+(.+)$/i);
+   if (priorityShift) {
+      clean = `Important first check: ${priorityShift[1].replace(/^make\s+sure\s+/i, "confirm ")}`;
+   }
+
+   clean = clean
+      .replace(/^(?:i|we)\s+want\s+to\s+start\s+(?:a\s+)?project\s+(?:around|about|to)\s+/i, "Project focus: ")
+      .replace(/^(?:i|we)\s+(?:also\s+)?have\s+ideas?\s+(?:around|for|about)\s+/i, "Ideas include ")
+      .replace(/^(?:i|we)\s+keep\s+(?:thinking|going back and forth)\s+(?:about\s+)?/i, "Possible direction: ")
+      .replace(/^(?:i|we)\s+(?:also\s+)?want\s+/i, "Desired result: ")
+      .replace(/^(?:i|we)\s+(?:also\s+)?need\s+to\s+/i, "Need to ")
+      .replace(/\b(?:i|we)\s+probably\s+should\b/gi, "Should")
+      .replace(/\s+/g, " ")
+      .trim();
+
+   const butIndex = clean.search(/\s+but\s+/i);
+   if (!/^Important first check:/i.test(clean) && butIndex > 24) clean = clean.slice(0, butIndex).trim();
+   if (/^(?:project focus|desired result):/i.test(clean)) return "";
+   if (clean.length > 220) clean = `${clean.slice(0, 217).replace(/\s+\S*$/, "")}…`;
+
+   return clean ? `${clean.charAt(0).toUpperCase()}${clean.slice(1)}` : "";
+}
+
+function inferProjectWorkingNotes(description: string, used: string[]) {
+   const candidates = splitProjectIntakeClauses(description)
+      .filter((statement) => statement.length <= 240 && !used.some((usedValue) => getProjectIntakeSemanticOverlap(statement, usedValue) >= 0.55))
+      .map(makeProjectWorkingNoteReadable)
+      .filter(Boolean);
+
+   return uniqueProjectIntakeStatements(candidates, 5);
+}
+
+function renderProjectDraftItems(items: string[], fallback: string) {
+   return items.length ? items.map((item) => `- ${item.replace(/[.!?]+$/, "")}`).join("\n") : fallback;
 }
 
 function buildDetailedProjectDraft({ title, description, llmSummary, llmUsefulContext, llmNextStep }: { title: string; description: string; llmSummary?: string; llmUsefulContext?: string; llmNextStep?: string }) {
-   const inferredMilestones = extractProjectDescriptionMilestones(description);
-   const milestones =
-      inferredMilestones.length >= 3
-         ? inferredMilestones
-         : [...inferredMilestones, "Confirm the intended outcome and the decisions that shape it", "Complete the main project work", "Review the result against the success criteria", "Prepare the finished project to share or use"].slice(0, 6);
-
    const goal = inferProjectDraftGoal(title, description);
    const success = inferProjectDraftSuccess(description);
-   const situation = inferProjectDraftSituation(description, milestones);
+   const situation = inferProjectDraftSituation(description);
+   const decisions = inferProjectDraftDecisions(description);
    const openQuestions = inferProjectDraftOpenQuestions(description);
-   const startingPoint = inferSeniorProjectStartingPoint(description, milestones, llmNextStep);
+   const constraints = inferProjectDraftConstraints(description, decisions);
+   const milestones = buildDependencyAwareMilestones(description, openQuestions, constraints);
+   const startingPoint = inferSeniorProjectStartingPoint(milestones, openQuestions, constraints, llmNextStep);
+   const workingAssumptions = uniqueProjectIntakeStatements([...inferEventProjectWorkingAssumptions(description), ...inferGeneralProjectWorkingAssumptions(description)], 6);
+   const workingNotes = inferProjectWorkingNotes(description, [goal, ...success, ...situation, ...decisions, ...openQuestions, ...constraints, ...milestones, ...workingAssumptions]);
 
-   const modelContext = [llmSummary, llmUsefulContext]
-      .map((value) => sanitizeProjectBody(value))
-      .filter((value) => value && value.length > 30 && !/^let'?s\b/i.test(value))
-      .join(" ");
+   const structuredSections = [goal, ...success, ...situation, ...decisions, ...openQuestions, ...constraints, ...milestones, ...workingAssumptions, ...workingNotes];
+   const modelNotes = uniqueProjectIntakeStatements(
+      [llmSummary || "", llmUsefulContext || ""].filter(
+         (value) =>
+            value &&
+            value.length > 30 &&
+            value.length <= 220 &&
+            !/[.!?].+[.!?]/.test(value) &&
+            !/^(?:let'?s|act as|identify the first|you are|system|assistant|project lead instructions?)/i.test(value) &&
+            !structuredSections.some((existing) => getProjectIntakeSemanticOverlap(value, existing) >= 0.55),
+      ),
+      2,
+   );
 
    return sanitizeProjectBody(`Project Goal:
 ${goal}
 
 Success Looks Like:
-${success}
+${renderProjectDraftItems(success, "- Define the observable result that would make this project complete and useful")}
 
 Current Situation:
-${situation}
+${renderProjectDraftItems(situation, "- The project is at its starting point")}
+
+Confirmed Decisions:
+${renderProjectDraftItems(decisions, "None confirmed yet.")}
+
+Open Questions:
+${renderProjectDraftItems(openQuestions, "None identified yet.")}
+
+Constraints:
+${renderProjectDraftItems(constraints, "None confirmed yet.")}
 
 Working Notes:
-${description}${modelContext ? `\n\nALLEVIN Project Lead Context:\n${modelContext}` : ""}
+${renderProjectDraftItems([...workingAssumptions, ...workingNotes, ...modelNotes].slice(0, 8), "- Add useful details as the project develops")}
 
 Initial Milestones:
 ${milestones.map((milestone, index) => `${index + 1}. ${milestone}`).join("\n")}
-
-Open Questions:
-${openQuestions.length ? openQuestions.map((question) => `- ${question}`).join("\n") : "None yet."}
 
 Recommended Starting Point:
 ${startingPoint}`);
@@ -1471,21 +2841,710 @@ function getProjectMilestoneCandidates(project: ProjectLibraryItem) {
    return [nextStep || "Clarify the finished outcome", "Complete the main work", "Review and finish the project"];
 }
 
+function getMilestoneMetadataTokens(value?: string) {
+   const stopWords = new Set([
+      "after",
+      "against",
+      "before",
+      "build",
+      "check",
+      "choose",
+      "complete",
+      "create",
+      "current",
+      "decide",
+      "define",
+      "first",
+      "from",
+      "into",
+      "milestone",
+      "needs",
+      "plan",
+      "project",
+      "review",
+      "select",
+      "setup",
+      "should",
+      "that",
+      "their",
+      "then",
+      "this",
+      "what",
+      "when",
+      "where",
+      "which",
+      "with",
+      "work",
+   ]);
+
+   return new Set(
+      sanitizeProjectBody(value)
+         .toLowerCase()
+         .split(/[^a-z0-9]+/)
+         .filter((token) => token.length >= 3 && !stopWords.has(token)),
+   );
+}
+
+function getMilestoneMetadataOverlap(left?: string, right?: string) {
+   const leftTokens = getMilestoneMetadataTokens(left);
+   const rightTokens = getMilestoneMetadataTokens(right);
+   if (!leftTokens.size || !rightTokens.size) return 0;
+
+   let overlap = 0;
+   leftTokens.forEach((token) => {
+      if (rightTokens.has(token)) overlap += 1;
+   });
+
+   return overlap / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function getMilestoneProjectSectionItems(project: ProjectLibraryItem, labels: string[]) {
+   return sanitizeProjectBody(getStructuredProjectSection(project.notes[0]?.body || project.latestSummary, labels))
+      .split("\n")
+      .map((line) => sanitizeProjectSummary(line.replace(/^\s*(?:[-*•]|\d+[.)]|[☐☑✓○])\s*/, "")))
+      .filter((line) => line && !/^(?:none|none confirmed|none confirmed yet|none identified yet)\.?$/i.test(line))
+      .slice(0, 40);
+}
+
+function getMilestoneRelatedItems(title: string, items: string[], limit = 8) {
+   const titleTokens = getMilestoneMetadataTokens(title);
+
+   return items
+      .map((item, index) => {
+         const itemTokens = getMilestoneMetadataTokens(item);
+         let shared = 0;
+         titleTokens.forEach((token) => {
+            if (itemTokens.has(token)) shared += 1;
+         });
+
+         const directCategoryMatch =
+            (/\b(?:power|electrical|outlet)\b/i.test(title) && /\b(?:power|electrical|outlet)\b/i.test(item)) ||
+            (/\b(?:light|lighting)\b/i.test(title) && /\b(?:light|lighting)\b/i.test(item)) ||
+            (/\b(?:ventilation|airflow)\b/i.test(title) && /\b(?:ventilation|airflow)\b/i.test(item)) ||
+            (/\b(?:dust|noise)\b/i.test(title) && /\b(?:dust|noise)\b/i.test(item)) ||
+            (/\b(?:layout|storage|access|workbench|workspace)\b/i.test(title) && /\b(?:layout|storage|access|workbench|workspace|portable|mobile|permanent)\b/i.test(item)) ||
+            (/\b(?:budget|cost|price|resource)\b/i.test(title) && /\b(?:budget|cost|price|spend|resource)\b/i.test(item)) ||
+            (/\b(?:tool|equipment|material)\b/i.test(title) && /\b(?:tool|equipment|material|saw|hardware|software)\b/i.test(item)) ||
+            (/\b(?:audience|user|participant|customer)\b/i.test(title) && /\b(?:audience|user|participant|customer)\b/i.test(item)) ||
+            (/\b(?:brand|language|promise|positioning)\b/i.test(title) && /\b(?:brand|language|promise|positioning|identity)\b/i.test(item)) ||
+            (/\b(?:research|source|evidence|fact)\b/i.test(title) && /\b(?:research|source|evidence|fact|archive|interview)\b/i.test(item));
+
+         return {
+            item,
+            index,
+            score: shared * 2 + (directCategoryMatch ? 3 : 0) + getMilestoneMetadataOverlap(title, item),
+         };
+      })
+      .filter((candidate) => candidate.score >= 2)
+      .sort((left, right) => right.score - left.score || left.index - right.index)
+      .map((candidate) => candidate.item)
+      .filter((item, index, all) => all.findIndex((candidate) => getProjectIntakeSemanticOverlap(candidate, item) >= 0.84) === index)
+      .slice(0, limit);
+}
+
+function getGeneratedProjectMilestoneCategory(title: string) {
+   const clean = sanitizeProjectTitle(title);
+   if (
+      /\b(?:move timeline|lease deadlines?|new apartment|plan the move|relocation budget|neighborhoods?|apartments?|movers?|book the move|move in|old apartment|finish the move|deadlines? and hard limits|finished result needs to include|order of work|backup options|prepare the logistics|carry out the plan|finish the loose ends|travel dates?|trip needs to include|itinerary|book the trip)\b/i.test(
+         clean,
+      )
+   )
+      return "coordination";
+   if (/\b(?:first projects?|initial projects?|first uses?|use cases?|scenarios?|first useful scope|pilot scope|initial scope|must support|first collection|priority collection|first resource set|first batch|first set|inventory the first)\b/i.test(clean))
+      return "first-scope";
+   if (/\b(?:choose|select|decide|finalize|confirm)\b/i.test(clean) && /\b(?:tool|equipment|material|format|platform|approach|option|vendor|source|parts?)\b/i.test(clean)) return "selection";
+   if (
+      /\b(?:requirements?|power|electrical|lighting|ventilation|dust|noise|safety|risk|legal|permit|privacy|permission|compliance|infrastructure|quality|standards?|criteria|metadata|naming|identification|eligibility|exception|insurance|liability)\b/i.test(
+         clean,
+      )
+   )
+      return "requirements";
+   if (/\b(?:layout|storage|access|workbench|workspace|structure|hierarchy|editorial|information architecture|outline|organization|folder|backup|recordkeeping|labeling)\b/i.test(clean)) return "layout";
+   if (/\b(?:budget|cost|pricing|resources?|capacity|upgrade priorities|viability|margin)\b/i.test(clean)) return "budget";
+   return "general";
+}
+
+function getGeneratedProjectCriterionCategory(criterion: string) {
+   const clean = sanitizeProjectSummary(criterion);
+   if (
+      /\b(?:lease end|notice deadline|move window|approval timing|housing requirements|must-have apartment|move sequence|backup plan|relocation budget|neighborhood|apartment|mover|booking|first-night essentials|old apartment|remaining address|remaining obligation)\b/i.test(
+         clean,
+      )
+   )
+      return "coordination";
+   if (/\b(?:initial projects?|uses?|scenarios?).*\bnamed\b|\boperations? or capabilities?.*\blisted\b|\bcapabilities intentionally excluded\b|\bmobility, reset, access, audience, or operating requirements\b/i.test(clean)) return "first-scope";
+   if (
+      /\belectrical or power capacity\b|\bcurrent lighting\b|\bventilation or airflow approach\b|\bdust-control approach\b|\bnoise-control\b|\bsafety risks, required controls\b|\brequired changes are separated from optional upgrades\b|\bremaining unknown has a clear owner\b/i.test(
+         clean,
+      )
+   )
+      return "requirements";
+   if (/\bwork, storage, and access zones\b|\barrangement supports\b|\bshared-space, mobility, and reset requirements\b|\blayout identifies\b/i.test(clean)) return "layout";
+   if (/\bmaximum budget or capacity boundary\b|\brequired spending or resource categories\b|\bpriority upgrades\b|\bdefer list\b/i.test(clean)) return "budget";
+   if (/\bstrongest realistic options\b|\bworking option has been selected\b|\breason for the selection\b|\bpurchase, approval, dependency, or installation condition\b/i.test(clean)) return "selection";
+   return "";
+}
+
+function isGeneratedProjectCriterionCompatible(title: string, criterion: string) {
+   const criterionCategory = getGeneratedProjectCriterionCategory(criterion);
+   return !criterionCategory || criterionCategory === getGeneratedProjectMilestoneCategory(title);
+}
+
+interface GeneratedProjectMilestoneMetadata {
+   goal: string;
+   whyItMatters: string;
+   startingPrompt: string;
+   decisions: string[];
+   openQuestions: string[];
+   dependencies: string[];
+   completionCriteria: string[];
+}
+
+function getScopedMilestoneQuestions(title: string, questions: string[]) {
+   const cleanTitle = sanitizeProjectTitle(title).replace(/[.!?]+$/, "");
+   const firstUseOrScope =
+      /\b(?:first projects?|initial projects?|first uses?|use cases?|scenarios?|first useful scope|pilot scope|initial scope|must support|first collection|priority collection|first resource set|first batch|first set|inventory the first)\b/i.test(
+         cleanTitle,
+      );
+   const requirementsOrSafety =
+      /\b(?:requirements?|power|electrical|lighting|ventilation|dust|noise|safety|risk|legal|permit|privacy|permission|approval|management|license|licensing|operating rules?|quiet hours?|compliance|infrastructure|quality|standards?|criteria|metadata|naming|identification|eligibility|exception|insurance|liability)\b/i.test(
+         cleanTitle,
+      );
+   const layoutOrStructure = /\b(?:layout|storage|access|workbench|workspace|structure|hierarchy|editorial|information architecture|outline|organization|folder|backup|recordkeeping|labeling)\b/i.test(cleanTitle);
+   const budgetOrResources = /\b(?:budget|cost|pricing|resources?|capacity|upgrade priorities|viability|margin)\b/i.test(cleanTitle);
+   const selection = /\b(?:choose|select|decide|finalize|confirm)\b/i.test(cleanTitle) && /\b(?:tool|equipment|material|format|platform|approach|option|vendor|source|parts?)\b/i.test(cleanTitle);
+   const brandOrPositioning = /\b(?:brand|language|promise|positioning|identity|message|tone)\b/i.test(cleanTitle);
+   const relationship = /\b(?:relate|relationship|parent|ecosystem|family|portfolio|role of each)\b/i.test(cleanTitle);
+   const workflow = /\b(?:workflow|process|processing|capacity|responsibilities|handoffs|operating model|service flow|production|review cycle|identification)\b/i.test(cleanTitle);
+   const research = /\b(?:research|sources?|evidence|facts?|archive|interview|requirements gathering|discovery)\b/i.test(cleanTitle);
+   const coordination =
+      /\b(?:move timeline|lease deadlines?|new apartment|plan the move|relocation budget|neighborhoods?|apartments?|movers?|book the move|move in|old apartment|finish the move|deadlines? and hard limits|finished result needs to include|order of work|backup options|prepare the logistics|carry out the plan|finish the loose ends|travel dates?|trip needs to include|itinerary|book the trip)\b/i.test(
+         cleanTitle,
+      );
+
+   if (coordination) {
+      return questions.filter((question) =>
+         /\b(?:deadline|lease|notice|approval|move date|overlap|neighborhood|apartment|commute|rent|parking|noise|security|laundry|internet|mover|packing|utility|address|disposal|cleaning|contingency|budget|travel date|booking|provider|responsibility)\b/i.test(
+            question,
+         ),
+      );
+   }
+   if (firstUseOrScope) {
+      return questions.filter((question) =>
+         /\b(?:first|initial|priority)\s+(?:projects?|uses?|use cases?|scenarios?|scope|collection|resource set|batch|set)\b|\bprojects?\b.*\b(?:support|include|cover)\b|\b(?:inventory|collection|resource set|condition|acceptance|use cases?|scenarios?|scope|must support|operations?|capabilities?)\b/i.test(
+            question,
+         ),
+      );
+   }
+   if (selection) {
+      return questions.filter((question) => /\b(?:tool|equipment|material|format|platform|approach|option|vendor|source|part)\b/i.test(question));
+   }
+   if (requirementsOrSafety) {
+      return questions.filter((question) =>
+         /\b(?:power|electrical|outlet|lighting|light|ventilation|airflow|dust|noise|sound|safety|risk|flammable|finish|fire|legal|permit|privacy|permission|approval|management|license|licensing|rights|quiet[- ]hours?|operating hours?|shared space|courtyard|walkway|entrance|emergency access|compliance)\b/i.test(
+            question,
+         ),
+      );
+   }
+   if (layoutOrStructure) {
+      return questions.filter((question) => /\b(?:layout|storage|access|workbench|workspace|mobile|movable|portable|permanent|wall|mount|structure|hierarchy|editorial|outline)\b/i.test(question));
+   }
+   if (budgetOrResources) {
+      return questions.filter((question) => /\b(?:budget|cost|price|spend|resource|capacity|priority|afford)\b/i.test(question));
+   }
+   if (brandOrPositioning) {
+      return questions.filter((question) => /\b(?:brand|language|promise|positioning|identity|message|tone)\b/i.test(question));
+   }
+   if (relationship) {
+      return questions.filter((question) => /\b(?:relate|relationship|parent|ecosystem|family|portfolio|role)\b/i.test(question));
+   }
+   if (workflow) {
+      return questions.filter((question) => /\b(?:workflow|process|capacity|responsibilities|handoff|operating|production)\b/i.test(question));
+   }
+   if (research) {
+      return questions.filter((question) => /\b(?:research|source|evidence|fact|archive|interview|discovery)\b/i.test(question));
+   }
+
+   return questions;
+}
+
+function buildGeneratedProjectMilestoneMetadata(project: ProjectLibraryItem, title: string, index: number, allTitles: string[]): GeneratedProjectMilestoneMetadata {
+   const cleanTitle = sanitizeProjectTitle(title).replace(/[.!?]+$/, "");
+   const lower = cleanTitle.toLowerCase();
+   const projectBody = sanitizeProjectBody(project.notes[0]?.body || project.latestSummary);
+   const confirmed = getMilestoneProjectSectionItems(project, ["Confirmed Decisions", "Decisions", "Decided"]);
+   const openQuestions = getMilestoneProjectSectionItems(project, ["Open Questions", "Questions", "Unresolved Decisions"]);
+   const constraints = getMilestoneProjectSectionItems(project, ["Constraints", "Requirements", "Limits"]);
+   const relatedDecisions = getMilestoneRelatedItems(cleanTitle, confirmed, 8);
+   const relatedQuestions = getMilestoneRelatedItems(cleanTitle, openQuestions, 8);
+   void getMilestoneRelatedItems(cleanTitle, constraints, 6);
+   const previousTitle = index > 0 ? allTitles[index - 1] : "";
+   const nextTitle = allTitles[index + 1] || "";
+
+   let goal = `Produce a clear, reviewable result for ${cleanTitle.toLowerCase()}.`;
+   let whyItMatters = nextTitle
+      ? `${cleanTitle} gives ${nextTitle.replace(/^./, (character) => character.toLowerCase())} a dependable starting point instead of forcing the later work to rely on assumptions.`
+      : `${cleanTitle} closes the remaining gap between the current project state and a usable finished result.`;
+   let startingPrompt = `Create the smallest concrete result that would prove ${cleanTitle.toLowerCase()} is ready to close.`;
+   let completionCriteria: string[] = [];
+
+   const collectionScope = /\b(?:choose|select)\b.{0,50}\b(?:first|priority|initial)\b.{0,50}\b(?:collection|resource set|set|batch|sample|case|group|records?|items?)\b|\b(?:inventory|catalog)\b.{0,40}\b(?:first|priority|initial)\b/i.test(cleanTitle);
+   const collectionRules = /\b(?:privacy|access|naming|metadata|identification|cataloging|tagging)\b/i.test(cleanTitle);
+   const qualityStandards = /\b(?:quality|capture|scanning|digitization|handling|preservation)\b.{0,40}\b(?:standards?|criteria|rules?)\b|\b(?:standards?|criteria)\b.{0,40}\b(?:quality|handling|preservation|specialist)\b/i.test(cleanTitle);
+   const collectionStructure = /\b(?:organization|folder|storage|backup|repository|archive)\b/i.test(cleanTitle) && /\b(?:structure|system|approach|plan|choose|define|set)\b/i.test(cleanTitle);
+   const collectionProcessing = /\b(?:process|digitize|scan|catalog|organize|preserve)\b/i.test(cleanTitle) && /\b(?:collection|records?|items?|materials?|set|archive)\b/i.test(cleanTitle);
+   const collectionReview = /\b(?:review|resolve|identify|unknown|preserve)\b/i.test(cleanTitle) && /\b(?:collection|details?|items?|set|records?)\b/i.test(cleanTitle);
+   const firstUseOrScope = /\b(?:first projects?|initial projects?|first uses?|use cases?|scenarios?|first useful scope|pilot scope|initial scope|must support|first collection|priority collection|first batch|first set|first resource set)\b/i.test(
+      cleanTitle,
+   );
+   const eventApproval = /\b(?:approval|management|license|licensing|operating rules?|quiet hours?|insurance)\b/i.test(cleanTitle);
+   const programApproval = /\binsurance\b/i.test(cleanTitle) || /\b(?:lending|borrowing|checkout|check-out|loan|service program|pilot program)\b/i.test(projectBody);
+   const serviceResourceScope = /\b(?:choose|select)\b.{0,50}\b(?:first|priority|initial)\b.{0,50}\b(?:resource set|tool set|service set|offering set)\b/i.test(cleanTitle);
+   const serviceRecordStructure = /\b(?:storage|labeling|recordkeeping|checkout records?|borrowing records?)\b/i.test(cleanTitle) && /\b(?:approach|structure|system|plan|choose|define|set)\b/i.test(cleanTitle);
+   const selection = /\b(?:choose|select|decide|finalize|confirm)\b/i.test(cleanTitle) && /\b(?:tool|equipment|material|format|platform|approach|option|vendor|source|parts?)\b/i.test(cleanTitle);
+   const requirementsOrSafety =
+      /\b(?:requirements?|power|electrical|lighting|ventilation|dust|noise|safety|risk|legal|permit|privacy|permission|approval|management|license|licensing|operating rules?|quiet hours?|compliance|infrastructure|quality|standards?|criteria|metadata|naming|identification|handling|preservation)\b/i.test(
+         cleanTitle,
+      ) && !selection;
+   const layoutOrStructure = /\b(?:layout|storage|access|workbench|workspace|structure|hierarchy|editorial|information architecture|outline|organization|folder|backup|repository)\b/i.test(cleanTitle);
+   const budgetOrResources = /\b(?:budget|cost|pricing|resources?|capacity|upgrade priorities|viability|margin)\b/i.test(cleanTitle);
+   const brandOrPositioning = /\b(?:brand|language|promise|positioning|identity|message|tone)\b/i.test(cleanTitle);
+   const relationship = /\b(?:relate|relationship|parent|ecosystem|family|portfolio|role of each)\b/i.test(cleanTitle);
+   const workflow = /\b(?:workflow|process|capacity|responsibilities|handoffs|operating model|service flow|production)\b/i.test(cleanTitle);
+   const research = /\b(?:research|sources?|evidence|facts?|archive|interview|requirements gathering|discovery)\b/i.test(cleanTitle);
+   const buildOrCreate = /\b(?:build|create|produce|implement|install|organize|assemble|develop|write|record|publish|process|digitize|scan|catalog|preserve)\b/i.test(cleanTitle);
+   const validation = /\b(?:test|review|pilot|validate|verify|rehearse|complete real projects|collect evidence|evaluate)\b/i.test(cleanTitle);
+   const coordination =
+      /\b(?:move timeline|lease deadlines?|new apartment|plan the move|relocation budget|neighborhoods?|apartments?|movers?|book the move|move in|old apartment|finish the move|deadlines? and hard limits|finished result needs to include|order of work|backup options|prepare the logistics|carry out the plan|finish the loose ends|travel dates?|trip needs to include|itinerary|book the trip)\b/i.test(
+         cleanTitle,
+      );
+
+   const milestoneQuestions = getScopedMilestoneQuestions(cleanTitle, relatedQuestions);
+
+   if (coordination) {
+      const relocationMilestone = /\b(?:move|apartment|lease|mover|relocation)\b/i.test(`${cleanTitle} ${projectBody}`);
+
+      if (/\b(?:move timeline|lease deadlines?|deadlines? and hard limits|travel dates? and hard limits)\b/i.test(cleanTitle)) {
+         goal = relocationMilestone ? "Put the lease end, notice window, approval timing, and move window on one dependable timeline." : "Put the fixed dates, rules, and irreversible commitments on one dependable timeline.";
+         whyItMatters = nextTitle
+            ? `The hard dates and commitment rules need to be clear before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or the project may make an irreversible choice too early.`
+            : "The fixed dates and irreversible commitments determine what can safely happen next.";
+         startingPrompt = relocationMilestone
+            ? "Write the lease-end date, notice deadline, target move window, and latest safe date for signing the next lease on one simple timeline; verify the notice rule first."
+            : "Write the fixed dates, approval or notice rules, and irreversible commitments on one simple timeline; verify the earliest blocker first.";
+         completionCriteria = relocationMilestone
+            ? [
+                 "The lease-end date and required notice window are recorded",
+                 "The target move window and latest safe lease-signing date are clear",
+                 "The rule for giving notice only after approval is recorded",
+                 "Any acceptable overlap or same-week fallback is identified",
+              ]
+            : ["The fixed dates and deadlines are recorded", "Approval, notice, or commitment rules are clear", "The earliest irreversible decision is identified", "A fallback exists for the first major timing risk"];
+      } else if (/\b(?:new apartment needs to have|good finished result needs to include|trip needs to include)\b/i.test(cleanTitle)) {
+         goal = relocationMilestone ? "Turn the commute, cost, lease, comfort, and service needs into a short apartment must-have list." : "Turn the project goal and constraints into a short list of must-haves and tradeoffs.";
+         whyItMatters = nextTitle
+            ? `The must-haves need to be clear before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so the project can compare real options without drifting.`
+            : "A short must-have list keeps later choices tied to the outcome that actually matters.";
+         startingPrompt = relocationMilestone
+            ? "Write the apartment must-haves, nice-to-haves, and deal-breakers for commute, total cost, parking, noise, security, laundry, internet, and lease terms."
+            : "Write the must-haves, nice-to-haves, and deal-breakers that define a good finished result.";
+         completionCriteria = relocationMilestone
+            ? [
+                 "The commute and total housing-cost limits are recorded",
+                 "Apartment and neighborhood must-haves are separated from preferences",
+                 "Lease, parking, security, laundry, noise, and internet needs are clear",
+                 "The deal-breakers and acceptable tradeoffs are recorded",
+              ]
+            : ["The must-haves are recorded", "Preferences are separated from non-negotiables", "The acceptable tradeoffs are clear", "The list can be used to compare real options"];
+      } else if (/\b(?:plan the move|order of work|itinerary|backup options)\b/i.test(cleanTitle)) {
+         goal = relocationMilestone ? "Map the move from lease approval through old-apartment closeout, including ownership and backup options." : "Map the work in the order it must happen, including ownership and backup options.";
+         whyItMatters = nextTitle
+            ? `The sequence and ownership need to be clear before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so later bookings and purchases do not create avoidable conflicts.`
+            : "A clear sequence prevents deadlines, handoffs, and backup needs from being discovered too late.";
+         startingPrompt = relocationMilestone
+            ? "Lay out the move from apartment approval to notice, packing, utilities, moving day, cleaning, and key return; assign an owner and backup for each step."
+            : "Lay out the work in order, assign ownership, and add a backup for the first two failure points.";
+         completionCriteria = relocationMilestone
+            ? [
+                 "The move sequence is mapped from lease approval through key return",
+                 "Packing, utilities, movers, cleaning, and address changes have clear owners",
+                 "Dependencies between notice, overlap, moving day, and service setup are visible",
+                 "A same-week move and internet-access fallback are recorded",
+              ]
+            : ["The work is ordered from first dependency to closeout", "Responsibilities are assigned", "Important handoffs and dependencies are visible", "The main backup options are recorded"];
+      } else if (/\b(?:relocation budget|working budget|trip budget)\b/i.test(cleanTitle)) {
+         goal = relocationMilestone
+            ? "Set a relocation budget that covers the deposit, movers, overlap, setup, and closeout without breaking the housing limit."
+            : "Set a working budget that covers the required work and protects the most important priorities.";
+         whyItMatters = nextTitle
+            ? `The budget needs to be clear before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so the project compares options it can actually afford.`
+            : "A realistic budget keeps the project from creating a plan it cannot sustain.";
+         startingPrompt = relocationMilestone
+            ? "List the deposit, movers, overlap, utility setup, cleaning, replacements, and contingency costs; set a maximum total and mark what can be cut first."
+            : "List the required cost categories, set the maximum spend, and mark the optional items that can wait.";
+         completionCriteria = relocationMilestone
+            ? ["The maximum relocation budget is recorded", "Deposit, movers, overlap, setup, cleaning, and contingency are estimated", "The plan still fits the monthly housing-cost limit", "Optional spending and cut-first items are identified"]
+            : ["The maximum spend is recorded", "Required cost categories are estimated", "Optional spending is separated from required spending", "A contingency amount or fallback is recorded"];
+      } else if (/\b(?:neighborhoods?|apartments?|movers?|main options and providers|routes?|stays?|travel options)\b/i.test(cleanTitle)) {
+         goal = relocationMilestone ? "Compare the strongest neighborhoods, apartments, and mover options against the confirmed must-haves and budget." : "Compare the strongest options against the confirmed must-haves, limits, and budget.";
+         whyItMatters = nextTitle
+            ? `The main choices need to be compared before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so the project can commit with a clear reason instead of reacting to the first available option.`
+            : "A simple comparison turns preferences into a defensible choice.";
+         startingPrompt = relocationMilestone
+            ? "Create one comparison table for neighborhoods and apartments, and a smaller quote comparison for movers; choose the leading option only after the must-haves and total cost are visible."
+            : "Put the strongest options in one comparison table and choose the leading option against the confirmed must-haves and constraints.";
+         completionCriteria = relocationMilestone
+            ? [
+                 "The strongest neighborhoods and apartments are compared against the must-haves",
+                 "Commute, total cost, parking, noise, security, laundry, internet, and lease terms are visible",
+                 "Mover quotes and service limits are compared",
+                 "A leading apartment and moving approach are recorded with reasons",
+              ]
+            : ["The strongest realistic options are compared", "The comparison uses the confirmed must-haves and limits", "Cost and provider conditions are visible", "A leading option is recorded with a reason"];
+      } else if (/\b(?:book the move|book what is needed|book the trip|prepare the logistics)\b/i.test(cleanTitle)) {
+         goal = relocationMilestone ? "Book the move and prepare the packing, service, access, and first-night details." : "Book what is needed and prepare the logistics for a smooth handoff into execution.";
+         whyItMatters = nextTitle
+            ? `The bookings and logistics need to be ready before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so execution is not blocked by missing access, services, or supplies.`
+            : "Prepared logistics keep execution from becoming a last-minute scramble.";
+         startingPrompt = relocationMilestone
+            ? "Confirm the lease and notice sequence, book the mover, set packing dates, schedule utilities and internet, and prepare access, parking, first-night, and work-continuity checklists."
+            : "Confirm the bookings, access, supplies, owners, and fallback arrangements needed for execution.";
+         completionCriteria = relocationMilestone
+            ? [
+                 "The lease, notice, mover, and move-date sequence is confirmed",
+                 "Packing, access, parking, and moving-day logistics are ready",
+                 "Utilities, internet, insurance, and first-night essentials are scheduled",
+                 "Work-continuity and same-week fallback plans are ready",
+              ]
+            : ["Required bookings and access are confirmed", "Supplies and responsibilities are ready", "The first-day essentials are covered", "The main fallback remains usable"];
+      } else if (/\b(?:move in|carry out the plan|take the trip|essentials working)\b/i.test(cleanTitle)) {
+         goal = relocationMilestone ? "Complete the move and make the new apartment usable on the first night." : "Carry out the plan and make the first-stage result usable immediately.";
+         whyItMatters = nextTitle
+            ? `The transition needs to be usable before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so closeout is not hiding unresolved setup problems.`
+            : "The project is not complete until the new state works in real conditions.";
+         startingPrompt = relocationMilestone
+            ? "Run the moving-day plan, protect work-critical electronics and documents, confirm utilities and internet, and set up the first-night essentials before unpacking lower-priority items."
+            : "Carry out the plan, protect the critical items, and confirm the essentials work before handling lower-priority setup.";
+         completionCriteria = relocationMilestone
+            ? ["The move is completed before the old lease ends", "Essential utilities and internet work", "Critical documents, electronics, and first-night items are accounted for", "Any damage, missing item, or service issue is recorded for follow-up"]
+            : ["The transition is completed", "The essential services or capabilities work", "Critical items are accounted for", "Remaining issues are recorded"];
+      } else {
+         goal = relocationMilestone ? "Close out the old apartment and finish the remaining move obligations." : "Finish the remaining obligations and review whether the transition met the project goal.";
+         whyItMatters = "Closeout protects the deposit, prevents missed obligations, and turns the transition into a finished project rather than a lingering checklist.";
+         startingPrompt = relocationMilestone
+            ? "Clean and document the old apartment, return keys, finish address changes and service cancellations, confirm the deposit process, and record any remaining follow-up."
+            : "Close the remaining obligations, document the result, and record what still needs follow-up.";
+         completionCriteria = relocationMilestone
+            ? [
+                 "The old apartment is cleaned and documented",
+                 "Keys, utilities, insurance, mail, and remaining address changes are closed out",
+                 "The deposit and any final charges are tracked",
+                 "The final transition cost and remaining follow-up are recorded",
+              ]
+            : ["The remaining obligations are closed", "The result is documented", "Any final costs or follow-up are recorded", "The outcome has been checked against the project goal"];
+      }
+   } else if (eventApproval) {
+      if (programApproval) {
+         goal = "Confirm whether the program can proceed and record the approval, insurance, storage, and responsibility conditions the first version must respect.";
+         whyItMatters = nextTitle
+            ? `Approval, insurance, and operating rules must be confirmed before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or the program may be designed around a model the host cannot support.`
+            : "Approval, insurance, and operating rules determine whether the program can proceed and who carries responsibility.";
+         startingPrompt = "Create a blocker checklist for host approval, insurance or lease restrictions, allowed storage, and responsibility for loss, damage, and unsafe use; confirm the host decision first.";
+         completionCriteria = [
+            "The host or management decision and any conditions are recorded",
+            "Insurance, lease, liability, or policy restrictions are confirmed",
+            "Allowed storage and access conditions are recorded",
+            "Responsibility for loss, damage, and unsafe use is defined",
+            "Any blocker or condition is carried into the resource set, rules, and operating workflow",
+         ];
+      } else {
+         goal = "Confirm whether the event can proceed and record the operating conditions that later planning must respect.";
+         whyItMatters = nextTitle
+            ? `Approval, licensing, and operating rules must be confirmed before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or the event may be scheduled around a format that is not permitted.`
+            : "Approval, licensing, and operating rules determine whether the event can happen and under what conditions.";
+         startingPrompt = "Create an approval checklist, confirm management permission and licensing first, then record quiet-hour, sound, access, and shared-space conditions.";
+         completionCriteria = [
+            "The management decision and any approval conditions are recorded",
+            "The public-performance licensing requirement is confirmed",
+            "Quiet-hour, sound, and operating-time rules are recorded",
+            "Shared-space, walkway, entrance, and emergency-access conditions are recorded",
+            "Any blocker or condition is carried into the date, site, and equipment plan",
+         ];
+      }
+   } else if (serviceResourceScope) {
+      goal = "Select one bounded first resource set and record what belongs in it before the program launches.";
+      whyItMatters = nextTitle
+         ? `The first resource set must be clear before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or rules and workflows may be designed around items that are unsafe, unnecessary, or too difficult to maintain.`
+         : "A bounded first resource set keeps the program safe, maintainable, and easy to evaluate.";
+      startingPrompt = "List the strongest candidate resources, define acceptance and safety checks, exclude high-risk items, then inventory the first approved set.";
+      completionCriteria = [
+         "The first approved resource set is named",
+         "Each item or resource is inventoried",
+         "Acceptance, condition, and safety checks are documented",
+         "Items excluded from the first version are recorded",
+         "The selected set fits the intended users, storage, maintenance, and pilot scope",
+      ];
+   } else if (collectionScope) {
+      goal = "Select one bounded starting collection and understand what it contains before the project scales.";
+      whyItMatters = nextTitle
+         ? `A bounded inventory must be clear before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or later rules and workflows may be designed around the wrong volume, condition, or information gaps.`
+         : "A bounded inventory gives the project real scope, condition, and information evidence instead of forcing it to plan for an unknown whole.";
+      startingPrompt = "Compare the strongest candidate collections by importance, size, condition, access, and available identification support; choose one, then create a simple container-level inventory before processing anything.";
+      completionCriteria = [
+         "One bounded starting collection is selected",
+         "Its containers, folders, albums, files, or item groups are inventoried",
+         "Approximate volume, condition, and access constraints are recorded",
+         "Known labels, missing details, and available reviewers or contributors are noted",
+         "The first phase explicitly excludes the rest of the collection",
+      ];
+   } else if (collectionRules) {
+      goal = "Create the rules that keep the collection understandable, private, and consistent as work progresses.";
+      whyItMatters = nextTitle
+         ? `Naming, metadata, access, and identification rules must be clear before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or the project may create files and records that are difficult to trust or reorganize later.`
+         : "Consistent rules prevent the collection from becoming searchable in theory but confusing in practice.";
+      startingPrompt = "Draft the naming convention, required metadata fields, privacy and access levels, and a simple process for recording and resolving unknown details.";
+      completionCriteria = [
+         "A naming convention is documented",
+         "Required metadata fields and unknown-value handling are documented",
+         "Privacy and access rules are clear",
+         "The identification and review process is defined",
+         "The rules can be applied consistently to the selected first collection",
+      ];
+   } else if (qualityStandards) {
+      goal = "Define the quality, authenticity, and handling standard the work must meet.";
+      whyItMatters = nextTitle
+         ? `The quality and handling standard must be settled before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or work may need to be repeated or may damage material that should have been handled differently.`
+         : "A clear standard separates acceptable corrective work from changes that compromise accuracy, quality, or preservation.";
+      startingPrompt = "Define the minimum acceptable quality, the allowed corrections, the specialist-handling triggers, and the checks that prove an item meets the standard.";
+      completionCriteria = [
+         "The minimum usable quality standard is documented",
+         "Allowed corrections and prohibited alterations are clear",
+         "Specialist-handling or escalation criteria are recorded",
+         "Originals and working copies are distinguished",
+         "A repeatable quality check is defined",
+      ];
+   } else if (serviceRecordStructure) {
+      goal = "Choose a storage, labeling, and recordkeeping approach that makes the first program easy to operate and audit.";
+      whyItMatters = nextTitle
+         ? `Storage and recordkeeping must be clear before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or the program may lose track of resources, users, and exceptions.`
+         : "A simple recordkeeping structure makes shared resources accountable without creating unnecessary administrative work.";
+      startingPrompt = "Choose the storage location, labeling convention, minimum borrowing record, privacy-safe identifiers, and the method for tracking availability and condition.";
+      completionCriteria = [
+         "The approved storage location and access method are recorded",
+         "The labeling convention is documented",
+         "The minimum checkout and return record is defined",
+         "Privacy-safe user identification is defined",
+         "Availability, condition, late, missing, and damaged states can be tracked",
+      ];
+   } else if (collectionStructure) {
+      goal = "Choose an organization, storage, and backup structure that can support both current work and future growth.";
+      whyItMatters = nextTitle
+         ? `The structure must be settled before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or processed work may be stored inconsistently and require later reorganization.`
+         : "A durable structure keeps the collection browsable, recoverable, and reusable without rebuilding it for each output.";
+      startingPrompt = "Sketch the folder or repository structure, define where originals and working files live, and choose a backup pattern with at least two independent copies.";
+      completionCriteria = [
+         "The organization or folder structure is documented",
+         "Originals, working files, and finished outputs have clear locations",
+         "Local, cloud, or hybrid storage roles are decided",
+         "At least two independent backup locations are defined",
+         "The structure supports browsing and future outputs without reorganization",
+      ];
+   } else if (collectionProcessing) {
+      goal = "Process and organize the selected collection using the confirmed rules and standards.";
+      whyItMatters = nextTitle
+         ? `A complete processed collection is needed before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so review and validation are based on a real finished set rather than a partial workflow.`
+         : "Processing one bounded collection proves whether the chosen standards, structure, and workflow are usable.";
+      startingPrompt = "Process a small representative batch from start to finish, confirm the workflow works, then complete the rest of the selected collection while recording exceptions.";
+      completionCriteria = [
+         "The selected collection is processed at the required quality",
+         "Files or records follow the naming and metadata rules",
+         "Originals and working copies are stored correctly",
+         "Exceptions, failed items, and specialist-handling needs are recorded",
+         "The completed set is backed up in the confirmed locations",
+      ];
+   } else if (collectionReview) {
+      goal = "Resolve unknown details, preserve the finished set, and prepare the first useful output.";
+      whyItMatters = nextTitle
+         ? `The finished set needs review and preservation before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or validation may overlook missing identities, privacy issues, or physical-storage gaps.`
+         : "Review converts a technically processed set into a trustworthy and useful family, team, or institutional record.";
+      startingPrompt = "Review the finished set with the people who can resolve unknown details, record unresolved items clearly, return originals to safe storage, and assemble the first finished output from the organized collection.";
+      completionCriteria = [
+         "Reviewers or contributors have examined the selected set",
+         "Resolved identities, dates, locations, or context are recorded",
+         "Unresolved details remain clearly labeled rather than guessed",
+         "Originals are returned to appropriate storage",
+         "The first finished output can be created without reorganizing the collection",
+      ];
+   } else if (firstUseOrScope) {
+      goal = "Define the first real work the initial version must support and the capabilities that work requires.";
+      whyItMatters = nextTitle
+         ? `The first real uses set the standard for ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so later requirements and purchases can be judged against actual work instead of an imagined ideal setup.`
+         : "The first real uses set the standard for the scope, requirements, tools, workflow, and evidence that follow.";
+      startingPrompt = "Choose three to five realistic first projects, uses, or scenarios and list the operations or capabilities each one requires.";
+      completionCriteria = [
+         "The initial projects, uses, or scenarios are named",
+         "The operations or capabilities each one requires are listed",
+         "Capabilities intentionally excluded from the first version are recorded",
+         "Any mobility, reset, access, audience, or operating requirements created by those uses are clear",
+      ];
+   } else if (requirementsOrSafety) {
+      goal = "Turn the current conditions and unknowns into a clear list of safe, usable requirements.";
+      whyItMatters = nextTitle
+         ? `The project needs verified requirements before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or the next milestone may be designed around unsafe, unavailable, or unnecessary assumptions.`
+         : "Verified requirements prevent the project from committing to a design or purchase that cannot be used safely or reliably.";
+      startingPrompt = "Record the current conditions, identify what must be verified, and separate required changes from optional improvements.";
+      const requirementChecks: string[] = [];
+      if (/\b(?:power|electrical|outlet)\b/i.test(cleanTitle)) requirementChecks.push("The available electrical or power capacity has been checked against the planned work");
+      if (/\b(?:lighting|light)\b/i.test(cleanTitle)) requirementChecks.push("The current lighting has been assessed and any required improvement is identified");
+      if (/\b(?:ventilation|airflow)\b/i.test(cleanTitle)) requirementChecks.push("The ventilation or airflow approach is documented");
+      if (/\b(?:dust)\b/i.test(cleanTitle)) requirementChecks.push("The dust-control approach is documented for the planned work");
+      if (/\b(?:noise)\b/i.test(cleanTitle)) requirementChecks.push("The noise-control limits or approach are documented");
+      if (/\b(?:safety|risk|flammable|fire)\b/i.test(`${cleanTitle} ${projectBody}`)) requirementChecks.push("The safety risks, required controls, and safe storage rules are recorded");
+      if (/\b(?:legal|permit|privacy|permission|rights|compliance)\b/i.test(cleanTitle)) requirementChecks.push("The applicable rules, permissions, or approval requirements are confirmed");
+      completionCriteria = uniqueProjectIntakeStatements([...requirementChecks, "Required changes are separated from optional upgrades", "Any remaining unknown has a clear owner, source, or verification step"], 8);
+   } else if (layoutOrStructure) {
+      goal = /\b(?:editorial|hierarchy|information architecture|outline)\b/i.test(cleanTitle)
+         ? "Create a clear structure that communicates priority, relationship, and sequence."
+         : "Create a workable arrangement that supports the planned work while preserving access, storage, and reset needs.";
+      whyItMatters = nextTitle
+         ? `A usable structure needs to be settled before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or implementation may be built around an arrangement that later has to change.`
+         : "A workable structure turns requirements into an arrangement that can be built and tested.";
+      startingPrompt = /\b(?:editorial|hierarchy|information architecture|outline)\b/i.test(cleanTitle)
+         ? "Sketch two viable structures, label what each one communicates, and choose the one that best supports the project goal."
+         : "Sketch the work zones, storage, access paths, and movable or permanent elements, then test whether the space can be reset.";
+      completionCriteria = /\b(?:editorial|hierarchy|information architecture|outline)\b/i.test(cleanTitle)
+         ? [
+              "The major sections or elements are placed in a clear order",
+              "The hierarchy communicates the intended priority and relationships",
+              "Every required piece of content has a clear place",
+              "The structure has been checked against the audience and success criteria",
+           ]
+         : [
+              "Work, storage, and access zones are shown",
+              "The arrangement supports the planned operations or uses",
+              "Shared-space, mobility, and reset requirements are preserved",
+              "The layout identifies where required safety or infrastructure controls belong",
+           ];
+   } else if (budgetOrResources) {
+      goal = "Set a realistic boundary for spending, capacity, and upgrade priorities.";
+      whyItMatters = nextTitle
+         ? `A clear resource boundary is needed before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so the project does not select options it cannot sustain.`
+         : "A realistic resource boundary prevents the project from overcommitting before its needs are proven.";
+      startingPrompt = "Write the maximum first-phase budget, the required spending categories, the priority order, and the purchases or upgrades that can wait.";
+      completionCriteria = [
+         "The maximum budget or capacity boundary is recorded",
+         "Required spending or resource categories are estimated",
+         "Priority upgrades are separated from optional upgrades",
+         "A defer list protects the project from premature purchases or commitments",
+      ];
+   } else if (selection) {
+      goal = `Choose the option for ${cleanTitle.replace(/^(?:choose|select|decide|finalize|confirm)\s+/i, "").toLowerCase()} that best fits the confirmed requirements.`;
+      whyItMatters = nextTitle
+         ? `The selection should be made against confirmed requirements before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so later work is not organized around an attractive but unsuitable option.`
+         : "The selection converts the project’s requirements into a defensible commitment.";
+      startingPrompt = "Compare the strongest options against the required capabilities, constraints, cost, reliability, and implementation needs, then record the working choice.";
+      completionCriteria = [
+         "The strongest realistic options have been compared against the confirmed requirements",
+         "A working option has been selected",
+         "The reason for the selection and the rejected alternatives are recorded",
+         "Any purchase, approval, dependency, or installation condition is clear",
+      ];
+   } else if (brandOrPositioning) {
+      goal = "Create a usable project-level promise and language standard that the work that follows can apply consistently.";
+      whyItMatters = nextTitle
+         ? `The language standard needs to be usable before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or the later work may describe strong parts without a coherent reason they belong together.`
+         : "A usable language standard gives later copy, structure, and design decisions a consistent test.";
+      startingPrompt = "Draft three concise versions of the core promise, test each against the full project, and choose a working statement.";
+      completionCriteria = [
+         "At least two or three viable statements have been drafted",
+         "Each statement has been tested against the full project and intended audience",
+         "A working statement has been selected",
+         "The reason it fits and the language it rules out are recorded",
+      ];
+   } else if (relationship) {
+      goal = "Define how the major parts relate, what each part owns, and what they share.";
+      whyItMatters = nextTitle
+         ? `The relationship model must be clear before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or the later hierarchy may communicate the wrong level of importance or independence.`
+         : "A clear relationship model prevents overlap, gaps, and contradictory positioning.";
+      startingPrompt = "Write one sentence for the role of each part and one sentence explaining what they share under the parent project.";
+      completionCriteria = ["Each major part has a distinct role", "The shared parent-level promise is clear", "Overlap, gaps, and hierarchy are resolved", "The relationship can guide the structure or workflow that follows"];
+   } else if (workflow) {
+      goal = "Define a repeatable workflow that fits the project’s real capacity and responsibilities.";
+      whyItMatters = nextTitle
+         ? `The operating workflow determines what ${nextTitle.replace(/^./, (character) => character.toLowerCase())} must support and prevents the project from designing around capacity it does not have.`
+         : "A repeatable workflow turns the plan into work that can be carried out reliably.";
+      startingPrompt = "Map the work from start to finish, assign ownership, and identify the capacity limit, handoffs, and failure points.";
+      completionCriteria = [
+         "The workflow is mapped from start to finish",
+         "Ownership and handoffs are clear",
+         "Capacity and reset or maintenance requirements are documented",
+         "The workflow has been checked against the project’s constraints and quality standard",
+      ];
+   } else if (research) {
+      goal = "Gather enough reliable evidence to support the decisions and deliverables that follow.";
+      whyItMatters = nextTitle
+         ? `The evidence standard must be met before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, or later commitments may rest on weak or unavailable information.`
+         : "Reliable evidence separates viable directions from attractive assumptions.";
+      startingPrompt = "Define the evidence standard, gather the strongest available sources or observations, and note what remains uncertain.";
+      completionCriteria = [
+         "The evidence or source standard is clear",
+         "The required facts, sources, interviews, or observations have been collected",
+         "Conflicts, gaps, and uncertainty are documented",
+         "The evidence is strong enough to support the next decision",
+      ];
+   } else if (validation) {
+      goal = "Test the result under realistic conditions and use the evidence to decide what should change.";
+      whyItMatters = "The project needs real evidence before it expands, closes, or commits to permanent upgrades.";
+      startingPrompt = "Run the result in realistic conditions, record what worked and failed, and compare the evidence with the success criteria.";
+      completionCriteria = [
+         "The result has been used or tested in realistic conditions",
+         "Performance, quality, effort, and failure points are recorded",
+         "The evidence has been compared with the success criteria",
+         "The next decision—continue, revise, expand, or stop—is recorded",
+      ];
+   } else if (buildOrCreate) {
+      goal = "Create the first complete, usable result that satisfies the confirmed requirements.";
+      whyItMatters = nextTitle
+         ? `A usable result must exist before ${nextTitle.replace(/^./, (character) => character.toLowerCase())}, so validation can test the real experience instead of a partial concept.`
+         : "A complete first result turns the plan into something that can be used and reviewed.";
+      startingPrompt = "Build the smallest complete version that includes the required capabilities and can be used end to end.";
+      completionCriteria = [
+         "The required first-version capabilities are present",
+         "The result can be used from start to finish",
+         "Required safety, accessibility, reliability, or quality controls are in place",
+         "Known issues and deferred work are recorded",
+      ];
+   }
+
+   const criteriaFromQuestions = milestoneQuestions.map((question) => `A supported answer is recorded for: ${question.replace(/[.?]+$/, "")}`);
+   completionCriteria = uniqueProjectIntakeStatements([...completionCriteria, ...criteriaFromQuestions], 10);
+
+   return {
+      goal: sanitizeProjectSummary(goal),
+      whyItMatters: sanitizeProjectSummary(whyItMatters),
+      startingPrompt: sanitizeProjectSummary(startingPrompt),
+      decisions: uniqueProjectIntakeStatements(relatedDecisions, 12),
+      openQuestions: uniqueProjectIntakeStatements(milestoneQuestions, 12),
+      dependencies: previousTitle ? [sanitizeProjectTitle(previousTitle)] : [],
+      completionCriteria: completionCriteria.length
+         ? completionCriteria
+         : [sanitizeProjectSummary(`A concrete result exists for ${cleanTitle.toLowerCase()}`), sanitizeProjectSummary("The result has been checked against the project goal, constraints, and next dependency")],
+   };
+}
+
 function getMilestoneDefaultGoal(title: string) {
    const clean = sanitizeProjectTitle(title).replace(/[.!?]+$/, "");
-   return clean ? `Complete ${clean.toLowerCase()} with a clear, reviewable outcome.` : "Complete this milestone with a clear, reviewable outcome.";
+   return clean ? `Produce a clear, reviewable result for ${clean.toLowerCase()}.` : "Produce a clear, reviewable result for this milestone.";
 }
 
 function getMilestoneDefaultWhyItMatters(title: string, index: number) {
    const clean = sanitizeProjectTitle(title).replace(/[.!?]+$/, "");
-   return index === 0
-      ? `This is the first project checkpoint. Finishing ${clean.toLowerCase()} should reduce uncertainty for the work that follows.`
-      : `This checkpoint moves the project forward by turning ${clean.toLowerCase()} into saved project progress.`;
+   return index === 0 ? `This comes first because ${clean.toLowerCase()} sets the standard for the work that follows.` : `${clean} closes a dependency the next milestone relies on.`;
 }
 
 function getMilestoneDefaultStartingPrompt(title: string) {
    const clean = sanitizeProjectTitle(title).replace(/[.!?]+$/, "");
-   return clean ? `What must be decided, created, or verified to complete ${clean.toLowerCase()}?` : "What must be decided, created, or verified to complete this milestone?";
+   return clean ? `Create the smallest concrete result that would prove ${clean.toLowerCase()} is ready to close.` : "Create the smallest concrete result that would prove this milestone is ready to close.";
 }
 
 function getMilestoneStatus(value: any, completed = false): ProjectMilestoneStatus {
@@ -1502,23 +3561,30 @@ function milestoneHasSavedWork(milestone: ProjectMilestone) {
 
 function getDefaultProjectMilestones(project: ProjectLibraryItem): ProjectMilestone[] {
    const now = getNow();
+   const titles = getProjectMilestoneCandidates(project);
 
-   return getProjectMilestoneCandidates(project).map((title, index) => ({
-      id: createProjectMilestoneId(project.id, title, index),
-      title,
-      status: index === 0 ? "active" : "waiting",
-      completed: false,
-      goal: getMilestoneDefaultGoal(title),
-      whyItMatters: getMilestoneDefaultWhyItMatters(title, index),
-      startingPrompt: getMilestoneDefaultStartingPrompt(title),
-      workingContent: "",
-      decisions: [],
-      openQuestions: [],
-      completionEvidence: [],
-      order: index + 1,
-      createdAt: now,
-      updatedAt: now,
-   }));
+   return titles.map((title, index) => {
+      const metadata = buildGeneratedProjectMilestoneMetadata(project, title, index, titles);
+
+      return {
+         id: createProjectMilestoneId(project.id, title, index),
+         title,
+         status: index === 0 ? "active" : "waiting",
+         completed: false,
+         goal: metadata.goal,
+         whyItMatters: metadata.whyItMatters,
+         startingPrompt: metadata.startingPrompt,
+         workingContent: "",
+         decisions: metadata.decisions,
+         openQuestions: metadata.openQuestions,
+         dependencies: metadata.dependencies,
+         completionCriteria: metadata.completionCriteria,
+         completionEvidence: [],
+         order: index + 1,
+         createdAt: now,
+         updatedAt: now,
+      };
+   });
 }
 
 function sanitizeProjectMilestones(value: unknown, project: ProjectLibraryItem): ProjectMilestone[] {
@@ -1527,12 +3593,19 @@ function sanitizeProjectMilestones(value: unknown, project: ProjectLibraryItem):
    }
 
    const now = getNow();
+   const rawTitles = value
+      .filter((item) => item && typeof item === "object")
+      .map((item: any) => sanitizeProjectTitle(item.title))
+      .filter(Boolean)
+      .slice(0, 12);
+
    const milestones = value
       .filter((item) => item && typeof item === "object")
       .map((item: any, index) => {
          const title = sanitizeProjectTitle(item.title);
          const completed = Boolean(item.completed) || item.status === "complete";
          const status = getMilestoneStatus(item.status, completed);
+         const metadata = buildGeneratedProjectMilestoneMetadata(project, title, index, rawTitles);
 
          return {
             id: sanitizeProjectPlainText(item.id, 180) || createProjectMilestoneId(project.id, title, index),
@@ -1540,22 +3613,39 @@ function sanitizeProjectMilestones(value: unknown, project: ProjectLibraryItem):
             status,
             completed: status === "complete",
             completedAt: isValidProjectTimestamp(item.completedAt) ? item.completedAt : status === "complete" ? now : undefined,
-            goal: sanitizeProjectSummary(item.goal) || getMilestoneDefaultGoal(title),
-            whyItMatters: sanitizeProjectSummary(item.whyItMatters) || getMilestoneDefaultWhyItMatters(title, index),
-            startingPrompt: sanitizeProjectSummary(item.startingPrompt) || getMilestoneDefaultStartingPrompt(title),
+            goal: sanitizeProjectSummary(item.goal) || metadata.goal,
+            whyItMatters: sanitizeProjectSummary(item.whyItMatters) || metadata.whyItMatters,
+            startingPrompt: sanitizeProjectSummary(item.startingPrompt) || metadata.startingPrompt,
             workingContent: sanitizeProjectBody(item.workingContent),
-            decisions: Array.isArray(item.decisions)
-               ? item.decisions
-                    .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
-                    .filter(Boolean)
-                    .slice(0, 40)
-               : [],
+            decisions: Array.isArray(item.decisions) ? uniqueProjectIntakeStatements([...item.decisions.map((entry: unknown) => sanitizeProjectSummary(String(entry))), ...metadata.decisions], 40) : metadata.decisions,
             openQuestions: Array.isArray(item.openQuestions)
-               ? item.openQuestions
-                    .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
-                    .filter(Boolean)
-                    .slice(0, 40)
-               : [],
+               ? uniqueProjectIntakeStatements(
+                    [
+                       ...getScopedMilestoneQuestions(
+                          title,
+                          item.openQuestions.map((entry: unknown) => sanitizeProjectSummary(String(entry))),
+                       ),
+                       ...metadata.openQuestions,
+                    ],
+                    40,
+                 )
+               : metadata.openQuestions,
+            dependencies: Array.isArray(item.dependencies) ? uniqueProjectIntakeStatements([...item.dependencies.map((entry: unknown) => sanitizeProjectSummary(String(entry))), ...metadata.dependencies], 16) : metadata.dependencies,
+            completionCriteria: Array.isArray(item.completionCriteria)
+               ? uniqueProjectIntakeStatements(
+                    [
+                       ...item.completionCriteria
+                          .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
+                          .filter((entry: string) => {
+                             if (!isGeneratedProjectCriterionCompatible(title, entry)) return false;
+                             if (!/^A supported answer is recorded for:/i.test(entry)) return true;
+                             return metadata.completionCriteria.some((criterion) => getProjectIntakeSemanticOverlap(criterion, entry) >= 0.72);
+                          }),
+                       ...metadata.completionCriteria,
+                    ],
+                    40,
+                 )
+               : metadata.completionCriteria,
             completionEvidence: Array.isArray(item.completionEvidence)
                ? item.completionEvidence
                     .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
@@ -2899,6 +4989,78 @@ export default function IntegrationAdapterLayer() {
 
    const activeProject = useMemo(() => projectLibrary.find((project) => project.id === selectedProjectId) || projectLibrary[0] || null, [projectLibrary, selectedProjectId]);
 
+   const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
+
+   const projectSelectorRef = useRef<HTMLDivElement | null>(null);
+
+   const projectOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+   function closeProjectSelector() {
+      setProjectSelectorOpen(false);
+   }
+
+   function selectProjectFromLibrary(projectId: string) {
+      const project = projectLibrary.find((item) => item.id === projectId) || null;
+
+      setSelectedProjectId(projectId);
+
+      if (project) {
+         writeActiveProjectSelection(project);
+      }
+
+      closeProjectSelector();
+   }
+
+   function focusProjectOption(index: number) {
+      const optionCount = projectLibrary.length;
+
+      if (!optionCount) {
+         return;
+      }
+
+      const wrappedIndex = (index + optionCount) % optionCount;
+
+      window.requestAnimationFrame(() => {
+         projectOptionRefs.current[wrappedIndex]?.focus();
+      });
+   }
+
+   function openProjectSelectorAndFocusActive() {
+      const activeIndex = Math.max(
+         0,
+         projectLibrary.findIndex((project) => project.id === activeProject?.id),
+      );
+
+      setProjectSelectorOpen(true);
+      focusProjectOption(activeIndex);
+   }
+
+   useEffect(() => {
+      if (!projectSelectorOpen) {
+         return;
+      }
+
+      function handlePointerDown(event: MouseEvent) {
+         if (!projectSelectorRef.current?.contains(event.target as Node)) {
+            closeProjectSelector();
+         }
+      }
+
+      function handleEscape(event: KeyboardEvent) {
+         if (event.key === "Escape") {
+            closeProjectSelector();
+         }
+      }
+
+      document.addEventListener("mousedown", handlePointerDown);
+      document.addEventListener("keydown", handleEscape);
+
+      return () => {
+         document.removeEventListener("mousedown", handlePointerDown);
+         document.removeEventListener("keydown", handleEscape);
+      };
+   }, [projectSelectorOpen]);
+
    useEffect(() => {
       if (!activeProject) {
          return;
@@ -3488,8 +5650,9 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                workingContent: milestone.workingContent,
                decisions: milestone.decisions,
                openQuestions: milestone.openQuestions,
-               dependencies: [],
-               completionCriteria: milestone.completionEvidence,
+               dependencies: milestone.dependencies,
+               completionCriteria: milestone.completionCriteria,
+               completionEvidence: milestone.completionEvidence,
                createdAt: milestone.createdAt,
                updatedAt: milestone.updatedAt,
             })),
@@ -3505,8 +5668,9 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
             workingContent: milestone.workingContent,
             decisions: milestone.decisions,
             openQuestions: milestone.openQuestions,
-            dependencies: [],
-            completionCriteria: milestone.completionEvidence,
+            dependencies: milestone.dependencies,
+            completionCriteria: milestone.completionCriteria,
+            completionEvidence: milestone.completionEvidence,
             createdAt: milestone.createdAt,
             updatedAt: milestone.updatedAt,
          })),
@@ -3706,6 +5870,18 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                             .filter(Boolean)
                             .slice(0, 40)
                        : milestone.openQuestions,
+                    dependencies: Array.isArray(draft.dependencies)
+                       ? draft.dependencies
+                            .map((item) => sanitizeProjectSummary(item))
+                            .filter(Boolean)
+                            .slice(0, 16)
+                       : milestone.dependencies,
+                    completionCriteria: Array.isArray(draft.completionCriteria)
+                       ? draft.completionCriteria
+                            .map((item) => sanitizeProjectSummary(item))
+                            .filter(Boolean)
+                            .slice(0, 40)
+                       : milestone.completionCriteria,
                     completionEvidence: Array.isArray(draft.completionEvidence)
                        ? draft.completionEvidence
                             .map((item) => sanitizeProjectSummary(item))
@@ -3783,6 +5959,8 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       }
 
       const now = getNow();
+      const allTitles = [...tracking.milestones.map((milestone) => milestone.title), title];
+      const metadata = buildGeneratedProjectMilestoneMetadata(project, title, tracking.milestones.length, allTitles);
       const milestones = normalizeMilestoneStatuses([
          ...tracking.milestones,
          {
@@ -3790,12 +5968,14 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
             title,
             status: "waiting" as const,
             completed: false,
-            goal: getMilestoneDefaultGoal(title),
-            whyItMatters: getMilestoneDefaultWhyItMatters(title, tracking.milestones.length),
-            startingPrompt: getMilestoneDefaultStartingPrompt(title),
+            goal: metadata.goal,
+            whyItMatters: metadata.whyItMatters,
+            startingPrompt: metadata.startingPrompt,
             workingContent: "",
-            decisions: [],
-            openQuestions: [],
+            decisions: metadata.decisions,
+            openQuestions: metadata.openQuestions,
+            dependencies: metadata.dependencies,
+            completionCriteria: metadata.completionCriteria,
             completionEvidence: [],
             order: tracking.milestones.length + 1,
             createdAt: now,
@@ -4231,29 +6411,43 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
          const cleanTitle = saveProjectDirectly(item);
 
-         if (item.source === "manual-generated") {
-            const nextLibrary = readProjectLibrary();
-            const savedProject = nextLibrary.find((project) => sanitizeProjectTitle(project.title).toLowerCase() === cleanTitle.toLowerCase());
+         const nextLibrary = readProjectLibrary();
+         const savedProject = nextLibrary.find((project) => sanitizeProjectTitle(project.title).toLowerCase() === cleanTitle.toLowerCase()) || null;
+         const shouldFocusCreatedProject = item.source === "manual-generated";
 
+         if (shouldFocusCreatedProject && savedProject) {
+            // A newly generated project becomes the workspace focus immediately.
+            // Persist the same selection before the library refresh so Projects,
+            // MemoryEngine, and AIDock switch together without a manual dropdown change.
+            setSelectedProjectId(savedProject.id);
+            writeActiveProjectSelection(savedProject);
+         }
+
+         if (item.source === "manual-generated") {
             if (savedProject) {
                const milestoneTitles = getProjectMilestoneCandidates(savedProject);
                const now = getNow();
-               const milestones = milestoneTitles.map((title, index) => ({
-                  id: createProjectMilestoneId(savedProject.id, title, index),
-                  title,
-                  status: index === 0 ? ("active" as const) : ("waiting" as const),
-                  completed: false,
-                  goal: getMilestoneDefaultGoal(title),
-                  whyItMatters: getMilestoneDefaultWhyItMatters(title, index),
-                  startingPrompt: getMilestoneDefaultStartingPrompt(title),
-                  workingContent: "",
-                  decisions: [],
-                  openQuestions: [],
-                  completionEvidence: [],
-                  order: index + 1,
-                  createdAt: now,
-                  updatedAt: now,
-               }));
+               const milestones = milestoneTitles.map((title, index) => {
+                  const metadata = buildGeneratedProjectMilestoneMetadata(savedProject, title, index, milestoneTitles);
+                  return {
+                     id: createProjectMilestoneId(savedProject.id, title, index),
+                     title,
+                     status: index === 0 ? ("active" as const) : ("waiting" as const),
+                     completed: false,
+                     goal: metadata.goal,
+                     whyItMatters: metadata.whyItMatters,
+                     startingPrompt: metadata.startingPrompt,
+                     workingContent: "",
+                     decisions: metadata.decisions,
+                     openQuestions: metadata.openQuestions,
+                     dependencies: metadata.dependencies,
+                     completionCriteria: metadata.completionCriteria,
+                     completionEvidence: [],
+                     order: index + 1,
+                     createdAt: now,
+                     updatedAt: now,
+                  };
+               });
 
                const startingPoint = getStructuredProjectSection(item.body, ["Recommended Starting Point", "Recommended Move", "Starting Point"]) || milestones[0]?.title || "Review the project guide and confirm the first checkpoint.";
 
@@ -4283,7 +6477,11 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
          setExpandedOutputIds((current) => current.filter((outputId) => outputId !== item.id));
 
-         setProjectLibrary(readProjectLibrary());
+         setProjectLibrary(nextLibrary);
+
+         if (shouldFocusCreatedProject && savedProject) {
+            setSelectedProjectId(savedProject.id);
+         }
 
          showNotice(getGeneratedProjectsLine("saved"));
 
@@ -5064,80 +7262,117 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                         </div>
                      </div>
 
-                     <div className="md:hidden">
-                        <label htmlFor="mobile-project-selector" className="sr-only">
-                           Select active project
-                        </label>
+                     <div ref={projectSelectorRef} className="relative">
+                        <span id="saved-project-selector-label" className="sr-only">
+                           Select the active saved project
+                        </span>
 
-                        <div className="relative rounded-2xl border border-[var(--border-subtle)] bg-white shadow-sm">
-                           <select
-                              id="mobile-project-selector"
-                              value={activeProject?.id || projectLibrary[0]?.id || ""}
-                              onChange={(event) => setSelectedProjectId(event.target.value)}
-                              className="w-full appearance-none rounded-2xl bg-transparent px-4 py-4 pr-12 text-sm font-semibold text-[var(--color-text-primary)] outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                           >
-                              {projectLibrary.map((project) => (
-                                 <option key={project.id} value={project.id}>
-                                    {project.title}
-                                 </option>
-                              ))}
-                           </select>
+                        <button
+                           type="button"
+                           aria-labelledby="saved-project-selector-label saved-project-selector-title"
+                           aria-haspopup="listbox"
+                           aria-expanded={projectSelectorOpen}
+                           aria-controls="saved-project-selector-listbox"
+                           onClick={() => setProjectSelectorOpen((open) => !open)}
+                           onKeyDown={(event) => {
+                              if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+                                 event.preventDefault();
+                                 openProjectSelectorAndFocusActive();
+                              }
+                           }}
+                           className="group flex w-full items-center justify-between gap-4 rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-4 text-left shadow-sm outline-none transition hover:border-[var(--color-primary)]/40 hover:shadow-md focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] focus-visible:ring-offset-2 sm:px-5"
+                        >
+                           <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                 <span id="saved-project-selector-title" className="truncate text-base font-semibold text-[var(--color-text-primary)]">
+                                    {activeProject?.title || "Choose a project"}
+                                 </span>
 
-                           <ChevronDown aria-hidden="true" size={18} className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[var(--color-primary)]" />
-                        </div>
+                                 <span className="rounded-full bg-[var(--color-surface-blue)] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-primary)]">Current</span>
+                              </div>
 
-                        {activeProject && (
-                           <div className="mt-3 flex items-center justify-between gap-3 px-1 text-xs text-[var(--color-text-secondary)]">
-                              <span className="truncate">Updated {getReadableProjectDate(activeProject.updatedAt)}</span>
-                              <span className="shrink-0 font-semibold text-[var(--color-primary)]">Current</span>
+                              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--color-text-secondary)]">
+                                 <span>
+                                    {projectLibrary.length} saved project
+                                    {projectLibrary.length === 1 ? "" : "s"}
+                                 </span>
+
+                                 {activeProject && <span>Updated {getReadableProjectDate(activeProject.updatedAt)}</span>}
+                              </div>
+
+                              {activeProject?.latestSummary && <p className="mt-3 line-clamp-2 text-sm leading-6 text-[var(--color-text-secondary)]">{getShortPreview(activeProject.latestSummary, 180)}</p>}
                            </div>
-                        )}
-                     </div>
 
-                     <div className="hidden grid-cols-1 gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
-                        {projectLibrary.map((project) => {
-                           const selected = selectedProjectId ? selectedProjectId === project.id : projectLibrary[0]?.id === project.id;
+                           <ChevronDown aria-hidden="true" size={20} className={`shrink-0 text-[var(--color-primary)] transition-transform duration-200 ${projectSelectorOpen ? "rotate-180" : ""}`} />
+                        </button>
 
-                           return (
-                              <button
-                                 key={project.id}
-                                 onClick={() => setSelectedProjectId(project.id)}
-                                 className={`
-                                    group
-                                    relative
-                                    w-full
-                                    overflow-hidden
-                                    border-0
-                                    px-4
-                                    py-5
-                                    text-left
-                                    transition-colors
-
-                                    ${selected ? "bg-[var(--color-surface-blue)]" : "bg-transparent hover:bg-[rgba(255,255,255,0.52)]"}
-                                 `}
+                        <AnimatePresence>
+                           {projectSelectorOpen && (
+                              <motion.div
+                                 initial={{ opacity: 0, y: -8, scale: 0.99 }}
+                                 animate={{ opacity: 1, y: 0, scale: 1 }}
+                                 exit={{ opacity: 0, y: -8, scale: 0.99 }}
+                                 transition={{ duration: 0.16 }}
+                                 className="absolute left-0 right-0 z-30 mt-2 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-white shadow-xl"
                               >
-                                 {selected && <div className="absolute left-0 top-0 h-full w-0.5 bg-[var(--color-primary)]" />}
-
-                                 <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0 flex-1">
-                                       {selected && <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Current</p>}
-
-                                       <p className={`${selected ? "mt-2" : ""} truncate text-base font-semibold`}>{project.title}</p>
-                                    </div>
-
-                                    <ChevronDown size={16} className={`mt-1 shrink-0 text-[var(--color-text-secondary)] transition-transform ${selected ? "-rotate-90 text-[var(--color-primary)]" : "opacity-50 group-hover:opacity-100"}`} />
+                                 <div className="border-b border-[var(--border-subtle)] px-4 py-3 sm:px-5">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Project library</p>
+                                    <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Choose a project to open its workspace.</p>
                                  </div>
 
-                                 <p className="mt-3 line-clamp-2 text-sm leading-6 text-[var(--color-text-secondary)]">{getShortPreview(project.latestSummary, 120)}</p>
+                                 <div id="saved-project-selector-listbox" role="listbox" aria-labelledby="saved-project-selector-label" className="max-h-80 overflow-y-auto p-2">
+                                    {projectLibrary.map((project, index) => {
+                                       const selected = activeProject?.id === project.id;
 
-                                 <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-3">
-                                    <span className="text-xs text-[var(--color-text-secondary)]">{getReadableProjectDate(project.updatedAt)}</span>
+                                       return (
+                                          <button
+                                             key={project.id}
+                                             ref={(element) => {
+                                                projectOptionRefs.current[index] = element;
+                                             }}
+                                             type="button"
+                                             role="option"
+                                             aria-selected={selected}
+                                             onClick={() => selectProjectFromLibrary(project.id)}
+                                             onKeyDown={(event) => {
+                                                if (event.key === "ArrowDown") {
+                                                   event.preventDefault();
+                                                   focusProjectOption(index + 1);
+                                                } else if (event.key === "ArrowUp") {
+                                                   event.preventDefault();
+                                                   focusProjectOption(index - 1);
+                                                } else if (event.key === "Home") {
+                                                   event.preventDefault();
+                                                   focusProjectOption(0);
+                                                } else if (event.key === "End") {
+                                                   event.preventDefault();
+                                                   focusProjectOption(projectLibrary.length - 1);
+                                                } else if (event.key === "Escape") {
+                                                   event.preventDefault();
+                                                   closeProjectSelector();
+                                                }
+                                             }}
+                                             className={`w-full rounded-xl px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${selected ? "bg-[var(--color-surface-blue)]" : "hover:bg-[var(--color-bg)]"}`}
+                                          >
+                                             <div className="flex items-start justify-between gap-4">
+                                                <div className="min-w-0 flex-1">
+                                                   <div className="flex flex-wrap items-center gap-2">
+                                                      <span className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{project.title}</span>
+                                                      {selected && <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--color-primary)]">Open</span>}
+                                                   </div>
 
-                                    <span className={`text-xs font-medium ${selected ? "text-[var(--color-primary)]" : "text-[var(--color-text-secondary)]"}`}>{selected ? "Open" : "Select"}</span>
+                                                   {project.latestSummary && <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--color-text-secondary)]">{getShortPreview(project.latestSummary, 130)}</p>}
+                                                </div>
+
+                                                <span className="shrink-0 pt-0.5 text-xs text-[var(--color-text-secondary)]">{getReadableProjectDate(project.updatedAt)}</span>
+                                             </div>
+                                          </button>
+                                       );
+                                    })}
                                  </div>
-                              </button>
-                           );
-                        })}
+                              </motion.div>
+                           )}
+                        </AnimatePresence>
                      </div>
                   </div>
 
@@ -5389,7 +7624,8 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                                             {[
                                                                { key: "decisions", label: "Decisions", placeholder: "One decision per line" },
                                                                { key: "openQuestions", label: "Open questions", placeholder: "One question per line" },
-                                                               { key: "completionEvidence", label: "Completion evidence", placeholder: "What must be true before this milestone is complete?" },
+                                                               { key: "completionCriteria", label: "Completion criteria", placeholder: "What must be true before this milestone is complete?" },
+                                                               { key: "completionEvidence", label: "Recorded evidence", placeholder: "One verified result or supporting source per line" },
                                                             ].map((field) => (
                                                                <div key={field.key}>
                                                                   <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{field.label}</label>
@@ -5450,12 +7686,13 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                                                />
                                                             </div>
 
-                                                            {(selectedMilestone.decisions.length > 0 || selectedMilestone.openQuestions.length > 0 || selectedMilestone.completionEvidence.length > 0) && (
-                                                               <div className="mt-5 grid gap-4 lg:grid-cols-3">
+                                                            {(selectedMilestone.decisions.length > 0 || selectedMilestone.openQuestions.length > 0 || selectedMilestone.completionCriteria.length > 0 || selectedMilestone.completionEvidence.length > 0) && (
+                                                               <div className="mt-5 grid gap-4 lg:grid-cols-2">
                                                                   {[
                                                                      { label: "Decisions", items: selectedMilestone.decisions },
                                                                      { label: "Open questions", items: selectedMilestone.openQuestions },
-                                                                     { label: "Completion evidence", items: selectedMilestone.completionEvidence },
+                                                                     { label: "Completion criteria", items: selectedMilestone.completionCriteria },
+                                                                     { label: "Recorded evidence", items: selectedMilestone.completionEvidence },
                                                                   ].map((group) => (
                                                                      <div key={group.label} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
                                                                         <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{group.label}</p>

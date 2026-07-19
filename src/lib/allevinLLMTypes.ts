@@ -64,6 +64,7 @@ export interface AllevinProjectTensionContext {
    decisionNeeded?: string;
    evidence?: AllevinProjectEvidenceContext[];
 }
+
 export interface AllevinActiveMilestoneContext {
    id?: string;
    title?: string;
@@ -73,7 +74,10 @@ export interface AllevinActiveMilestoneContext {
    workingContent?: string;
    decisions?: string[];
    openQuestions?: string[];
+   completionCriteria?: string[];
    completionEvidence?: string[];
+   dependencies?: string[];
+   whatItUnlocks?: string;
    status?: string;
 }
 

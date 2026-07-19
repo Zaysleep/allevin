@@ -386,6 +386,14 @@ function getNow() {
    return Date.now();
 }
 
+function isReadableCalendarEvent(event?: Partial<AllevinCalendarEvent>, now = getNow()) {
+   return Boolean(event && isValidCalendarTimestamp(Number(event.endTime)) && Number(event.endTime) >= now);
+}
+
+function getReadableCalendarEvents(events: AllevinCalendarEvent[], now = getNow()) {
+   return sortEvents(events.filter((event) => isReadableCalendarEvent(event, now)));
+}
+
 function compactText(value?: string) {
    return sanitizeCalendarPlainText(value).replace(/\s+/g, " ").trim();
 }
@@ -722,11 +730,13 @@ function getUniqueRecurringSeries(events: AllevinCalendarEvent[]) {
 }
 
 function getCalendarIntelligenceSummary(events: AllevinCalendarEvent[]) {
-   const today = getEventsBetween(events, getStartOfToday(), getEndOfToday());
+   const readableEvents = getReadableCalendarEvents(events);
 
-   const tomorrow = getEventsBetween(events, getStartOfTomorrow(), getEndOfTomorrow());
+   const today = getEventsBetween(readableEvents, getStartOfToday(), getEndOfToday());
 
-   const upcoming = sortEvents(events.filter((event) => event.endTime >= getNow()));
+   const tomorrow = getEventsBetween(readableEvents, getStartOfTomorrow(), getEndOfTomorrow());
+
+   const upcoming = readableEvents;
 
    const recurring = getUniqueRecurringSeries(upcoming);
 
@@ -1215,6 +1225,8 @@ export default function CalendarIntegrationPanel() {
 
    const [mounted, setMounted] = useState(false);
 
+   const [calendarNow, setCalendarNow] = useState(getNow);
+
    const [events, setEvents] = useState<AllevinCalendarEvent[]>([]);
 
    const [notes, setNotes] = useState<CalendarEventNote[]>([]);
@@ -1283,11 +1295,13 @@ export default function CalendarIntegrationPanel() {
       [events],
    );
 
-   const todayEvents = hydratedEvents.filter((event) => event.startTime >= getStartOfToday() && event.startTime <= getEndOfToday());
+   const readableEvents = useMemo(() => getReadableCalendarEvents(hydratedEvents, calendarNow), [hydratedEvents, calendarNow]);
 
-   const upcomingEvents = hydratedEvents.filter((event) => event.endTime >= getNow());
+   const todayEvents = readableEvents.filter((event) => event.startTime >= getStartOfToday() && event.startTime <= getEndOfToday());
 
-   const selectedEvent = hydratedEvents.find((event) => event.id === selectedEventId) || upcomingEvents[0] || hydratedEvents[0];
+   const upcomingEvents = readableEvents;
+
+   const selectedEvent = upcomingEvents.find((event) => event.id === selectedEventId) || upcomingEvents[0] || null;
 
    const monthGridDays = useMemo(() => getMonthGridDays(visibleMonthDate), [visibleMonthDate]);
 
@@ -1308,6 +1322,16 @@ export default function CalendarIntegrationPanel() {
    // ========================================
 
    useEffect(() => {
+      const timer = window.setInterval(() => {
+         setCalendarNow(getNow());
+      }, 60000);
+
+      return () => {
+         window.clearInterval(timer);
+      };
+   }, []);
+
+   useEffect(() => {
       setMounted(true);
 
       const cleanedState = cleanupLegacyCalendarStorage();
@@ -1318,7 +1342,7 @@ export default function CalendarIntegrationPanel() {
 
       setNotes(cleanedState.notes);
 
-      setSelectedEventId(initialEvents[0]?.id || null);
+      setSelectedEventId(getReadableCalendarEvents(initialEvents)[0]?.id || null);
 
       saveStoredEvents(initialEvents);
 
@@ -1354,7 +1378,9 @@ export default function CalendarIntegrationPanel() {
 
       setNotes(nextNotes);
 
-      setSelectedEventId((current) => current || nextEvents[0]?.id || null);
+      const readableEvents = getReadableCalendarEvents(nextEvents);
+
+      setSelectedEventId((current) => (current && readableEvents.some((event) => event.id === current) ? current : readableEvents[0]?.id || null));
 
       syncCalendarStatus(nextEvents.length > 0 ? "schedule-context-active" : "workspace-stable");
 
@@ -1403,7 +1429,9 @@ export default function CalendarIntegrationPanel() {
                createdAt: typeof event.createdAt === "number" ? event.createdAt : getNow(),
             }));
 
-         if (!liveEvents.length) {
+         const readableLiveEvents = getReadableCalendarEvents(liveEvents);
+
+         if (!readableLiveEvents.length) {
             throw new Error("No upcoming calendar events found.");
          }
 
@@ -1411,7 +1439,7 @@ export default function CalendarIntegrationPanel() {
 
          setEvents(liveEvents);
 
-         setSelectedEventId(liveEvents[0]?.id || null);
+         setSelectedEventId(readableLiveEvents[0]?.id || null);
 
          syncCalendarStatus("schedule-context-active");
 
@@ -1823,7 +1851,7 @@ export default function CalendarIntegrationPanel() {
 
       setNotes(nextNotes);
 
-      setSelectedEventId(nextEvents[0]?.id || null);
+      setSelectedEventId(getReadableCalendarEvents(nextEvents)[0]?.id || null);
 
       syncCalendarStatus(nextEvents.length > 0 ? "schedule-context-active" : "workspace-stable");
 
@@ -2225,7 +2253,7 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
    function selectCalendarDay(timestamp: number) {
       setSelectedDayDate(getStartOfDay(timestamp));
 
-      const dayEvents = getEventsForDay(hydratedEvents, timestamp);
+      const dayEvents = getEventsForDay(readableEvents, timestamp);
 
       if (dayEvents[0]) {
          selectEvent(dayEvents[0]);

@@ -2,7 +2,7 @@
 // Workspace Context
 // Purpose:
 // Global adaptive workspace state management
-// MK VI:
+// ALLEVIN MK VIII:
 // Keeps Projects, Canvas, Calendar, Cognition,
 // and ALLEVIN guidance aligned without exposing
 // old workflow language to users.
@@ -69,7 +69,7 @@ interface WorkspaceContextType {
 const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefined);
 
 // ========================================
-// MK VI Build 7 — Deferred Workspace State Updates
+// ALLEVIN MK VIII — Deferred Workspace State Updates
 // Purpose:
 // Some modules can report status while another component is still rendering.
 // Deferring shared state updates prevents React cross-component update warnings.
@@ -86,7 +86,7 @@ function scheduleWorkspaceStateUpdate(callback: () => void) {
 }
 
 // ========================================
-// MK VI Build 7 — Workspace Context Safety
+// ALLEVIN MK VIII — Workspace Context Safety
 // Purpose:
 // This file only owns allowed state values.
 // It does not store user-written content, but

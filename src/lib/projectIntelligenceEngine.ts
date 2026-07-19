@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK VIII Project Understanding Engine
+// ALLEVIN MK VIII Project Intelligence and Understanding Engine
 // Purpose:
 // Convert Projects, Working Notes, saved progress,
 // materials, and project structure into one
@@ -48,12 +48,14 @@ export interface ProjectBuildStep {
 
 export interface ProjectMaterialInput {
    id?: string;
+   projectId?: string;
    projectTitle?: string;
    title?: string;
    type?: string;
    summary?: string;
    notes?: string;
    source?: string;
+   documentText?: string;
    interpretationSummary?: string;
    interpretationUsefulContext?: string;
    interpretationNextStep?: string;
@@ -172,6 +174,7 @@ export interface ProjectUnderstandingMilestone {
    title: string;
    status: ProjectUnderstandingMilestoneStatus;
    purpose: string;
+   completionCriteria: string[];
    completionEvidence: string[];
    dependencies: string[];
    risks: string[];
@@ -338,6 +341,7 @@ export interface ProjectMilestoneWorkspaceInput {
    workingContent?: string;
    decisions?: string[];
    openQuestions?: string[];
+   completionCriteria?: string[];
    completionEvidence?: string[];
    dependencies?: string[];
    order?: number;
@@ -715,8 +719,10 @@ function normalizeExplicitProjectType(value: string): ProjectType | undefined {
 
 export function detectProjectReasoningProfile(input: { title: string; projectDocument: ParsedProjectDocument; projectBody: string; canvasContent: string; materials?: ProjectMaterialInput[] }): ProjectReasoningProfileDetection {
    const combined = cleanText([input.title, input.projectBody, input.canvasContent, getDocumentField(input.projectDocument, ["type", "projectType", "category", "goal", "currentState"])].filter(Boolean).join("\n\n"), 80000);
-
    const lower = combined.toLowerCase();
+   const goalText = compactText(getDocumentField(input.projectDocument, ["goal", "projectGoal", "objective"]), 2400).toLowerCase();
+   const deliverableText = compactText(findLabeledValue(combined, ["Deliverable", "Expected Output", "Final Deliverable", "Project Goal"]) || goalText, 3000).toLowerCase();
+
    const scores: Record<ProjectType, number> = {
       software: 0,
       research: 0,
@@ -727,103 +733,92 @@ export function detectProjectReasoningProfile(input: { title: string; projectDoc
    };
 
    const explicitTypeValue = findLabeledValue(combined, ["Project Type", "Type", "Category"]) || getDocumentField(input.projectDocument, ["projectType", "type", "category"]);
-
    const explicitType = normalizeExplicitProjectType(explicitTypeValue);
+   if (explicitType) scores[explicitType] += 20;
 
-   if (explicitType) {
-      scores[explicitType] += 18;
-   }
+   const addSignals = (projectType: ProjectType, groups: Array<[string[], number]>) => {
+      for (const [phrases, weight] of groups) {
+         for (const phrase of phrases) {
+            if (lower.includes(phrase)) scores[projectType] += weight;
+         }
+      }
+   };
 
-   const softwareSignals: Array<[string[], number]> = [
+   addSignals("software", [
       [["current build", "next build", "completed builds"], 7],
       [["frontend", "backend", "api", "database", "component"], 3],
       [["typescript", "javascript", "react", "next.js", "supabase"], 4],
       [["architecture", "technical debt", "regression", "deployment"], 4],
       [["tester feedback", "bug", "feature", "implementation"], 3],
-      [["github", "vercel", "code", "software"], 3],
-   ];
+      [["github", "vercel", "code", "software", "web app", "application"], 3],
+   ]);
 
-   const researchSignals: Array<[string[], number]> = [
-      [["research question"], 10],
-      [["sources needed", "credible sources", "citations"], 8],
-      [["evidence", "key findings", "methodology"], 4],
-      [["literature", "study", "standards", "research"], 3],
-      [["assignment goal", "success criteria"], 3],
-   ];
+   const explicitResearchStructure = /\bresearch question\b|\bsources? needed\b|\bsource requirements?\b|\bcredible sources?\b|\bliterature review\b|\bcitations?\b|\bmethodology\b/i.test(lower);
+   if (explicitResearchStructure) {
+      addSignals("research", [
+         [["research question"], 10],
+         [["sources needed", "source requirements", "credible sources", "citations"], 8],
+         [["literature review", "methodology", "key findings"], 5],
+         [["study", "academic", "research brief"], 3],
+      ]);
+   } else if (/\bresearch\b/i.test(lower)) {
+      // Research may be one activity inside a launch, build, event, or planning
+      // project. Without a research deliverable or source structure, it should
+      // not become the governing reasoning profile.
+      scores.research += 1;
+   }
 
-   const writingSignals: Array<[string[], number]> = [
+   addSignals("writing", [
       [["current draft", "revision stage"], 8],
       [["audience", "outline", "sections"], 4],
       [["draft", "revise", "clarity", "tone"], 3],
       [["essay", "article", "report", "brief", "script"], 3],
       [["introduction", "conclusion", "thesis"], 2],
-   ];
+   ]);
 
-   const planningSignals: Array<[string[], number]> = [
-      [["milestones", "timeline", "logistics"], 7],
-      [["blocked items", "dependencies", "priority"], 5],
-      [["schedule", "deadline", "budget"], 3],
-      [["plan", "planning", "coordination"], 2],
-   ];
+   addSignals("planning", [
+      [["milestones", "timeline", "logistics"], 6],
+      [["blocked items", "dependencies", "priority"], 4],
+      [["schedule", "deadline", "budget", "pricing", "break-even", "margin"], 3],
+      [["plan", "planning", "coordination", "operating model", "workflow"], 2],
+      [["first version", "first release", "pilot", "launch", "rollout"], 4],
+      [["permit", "licensing", "insurance", "vendor", "venue", "equipment", "transport"], 3],
+      [["customer", "participant", "service", "program", "event", "business"], 2],
+   ]);
 
-   const checklistSignals: Array<[string[], number]> = [
+   addSignals("checklist", [
       [["checklist", "task list", "to-do", "todo"], 8],
       [["done when", "acceptance checks"], 4],
-   ];
+   ]);
 
-   const addSignals = (projectType: ProjectType, groups: Array<[string[], number]>) => {
-      for (const [phrases, weight] of groups) {
-         for (const phrase of phrases) {
-            if (lower.includes(phrase)) {
-               scores[projectType] += weight;
-            }
-         }
-      }
-   };
+   const outcomeIsOperational =
+      /\b(?:launch|operate|run|organize|coordinate|implement|roll out|pilot|open|install|upgrade|deliver|establish)\b/i.test(`${goalText} ${deliverableText}`) ||
+      /\b(?:service|program|event|business|operation|installation|operating model|first version)\b/i.test(deliverableText);
+   const outcomeIsWritten = /\b(?:essay|article|report|brief|script|paper|documentation)\b/i.test(deliverableText);
+   const outcomeIsSoftware = /\b(?:software|web app|application|website|platform|api|frontend|backend)\b/i.test(deliverableText);
 
-   addSignals("software", softwareSignals);
-   addSignals("research", researchSignals);
-   addSignals("writing", writingSignals);
-   addSignals("planning", planningSignals);
-   addSignals("checklist", checklistSignals);
+   if (outcomeIsOperational && !outcomeIsWritten) scores.planning += 8;
+   if (outcomeIsSoftware) scores.software += 8;
+   if (outcomeIsWritten && !explicitResearchStructure) scores.writing += 5;
+   if (explicitResearchStructure && outcomeIsWritten) scores.research += 4;
 
    const buildHeadingCount = countMatches(lower, /(?:^|\n)[ \t]*(?:#{1,6}[ \t]*)?(?:[-*][ \t]*)?(?:\[[ x]\][ \t]*)?(?:build|phase)[ \t]+\d+(?:(?:[ \t]*[—–:-][ \t]*)|[ \t]+)[^\n]+/gim);
-
    const checkboxCount = countMatches(lower, /(?:^|\n)\s*[-*]?\s*\[[ x]\]\s+/gim);
-
-   if (buildHeadingCount >= 2) {
-      scores.software += Math.min(12, buildHeadingCount * 2);
-   }
-
-   if (checkboxCount >= 3) {
-      scores.checklist += Math.min(10, checkboxCount);
-   }
+   if (buildHeadingCount >= 2) scores.software += Math.min(12, buildHeadingCount * 2);
+   if (checkboxCount >= 3) scores.checklist += Math.min(10, checkboxCount);
 
    const materialText = (input.materials || [])
       .map((material) => `${material.type || ""} ${material.title || ""} ${material.summary || ""}`)
       .join(" ")
       .toLowerCase();
+   if (explicitResearchStructure && hasPhrase(materialText, ["source", "article", "study", "research", "citation"])) scores.research += 3;
+   if (hasPhrase(materialText, ["code", "screenshot", "test", "architecture"])) scores.software += 2;
 
-   if (hasPhrase(materialText, ["source", "article", "study", "research", "citation"])) {
-      scores.research += 3;
+   if (!explicitResearchStructure && explicitType !== "research") {
+      scores.research = Math.min(scores.research, 4);
    }
 
-   if (hasPhrase(materialText, ["code", "screenshot", "test", "architecture"])) {
-      scores.software += 2;
-   }
-
-   // Research should win over Writing when the project explicitly depends
-   // on sources or a research question. Writing remains the profile once
-   // drafting and revision are the primary state.
-   if (lower.includes("research question") && hasPhrase(lower, ["sources needed", "credible sources", "evidence"])) {
-      scores.research += 8;
-   }
-
-   const ranked = PROJECT_TYPES.map((projectType) => ({
-      projectType,
-      score: scores[projectType],
-   })).sort((a, b) => b.score - a.score);
-
+   const ranked = PROJECT_TYPES.map((projectType) => ({ projectType, score: scores[projectType] })).sort((a, b) => b.score - a.score);
    const best = ranked[0];
    const second = ranked[1];
    const winningType = best.score >= 4 ? best.projectType : "general";
@@ -834,16 +829,16 @@ export function detectProjectReasoningProfile(input: { title: string; projectDoc
       explicitType === winningType
          ? `Project Type explicitly indicates ${winningType}.`
          : winningType === "software"
-           ? "The project contains software-build, architecture, implementation, or testing signals."
+           ? "The finished outcome is a software product or technical build, so implementation and validation control the roadmap."
            : winningType === "research"
-             ? "The project is organized around a research question, sources, evidence, or findings."
+             ? "The finished outcome is governed by a research question, source requirements, and evidence."
              : winningType === "writing"
-               ? "The project is organized around a draft, audience, sections, or revision work."
+               ? "The finished outcome is a written deliverable governed by audience, structure, drafting, and revision."
                : winningType === "planning"
-                 ? "The project is organized around milestones, timing, dependencies, or logistics."
+                 ? "The finished outcome depends on decisions, dependencies, logistics, resources, and real-world validation."
                  : winningType === "checklist"
-                   ? "The project is primarily represented as ordered tasks or completion checks."
-                   : "No stronger structured workflow was detected, so ALLEVIN should use the general profile.";
+                   ? "The project is primarily represented as ordered checks with explicit completion states."
+                   : "No stronger governing workflow was detected, so ALLEVIN should use the general profile.";
 
    return {
       projectType: winningType,
@@ -1165,7 +1160,7 @@ function buildProjectPlanFromMilestoneWorkspaces(workspaces: ProjectMilestoneWor
             status,
             statusSource: "explicit" as const,
             completionSignals: uniqueStrings(workspace.completionEvidence || [], 20),
-            readinessCriteria: uniqueStrings(workspace.completionEvidence || [], 20),
+            readinessCriteria: uniqueStrings(workspace.completionCriteria || [], 20),
             dependencies: uniqueStrings(workspace.dependencies || [], 20),
             goal: compactText(workspace.goal, 1500),
             whyItMatters: compactText(workspace.whyItMatters, 1500),
@@ -1184,6 +1179,58 @@ function buildProjectPlanFromMilestoneWorkspaces(workspaces: ProjectMilestoneWor
 // Materials-to-project alignment
 // ========================================
 
+function getMaterialAlignmentTokens(value?: string) {
+   const stopWords = new Set(["about", "after", "before", "build", "complete", "create", "current", "first", "from", "into", "material", "milestone", "project", "should", "that", "their", "this", "what", "when", "where", "which", "with", "work"]);
+
+   return new Set(
+      compactText(value, 12000)
+         .toLowerCase()
+         .split(/[^a-z0-9]+/)
+         .filter((token) => token.length >= 3 && !stopWords.has(token)),
+   );
+}
+
+function getMaterialBuildConceptCoverage(materialText: string, buildText: string) {
+   const material = compactText(materialText, 12000).toLowerCase();
+   const build = compactText(buildText, 8000).toLowerCase();
+   const conceptPairs: Array<[RegExp, RegExp]> = [
+      [/\b(?:power|electrical|outlet|circuit)\b/i, /\b(?:power|electrical|outlet|circuit|amp|voltage|breaker)\b/i],
+      [/\b(?:lighting|light)\b/i, /\b(?:lighting|light|dark|illumination)\b/i],
+      [/\b(?:ventilation|airflow)\b/i, /\b(?:ventilation|airflow|cross-ventilation|exhaust|fan|garage door)\b/i],
+      [/\b(?:dust)\b/i, /\b(?:dust|shop vacuum|vacuum|collector|source collection)\b/i],
+      [/\b(?:noise)\b/i, /\b(?:noise|hearing|sound)\b/i],
+      [/\b(?:safety|risk|flammable|finish|fire)\b/i, /\b(?:safety|risk|flammable|finish|fire|spark|heat|approved cabinet)\b/i],
+      [/\b(?:layout|storage|access|workbench|workspace)\b/i, /\b(?:layout|storage|access|workbench|workspace|zone|path)\b/i],
+      [/\b(?:mobile|movable|portable|reset)\b/i, /\b(?:mobile|movable|portable|reset|rolling|folding)\b/i],
+      [/\b(?:budget|cost|price|spend)\b/i, /\b(?:budget|cost|price|spend|dollar|\$)\b/i],
+      [/\b(?:tool|equipment|material|parts?)\b/i, /\b(?:tool|equipment|material|parts?|saw|vacuum|collector|machine)\b/i],
+      [/\b(?:projects?|uses?|scenarios?|scope)\b/i, /\b(?:projects?|uses?|scenarios?|scope|repair|build|assemble)\b/i],
+      [/\b(?:operations?|capabilities?)\b/i, /\b(?:operations?|capabilities?|cut|crosscut|drill|sand|assemble|finish)\b/i],
+   ];
+
+   return conceptPairs.reduce((score, [buildPattern, materialPattern]) => {
+      return score + (buildPattern.test(build) && materialPattern.test(material) ? 1 : 0);
+   }, 0);
+}
+
+function getMaterialAlignmentScore(materialText: string, build: ProjectBuildStep) {
+   const buildText = [build.title, build.goal, build.description, build.whyItMatters, build.startingPrompt, build.workingContent, ...(build.decisions || []), ...(build.openQuestions || []), ...(build.readinessCriteria || [])].filter(Boolean).join(" ");
+
+   const materialTokens = getMaterialAlignmentTokens(materialText);
+   const buildTokens = getMaterialAlignmentTokens(buildText);
+   if (!materialTokens.size || !buildTokens.size) return 0;
+
+   let shared = 0;
+   buildTokens.forEach((token) => {
+      if (materialTokens.has(token)) shared += 1;
+   });
+
+   const overlap = shared / Math.min(buildTokens.size, materialTokens.size);
+   const exactTitle = compactText(build.title).length >= 5 && materialText.toLowerCase().includes(compactText(build.title).toLowerCase()) ? 0.8 : 0;
+   const conceptCoverage = getMaterialBuildConceptCoverage(materialText, buildText);
+   return overlap + Math.min(shared * 0.06, 0.3) + exactTitle + Math.min(conceptCoverage * 0.24, 1.2);
+}
+
 export function getProjectMaterialSignals(projectTitle: string, buildOrder: ProjectBuildStep[], materials: ProjectMaterialInput[] = []) {
    const projectTitleKey = normalizeProjectKey(projectTitle);
 
@@ -1196,22 +1243,28 @@ export function getProjectMaterialSignals(projectTitle: string, buildOrder: Proj
       .filter((material) => normalizeProjectKey(material.projectTitle) === projectTitleKey)
       .map((material) => {
          const searchable = compactText(
-            `${material.title || ""} ${material.summary || ""} ${material.notes || ""} ${material.source || ""} ${material.interpretationSummary || ""} ${material.interpretationUsefulContext || ""} ${material.interpretationNextStep || ""}`,
+            `${material.title || ""} ${material.summary || ""} ${material.notes || ""} ${material.source || ""} ${material.documentText || ""} ${material.interpretationSummary || ""} ${material.interpretationUsefulContext || ""} ${material.interpretationNextStep || ""}`,
             8000,
          ).toLowerCase();
 
-         const relevantBuildIds = buildOrder
-            .filter((build) => {
-               const buildNumberSignal = new RegExp(`\\b(?:build|phase|step|milestone)\\s+${build.number}\\b`, "i").test(searchable);
+         const scoredBuilds = buildOrder.map((build) => {
+            const buildNumberSignal = new RegExp(`\\b(?:build|phase|step|milestone)\\s+${build.number}\\b`, "i").test(searchable);
+            const buildTitleKey = compactText(build.title).toLowerCase();
+            const buildTitleSignal = buildTitleKey.length >= 5 && searchable.includes(buildTitleKey);
+            const alignmentScore = getMaterialAlignmentScore(searchable, build) + (buildNumberSignal ? 2 : 0) + (buildTitleSignal ? 1.5 : 0);
+            return { build, alignmentScore, explicit: buildNumberSignal || buildTitleSignal };
+         });
+         const bestAlignment = scoredBuilds.reduce((best, candidate) => Math.max(best, candidate.alignmentScore), 0);
+         const relevantBuildIds = scoredBuilds
+            .filter((candidate) => candidate.explicit || (candidate.alignmentScore >= 0.62 && candidate.alignmentScore >= bestAlignment - 0.35))
+            .sort((left, right) => right.alignmentScore - left.alignmentScore || left.build.number - right.build.number)
+            .slice(0, 3)
+            .map((candidate) => candidate.build.id);
 
-               const buildTitleKey = compactText(build.title).toLowerCase();
-               const buildTitleSignal = buildTitleKey.length >= 5 && searchable.includes(buildTitleKey);
-
-               return buildNumberSignal || buildTitleSignal;
-            })
-            .map((build) => build.id);
-
-         const details = compactText([material.title, material.summary, material.notes, material.source, material.interpretationSummary, material.interpretationUsefulContext, material.interpretationNextStep].filter(Boolean).join("\n"), 12000);
+         const details = compactText(
+            [material.title, material.summary, material.notes, material.source, material.documentText, material.interpretationSummary, material.interpretationUsefulContext, material.interpretationNextStep].filter(Boolean).join("\n"),
+            12000,
+         );
 
          const fallbackSeed = `${projectTitle}:${material.title}:${material.createdAt || 0}`;
 
@@ -1349,7 +1402,7 @@ function buildProfileSignals(projectDocument: ParsedProjectDocument, sections: S
 
    const requirements = getSectionItems(sections, ["Requirements", "Assignment Requirements", "Project Requirements", "Needed", "Must Include"]);
 
-   const successCriteria = getSectionItems(sections, ["Success Criteria", "Acceptance Criteria", "Completion Criteria", "Done When"]);
+   const successCriteria = getSectionItems(sections, ["Success Looks Like", "Success Criteria", "Acceptance Criteria", "Completion Criteria", "Done When"]);
 
    const sourceRequirements = getSectionItems(sections, ["Sources Needed", "Source Requirements", "Required Sources", "Evidence Needed", "Research Needed"]);
 
@@ -1382,7 +1435,7 @@ function buildProfileSignals(projectDocument: ParsedProjectDocument, sections: S
 
    const architecture = getSectionItems(sections, ["Architecture", "Technical Architecture", "System Design", "Tech Stack"]);
 
-   const decisions = getSectionItems(sections, ["Decisions", "Decision", "Confirmed Direction", "Design Decisions"]);
+   const decisions = getSectionItems(sections, ["Confirmed Decisions", "Decisions", "Decision", "Confirmed Direction", "Design Decisions"]);
 
    const options = getSectionItems(sections, ["Options Being Considered", "Options", "Alternatives", "Choices", "Approaches"]);
 
@@ -1582,8 +1635,9 @@ function assessProfileReadiness(profile: ProjectReasoningProfile, profileSignals
 
    if (profile === "planning") {
       const missingChecks: string[] = [];
+      const hasStructuredMilestones = profileSignals.milestones.length > 0 || buildReadiness.state !== "unknown";
 
-      if (!profileSignals.milestones.length) {
+      if (!hasStructuredMilestones) {
          missingChecks.push("Define the major milestones.");
       }
 
@@ -1600,8 +1654,8 @@ function assessProfileReadiness(profile: ProjectReasoningProfile, profileSignals
          reason: missingChecks.length
             ? "The plan is missing major outcome milestones."
             : profileSignals.timeline.length
-              ? "The plan has milestones, timing, and dependency-aware structure."
-              : "The plan has enough milestone and dependency structure to guide the next decision; timing can be added after the active decision gate is resolved.",
+              ? "The project has a usable sequence, clear dependencies, and enough structure to guide the next decision."
+              : "The project has enough dependency structure to guide the next decision; timing can be added when it will materially affect the work.",
          missingChecks,
       };
    }
@@ -1806,12 +1860,16 @@ function getDecisionOverlap(left?: string, right?: string) {
 function isPurchaseGuardrailText(value?: string) {
    const lower = compactText(value).toLowerCase();
 
-   return lower.includes("should not be purchased") || lower.includes("do not purchase") || lower.includes("before purchasing") || lower.includes("until the architecture is selected") || lower.includes("until the option is selected");
+   return (
+      /\b(?:do not|should not|must not|avoid)\s+(?:buy|purchase|order|commit|finalize|launch|schedule)\b/i.test(lower) ||
+      /\bbefore\s+(?:buying|purchasing|ordering|committing|finalizing|launching|scheduling)\b/i.test(lower) ||
+      /\buntil\s+.+\s+(?:is|are)\s+(?:selected|confirmed|verified|approved|resolved)\b/i.test(lower)
+   );
 }
 
 function inferExplicitDependencyState(dependency: string, materials: ProjectMaterialSignal[], availableEvidence: string[]): ProjectDependencyState {
-   const confirmingSignals = ["confirmed", "successfully", "passed", "tested", "identified", "verified", "available", "works", "working", "reached", "negotiates", "no packet loss"];
-   const unresolvedSignals = ["not tested", "not confirmed", "not identified", "unknown", "has not been tested", "has not been confirmed", "has not been identified", "still needs"];
+   const confirmingSignals = ["confirmed", "successfully", "passed", "tested", "identified", "verified", "approved", "selected", "resolved", "available", "works", "working", "accepted", "meets the target", "met the target"];
+   const unresolvedSignals = ["not tested", "not confirmed", "not identified", "not selected", "not approved", "unknown", "has not been tested", "has not been confirmed", "has not been identified", "still needs", "unresolved", "blocked"];
    const dependencyLower = compactText(dependency).toLowerCase();
 
    if (unresolvedSignals.some((signal) => dependencyLower.includes(signal))) {
@@ -1820,29 +1878,28 @@ function inferExplicitDependencyState(dependency: string, materials: ProjectMate
 
    const candidates = [...availableEvidence, ...materials.flatMap((material) => [material.title, material.summary, material.details])];
 
-   if (isPurchaseGuardrailText(dependency)) {
-      const decisionEvidence = compactText(candidates.join(" "), 36000);
-
-      if (
-         /architecture (?:is|was|has been) selected|confirmed architecture|wired access points are technically practical|strongest supported option|finalize the equipment list/i.test(decisionEvidence) ||
-         (/successfully negotiates|throughput test|no packet loss/i.test(decisionEvidence) && /wired access point|wired wireless access point|existing ethernet/i.test(decisionEvidence))
-      ) {
-         return "satisfied";
-      }
-
-      return "unknown";
-   }
-
    for (const candidate of candidates) {
       const lower = compactText(candidate, 5000).toLowerCase();
       const overlap = getDecisionOverlap(dependency, lower);
 
-      const asksForIdentification = /\b(?:identify|identified|model|capability|supports?|poe capability)\b/i.test(dependency);
-      const hasIdentificationFact = /\b(?:identified|model|supports?|does not support|non-poe|poe|gigabit|unmanaged|managed)\b/i.test(lower) || /\b(?:switch|router|cable|run)\s+is\b/i.test(lower);
+      if (overlap < 2) {
+         continue;
+      }
 
-      if (overlap >= 2 && !unresolvedSignals.some((signal) => lower.includes(signal)) && (confirmingSignals.some((signal) => lower.includes(signal)) || (asksForIdentification && hasIdentificationFact))) {
+      if (unresolvedSignals.some((signal) => lower.includes(signal))) {
+         return "unsatisfied";
+      }
+
+      if (confirmingSignals.some((signal) => lower.includes(signal))) {
          return "satisfied";
       }
+   }
+
+   // A guardrail such as “do not commit until X is confirmed” remains unknown
+   // until matching confirmation evidence appears. The guardrail itself is not
+   // proof that the underlying decision has been resolved.
+   if (isPurchaseGuardrailText(dependency)) {
+      return "unknown";
    }
 
    return "unknown";
@@ -1953,9 +2010,9 @@ function buildRiskSignals(input: {
       add("The intended audience is not defined, which weakens revision decisions.", "inference", "medium");
    }
 
-   if (input.profile === "planning" && !input.profileSignals.timeline.length) {
-      add("The plan has no detected timeline, so milestone sequencing may be unreliable.", "inference", "medium");
-   }
+   // ALLEVIN MK VIII planning guidance:
+   // A project can have a reliable dependency order without having a fixed
+   // deadline. Do not invent a timeline risk merely because no date was found.
 
    for (const missingCheck of input.readiness.missingChecks.slice(0, 8)) {
       if (input.profile === "research" && /\bsources?\b/i.test(missingCheck) && typeof input.profileSignals.sourceCountRequired === "number" && input.profileSignals.sourceCountAvailable < input.profileSignals.sourceCountRequired) {
@@ -2069,66 +2126,53 @@ function inferProjectSituationState(input: { declaredState: string; projectBody:
 function inferMaterialDrivenCurrentState(profile: ProjectReasoningProfile, declaredState: string, materials: ProjectMaterialSignal[]) {
    const latestMaterialText = compactText(
       materials
-         .slice(0, 6)
+         .slice(0, 8)
          .flatMap((material) => [material.title, material.summary, material.details])
          .join(" "),
-      36000,
+      42000,
    );
 
-   if (profile === "planning" && latestMaterialText) {
-      if (
-         /post[- ]installation|installation is complete|final validation|validation has not passed|post-installation validation|test results/i.test(latestMaterialText) ||
-         (/roaming/i.test(latestMaterialText) && /interruption|packet loss|latency|mbps|coverage/i.test(latestMaterialText))
-      ) {
-         return "Post-installation validation";
-      }
+   if (profile !== "planning" || !latestMaterialText) {
+      return declaredState;
+   }
 
-      if (/audit|inspection|findings|assessment|existing cabling|ethernet run/i.test(latestMaterialText) && /architecture|option|access point|wired|practical|feasible|successfully negotiates|throughput/i.test(latestMaterialText)) {
-         return "Architecture selection";
-      }
+   const hasValidationLanguage = /\b(?:test|validation|verify|acceptance|pilot|trial|review results?|quality check)\b/i.test(latestMaterialText);
+   const hasFailureLanguage = /\b(?:failed|not passed|did not pass|below target|missed target|does not meet|incomplete|needs? retest|needs? correction|still fails?|blocked)\b/i.test(latestMaterialText);
+   const hasDecisionConfirmation = /\b(?:selected|approved|confirmed|finalized|decision made|chosen approach|accepted option)\b/i.test(latestMaterialText);
+   const hasDiscoveryEvidence = /\b(?:audit|assessment|findings|inspection|requirements|baseline|research results?|discovery)\b/i.test(latestMaterialText);
+   const hasCompletedOutput = /\b(?:first version|prototype|draft|implementation|installation|deliverable|plan)\b[\s\S]{0,80}\b(?:complete|completed|ready|built|finished)\b/i.test(latestMaterialText);
+
+   if (hasValidationLanguage && hasFailureLanguage) {
+      return "Validation and correction";
+   }
+
+   if (hasCompletedOutput || (hasValidationLanguage && !hasFailureLanguage)) {
+      return "Validation";
+   }
+
+   if (hasDecisionConfirmation) {
+      return "Decision confirmed";
+   }
+
+   if (hasDiscoveryEvidence) {
+      return "Discovery and decision preparation";
    }
 
    return declaredState;
 }
 
 function getActivePlanningKnownRisks(currentState: string, knownRisks: string[], materials: ProjectMaterialSignal[]) {
-   const state = compactText(currentState).toLowerCase();
-   const materialText = compactText(
-      materials
-         .slice(0, 8)
-         .flatMap((material) => [material.title, material.summary, material.details])
-         .join(" "),
-      42000,
-   ).toLowerCase();
-
-   const validationStage = state.includes("validation") || materialText.includes("installation is complete") || materialText.includes("post-installation") || materialText.includes("validation has not passed");
-
-   const architectureSelected =
-      validationStage ||
-      state.includes("architecture selection") ||
-      (/wired access point|two wired wireless access points|wired wi-fi 6 access points/i.test(materialText) && /technically practical|strongest supported option|architecture/i.test(materialText));
-
-   if (validationStage) {
-      const active = knownRisks.filter((risk) => {
-         const lower = risk.toLowerCase();
-
-         if (/buying mesh|ethernet backhaul|replacing the router|spending the full budget|before testing the simplest solution|equipment should not be purchased|switch model|poe capability|architecture is selected/.test(lower)) {
-            return false;
-         }
-
-         return /placement|coverage|weak area|roaming|latency|packet loss|speed alone|interference|configuration|channel|transmit power/.test(lower);
-      });
-
-      return active.length ? active : ["Poor access-point placement or configuration may be causing the remaining weak area.", "Evaluating the network by speed alone can hide roaming, latency, or packet-loss problems."];
+   if (!knownRisks.length) {
+      return [];
    }
 
-   if (architectureSelected) {
-      const active = knownRisks.filter((risk) => !/buying mesh|ethernet backhaul|replacing the router|equipment should not be purchased|switch model|poe capability/i.test(risk));
+   const context = compactText([currentState, ...materials.slice(0, 8).flatMap((material) => [material.title, material.summary, material.details])].join(" "), 42000);
 
-      return active.length ? active : ["Poor access-point placement could weaken an otherwise sound architecture.", "Buying expansion hardware without a current requirement could waste the remaining budget."];
-   }
-
-   return knownRisks;
+   return [...knownRisks].sort((left, right) => {
+      const rightOverlap = getDecisionOverlap(right, context);
+      const leftOverlap = getDecisionOverlap(left, context);
+      return rightOverlap - leftOverlap;
+   });
 }
 
 function getNaturalProjectSentences(value?: string) {
@@ -2213,21 +2257,25 @@ function projectLeadActionFromSentence(value?: string) {
 }
 
 function inferProjectLeadFollowUp(actions: string[], nextMove: string) {
-   const remaining = actions.filter((action) => action.toLowerCase() !== nextMove.toLowerCase());
-   const combined = remaining.join(" ").toLowerCase();
+   const remaining = actions.filter((action) => normalizeProjectKey(action) !== normalizeProjectKey(nextMove));
 
-   // Prefer prerequisites over downstream validation work.
-   if (/rsvp|attendance|guest count/i.test(nextMove)) {
-      const coordination = remaining.find((action) => /coordinate with|reserve support|\bit department\b|\bit team\b/i.test(action));
-      if (coordination) return coordination;
-   }
+   if (!remaining.length) return "";
 
-   if (/slideshow|presentation|video|a\/v/i.test(combined)) {
-      const coordination = remaining.find((action) => /coordinate with|reserve support|\bit department\b|\bit team\b/i.test(action));
-      if (coordination) return coordination;
-   }
+   // Keep the stored or extracted order authoritative. When the notes express
+   // an explicit before/after dependency, prefer the action named by that
+   // dependency instead of applying a domain-specific shortcut.
+   const nextTokens = new Set(
+      compactText(nextMove, 1000)
+         .toLowerCase()
+         .split(/[^a-z0-9]+/)
+         .filter((token) => token.length >= 4),
+   );
+   const linked = remaining.find((action) => {
+      const lower = action.toLowerCase();
+      return Array.from(nextTokens).some((token) => lower.includes(token)) || /\b(?:after|then|once|following|depends on)\b/i.test(action);
+   });
 
-   return remaining[0] || "";
+   return linked || remaining[0];
 }
 
 function inferProjectLeadGoal(title: string, explicitGoal: string, sentences: string[]) {
@@ -2262,29 +2310,41 @@ function inferProjectLeadMomentum(sentences: string[], unresolvedWork: string[],
 }
 
 function inferProjectLeadWhyNow(nextSentence: string, action: string, sentences: string[], goal: string) {
-   const lowerAction = action.toLowerCase();
+   const actionTokens = compactText(action, 1000)
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 4 && !["this", "that", "with", "from", "project", "current", "first"].includes(token));
 
-   if (/rsvp|attendance|guest count/.test(lowerAction)) {
-      return "Attendance affects the remaining setup decisions, including seating, delivery quantities, and room preparation.";
-   }
+   const causal = nextSentence.match(/\b(?:because|so that|so|before|depends? on|affects?|determines?|unlocks?)\s+(.+)$/i)?.[1]?.replace(/[.!?]+$/, "");
+   if (causal) return ensureProjectLeadSentence(`It matters now because ${lowerProjectSentenceStart(causal)}`);
 
-   if (/it|a\/v|audio|video|slideshow|presentation/.test(lowerAction)) {
-      return "A/V support and equipment availability determine whether the presentation can be tested under real event conditions.";
-   }
+   const supporting = sentences
+      .filter((sentence) => sentence !== nextSentence)
+      .map((sentence) => ({
+         sentence,
+         overlap: actionTokens.filter((token) => sentence.toLowerCase().includes(token)).length,
+         causal: /\b(?:because|before|after|depends?|affects?|determines?|requires?|unlocks?|cannot|can't|must)\b/i.test(sentence) ? 2 : 0,
+      }))
+      .filter((candidate) => candidate.overlap > 0)
+      .sort((left, right) => right.overlap + right.causal - (left.overlap + left.causal))[0]?.sentence;
 
-   if (/chair|delivery/.test(lowerAction)) {
-      return "The delivery window affects room setup and leaves little recovery time if anything changes.";
-   }
-
-   const causal = nextSentence.match(/\bso\s+(.+)$/i)?.[1]?.replace(/[.!?]+$/, "");
-   if (causal) {
-      return ensureProjectLeadSentence(`Completing this now means ${lowerProjectSentenceStart(causal)}`);
-   }
-
-   const supporting = sentences.find((sentence) => sentence !== nextSentence && /\baffect|depend|before|so\b/i.test(sentence));
    if (supporting) return ensureProjectLeadSentence(supporting);
 
-   return ensureProjectLeadSentence(`It is the clearest unfinished step that moves the project toward ${lowerProjectSentenceStart(goal)}`);
+   const lowerAction = action.toLowerCase();
+   if (/\b(?:decide|choose|define|clarify|confirm|approve|finalize)\b/.test(lowerAction)) {
+      return "Settling this now gives the work that follows a clear decision boundary instead of forcing later steps to rely on assumptions.";
+   }
+   if (/\b(?:research|inspect|assess|audit|measure|verify|identify|gather)\b/.test(lowerAction)) {
+      return "This produces the evidence later decisions need and reduces the chance of committing resources on an untested assumption.";
+   }
+   if (/\b(?:build|create|draft|implement|prepare|install|develop)\b/.test(lowerAction)) {
+      return "The key prerequisites appear ready enough to turn the plan into a concrete result that can be reviewed or tested.";
+   }
+   if (/\b(?:test|validate|review|pilot|rehearse|confirm quality)\b/.test(lowerAction)) {
+      return "This is where the project replaces assumptions with evidence and checks whether the result actually meets the success criteria.";
+   }
+
+   return ensureProjectLeadSentence(goal ? `This is the earliest unfinished outcome that directly supports ${lowerProjectSentenceStart(goal)}` : "This is the earliest unfinished outcome the later work depends on");
 }
 
 function ensureProjectLeadSentence(value?: string) {
@@ -2295,29 +2355,17 @@ function ensureProjectLeadSentence(value?: string) {
 
 function inferProjectLeadRisks(sentences: string[], unresolvedWork: string[]) {
    const risks: string[] = [];
+   const explicitRiskSignals = /\b(?:risk|concern|could|may|might|unclear|unknown|not decided|not confirmed|not researched|not tested|depends on|blocked|delay|deadline|avoid|do not want|don't want|without|limited|constraint)\b/i;
 
    for (const sentence of sentences) {
-      const lower = sentence.toLowerCase();
-
-      if (/\bslideshow\b|\bvideo\b|\bpresentation equipment\b|\ba\/v\b/.test(lower) && /\btest|verify|working|playback|audio|timing\b/.test(lower)) {
-         risks.push("The slideshow could fail on the actual presentation setup unless audio, video playback, and slide timing are tested there.");
-      }
-
-      if (/\bit department\b|\bit team\b|\ba\/v support\b/.test(lower) && /\bcoordinate|reserve|available|book\b/.test(lower)) {
-         risks.push("IT availability is not confirmed yet, which could leave the A/V test or event setup without support.");
-      }
-
-      if (/\bchair\b|\bdelivery\b/.test(lower) && /\bevening before|morning of|confirm\b/.test(lower)) {
-         risks.push("The chair delivery window is narrow, so a missed or unclear handoff could disrupt day-of setup.");
-      }
-
-      if (/\brsvp\b|\battendance\b/.test(lower) && /\btomorrow|deadline|finalized\b/.test(lower)) {
-         risks.push("A delayed RSVP reminder could leave the final attendance count unresolved and compress later setup decisions.");
-      }
+      if (!explicitRiskSignals.test(sentence)) continue;
+      if (/^(?:project goal|success looks like|confirmed decisions?)\s*:/i.test(sentence)) continue;
+      risks.push(ensureProjectLeadSentence(sentence));
    }
 
-   if (unresolvedWork.length >= 4) {
-      risks.push("Several execution details remain open close to the event, so ownership and sequencing matter more than adding new work.");
+   const timeSensitive = sentences.some((sentence) => /\b(?:today|tomorrow|tonight|deadline|due|scheduled|before|by \w+day|\d{1,2}[/-]\d{1,2})\b/i.test(sentence));
+   if (timeSensitive && unresolvedWork.length > 2) {
+      risks.push("Several dependencies are still open against a stated time constraint, so ownership and sequence need to be explicit before more work is added.");
    }
 
    return uniqueStrings(risks, 6);
@@ -2352,8 +2400,8 @@ function buildProjectLeadState(input: {
           : `The project is moving toward ${goal}.`;
    const opportunities = uniqueStrings(
       [
-         /it|a\/v|slideshow|presentation/i.test(actions.join(" ")) ? "Book A/V support before the equipment test so the test reflects the actual event setup." : "",
-         /rsvp|attendance/i.test(actions.join(" ")) && /chair|delivery|seating/i.test(actions.join(" ")) ? "Use the RSVP responses to confirm the final chair count and room setup." : "",
+         nextMove && afterNextMove ? `Completing ${nextMove.replace(/[.!?]+$/, "")} should unlock ${lowerProjectSentenceStart(afterNextMove).replace(/[.!?]+$/, "")}.` : "",
+         blockers.length ? `Resolving the first blocker before expanding the work will reduce rework across the remaining milestones.` : "",
       ],
       4,
    );
@@ -2375,8 +2423,19 @@ function buildProjectLeadState(input: {
 interface StoredProjectProgressMilestone {
    id: string;
    title: string;
+   status: string;
    completed: boolean;
    completedAt?: number;
+   goal: string;
+   whyItMatters: string;
+   startingPrompt: string;
+   workingContent: string;
+   decisions: string[];
+   openQuestions: string[];
+   dependencies: string[];
+   completionCriteria: string[];
+   completionEvidence: string[];
+   order: number;
 }
 
 interface StoredProjectProgress {
@@ -2413,10 +2472,22 @@ function readStoredProjectProgress(projectTitle: string): StoredProjectProgress 
             .map((milestone, index) => ({
                id: cleanTitle(milestone.id) || `stored-milestone-${index}`,
                title: cleanTitle(milestone.title),
-               completed: milestone.completed === true,
+               status: compactText(milestone.status),
+               completed: milestone.completed === true || compactText(milestone.status).toLowerCase() === "complete",
                completedAt: typeof milestone.completedAt === "number" ? milestone.completedAt : undefined,
+               goal: compactText(milestone.goal, 1600),
+               whyItMatters: compactText(milestone.whyItMatters, 1600),
+               startingPrompt: compactText(milestone.startingPrompt, 1600),
+               workingContent: cleanText(milestone.workingContent, 100000),
+               decisions: uniqueStrings(Array.isArray(milestone.decisions) ? milestone.decisions : [], 40),
+               openQuestions: uniqueStrings(Array.isArray(milestone.openQuestions) ? milestone.openQuestions : [], 40),
+               dependencies: uniqueStrings(Array.isArray(milestone.dependencies) ? milestone.dependencies : [], 20),
+               completionCriteria: uniqueStrings(Array.isArray(milestone.completionCriteria) ? milestone.completionCriteria : [], 40),
+               completionEvidence: uniqueStrings(Array.isArray(milestone.completionEvidence) ? milestone.completionEvidence : [], 40),
+               order: typeof milestone.order === "number" && Number.isFinite(milestone.order) ? Math.max(1, Math.floor(milestone.order)) : index + 1,
             }))
-            .filter((milestone) => milestone.title),
+            .filter((milestone) => milestone.title)
+            .sort((left, right) => left.order - right.order),
          nextStep: compactText(stored.nextStep),
          status: compactText(stored.status),
       };
@@ -2433,72 +2504,147 @@ function getStructuredProjectItems(sections: StructuredSection[], aliases: strin
    return getSectionItems(sections, aliases, 20);
 }
 
+function getMilestoneSubjectText(value?: string) {
+   return compactText(value, 1200)
+      .replace(/[.!?]+$/, "")
+      .replace(/^(?:finalize|define|clarify|decide|choose|select|establish|confirm|verify|validate|approve|identify|gather|assess|map|create|build|prepare|develop|produce|test|review|launch|publish|implement|complete|resolve|set)\s+/i, "")
+      .trim();
+}
+
+function isUsefulStoredMilestoneRationale(value?: string, milestoneTitle?: string, allMilestones: string[] = []) {
+   const clean = compactText(value, 2400);
+   if (!clean) return false;
+
+   if (
+      /^(?:this checkpoint|this decision|this step|this is the earliest unfinished|this is the clearest unresolved|the later plan depends|before launch, i need to|i need to)\b/i.test(clean) ||
+      /(?:produces information or decisions|work after it depends on|gives the next milestone a dependable starting point|sets the boundary for the work that follows|prevents later milestones from moving in conflicting directions)/i.test(clean)
+   ) {
+      return false;
+   }
+
+   const actionVerbCount = (clean.match(/\b(?:finalize|define|decide|build|create|test|prepare|deploy|launch|select|confirm|review|publish|implement)\b/gi) || []).length;
+   const milestoneMatches = allMilestones.filter((title) => title && normalizeProjectKey(clean).includes(normalizeProjectKey(title))).length;
+
+   if (clean.length > 220 && (actionVerbCount >= 3 || milestoneMatches >= 3)) return false;
+   if (milestoneTitle && clean.length > 260 && getDecisionOverlap(clean, milestoneTitle) === 0) return false;
+
+   return true;
+}
+
+function buildSequentialMilestoneRationale(currentTitle: string, nextTitle: string, goal: string) {
+   const current = compactText(currentTitle, 1200).replace(/[.!?]+$/, "");
+   const next = compactText(nextTitle, 1200).replace(/[.!?]+$/, "");
+   const currentSubject = getMilestoneSubjectText(current);
+   const nextSubject = getMilestoneSubjectText(next);
+   const searchable = `${current} ${currentSubject}`.toLowerCase();
+   const nextSearchable = `${next} ${nextSubject}`.toLowerCase();
+
+   if (/\b(?:brand|positioning|promise|message|language|tone|identity)\b/.test(searchable)) {
+      if (/\b(?:product|offering|role|relationship|parent|ecosystem|family|portfolio)\b/.test(nextSearchable)) {
+         return "The company promise needs to be clear before the project can define how its products relate to the parent brand. Otherwise, each product may sound strong on its own without explaining why the group belongs together.";
+      }
+
+      return "The brand language sets the standard for the copy, hierarchy, and visual direction that follow, so a usable version should be settled before those later choices are polished.";
+   }
+
+   if (/\b(?:role|relationship|parent|ecosystem|family|portfolio|parts relate)\b/.test(searchable)) {
+      if (/\b(?:structure|hierarchy|editorial|layout|information architecture|page)\b/.test(nextSearchable)) {
+         return "The project needs a clear model for how its parts relate before it can decide the content hierarchy. Otherwise, the page structure may imply the wrong level of importance or independence.";
+      }
+
+      return "Clarifying the relationship among the project’s parts gives later messaging, ownership, and hierarchy decisions a consistent model to follow.";
+   }
+
+   if (/\b(?:structure|hierarchy|editorial|layout|information architecture|outline)\b/.test(searchable)) {
+      return "The content hierarchy needs to be settled before build and copy work can be implemented confidently, or later work may be organized around a structure that changes.";
+   }
+
+   if (/\b(?:audience|user|customer|participant|stakeholder)\b/.test(searchable)) {
+      return "The project needs a clear primary audience because scope, content, access, tone, and workflow choices all depend on who the finished result must serve.";
+   }
+
+   if (/\b(?:research|source|evidence|fact|requirement|archive|interview|discovery)\b/.test(searchable)) {
+      return "The project needs reliable evidence before it can make downstream selections or commitments. This step separates viable directions from attractive ideas that are not yet supported.";
+   }
+
+   if (/\b(?:legal|permit|policy|compliance|privacy|permission|rights|access|security)\b/.test(searchable)) {
+      return "The operating rules need to be clear before the project commits to tools, content, equipment, or implementation choices that may not be usable or approvable.";
+   }
+
+   if (/\b(?:format|workflow|process|capacity|production|operating model|service flow)\b/.test(searchable)) {
+      return "The operating model determines the time, tools, staffing, and quality controls the project can realistically support, so it should be settled before downstream execution choices.";
+   }
+
+   if (/\b(?:budget|pricing|cost|viability|margin|resources)\b/.test(searchable)) {
+      return "The project needs a realistic cost and capacity boundary before it commits to equipment, scope, or delivery choices that may not be sustainable.";
+   }
+
+   if (next) {
+      return ensureProjectLeadSentence(`A working decision on ${lowerProjectSentenceStart(currentSubject)} gives ${lowerProjectSentenceStart(nextSubject)} a concrete standard instead of forcing the later milestone to rely on assumptions`);
+   }
+
+   const cleanGoal = compactText(goal, 360).replace(/[.!?]+$/, "");
+   return cleanGoal
+      ? ensureProjectLeadSentence(`Completing ${lowerProjectSentenceStart(current)} closes the most immediate dependency on the path to ${lowerProjectSentenceStart(cleanGoal)}`)
+      : ensureProjectLeadSentence(`Completing ${lowerProjectSentenceStart(current)} closes the project’s most immediate dependency`);
+}
+
+function resolveMilestoneRationale(stored: string, currentTitle: string, nextTitle: string, goal: string, allTitles: string[]) {
+   return isUsefulStoredMilestoneRationale(stored, currentTitle, allTitles) ? ensureProjectLeadSentence(stored) : buildSequentialMilestoneRationale(currentTitle, nextTitle, goal);
+}
+
 function inferMilestoneWhyNow(nextMove: string, projectBody: string, goal: string) {
-   const next = compactText(nextMove).toLowerCase();
-   const body = compactText(projectBody, 50000).toLowerCase();
+   const cleanMove = compactText(nextMove, 1200).replace(/[.!?]+$/, "");
+   const lowerMove = cleanMove.toLowerCase();
+   const moveTokens = lowerMove.split(/[^a-z0-9]+/).filter((token) => token.length >= 4 && !["this", "that", "with", "from", "project", "current", "first", "next"].includes(token));
+   const sentences = getNaturalProjectSentences(projectBody);
 
-   if (/\bbrand language|company promise|positioning\b/.test(next)) {
-      return "The company promise and positioning determine how the products are introduced, which stories receive emphasis, and what the visual system needs to communicate.";
+   const related = sentences
+      .map((sentence) => {
+         const lower = sentence.toLowerCase();
+         const overlap = moveTokens.filter((token) => lower.includes(token)).length;
+         const dependencyWeight = /\b(?:because|before|after|depends?|affects?|determines?|requires?|unlocks?|so that|cannot|can't|must)\b/i.test(sentence) ? 2 : 0;
+         return { sentence, score: overlap * 2 + dependencyWeight };
+      })
+      .filter((candidate) => candidate.score > 1 && normalizeProjectKey(candidate.sentence) !== normalizeProjectKey(cleanMove))
+      .sort((left, right) => right.score - left.score)[0]?.sentence;
+
+   if (related) return ensureProjectLeadSentence(related);
+
+   if (/\b(?:decide|choose|define|clarify|confirm|approve|finalize|scope|audience|role|purpose)\b/.test(lowerMove)) {
+      return "This decision sets the boundary for the work that follows and prevents later milestones from moving in conflicting directions.";
+   }
+   if (/\b(?:research|inspect|assess|audit|measure|verify|identify|gather|requirements?)\b/.test(lowerMove)) {
+      return "This gives later choices reliable evidence and reduces the chance of committing time or money before the important conditions are known.";
+   }
+   if (/\b(?:budget|price|cost|capacity|resources?|staffing|equipment)\b/.test(lowerMove)) {
+      return "This establishes what the project can realistically support before downstream choices create cost, capacity, or reliability problems.";
+   }
+   if (/\b(?:build|create|draft|implement|prepare|install|develop)\b/.test(lowerMove)) {
+      return "The key direction and prerequisite decisions should be stable enough now to create a concrete result without absorbing avoidable rework.";
+   }
+   if (/\b(?:test|validate|review|pilot|rehearse|launch|release)\b/.test(lowerMove)) {
+      return "This checks the project under realistic conditions and produces the evidence needed to decide whether it is ready to continue, revise, or close.";
    }
 
-   if (/\brelate|relationship|ecosystem|parent company|parent brand\b/.test(next)) {
-      return "The relationship between the parent company and its products determines the page hierarchy, feature-story emphasis, and copy.";
-   }
-
-   if (/\beditorial structure|page structure|information architecture|hierarchy\b/.test(next)) {
-      return "The page structure should translate the positioning into a clear reading order before implementation begins.";
-   }
-
-   if (/\bbuild|implement|develop|code\b/.test(next) && /\bwebsite|site|app|software\b/.test(body)) {
-      return "The key positioning and structure decisions should be stable before implementation so the build does not have to absorb avoidable rework.";
-   }
-
-   if (/\bresponsive|accessibility|wcag|keyboard|contrast\b/.test(next)) {
-      return "Responsive behavior and accessibility are part of the product quality bar, so they need to be validated before the work is treated as ready to share.";
-   }
-
-   if (/\bdeploy|deployment|launch|release\b/.test(next)) {
-      return "Deployment should come after the experience, content hierarchy, responsiveness, and accessibility checks are complete.";
-   }
-
-   if (/\brsvp|attendance\b/.test(next) && /\bparty|event|guests|retirement\b/.test(body)) {
-      return "Attendance affects the remaining setup decisions, including seating, delivery quantities, and room preparation.";
-   }
-
-   if (/\bit|a\/v|slideshow|presentation\b/.test(next) && /\bparty|event|guests|retirement\b/.test(body)) {
-      return "A/V support and equipment availability determine whether the presentation can be tested under real event conditions.";
-   }
-
-   return ensureProjectLeadSentence(`This is the first unfinished checkpoint that materially advances ${lowerProjectSentenceStart(goal)}`);
+   const cleanGoal = compactText(goal, 320).replace(/[.!?]+$/, "");
+   return cleanGoal
+      ? `This is the earliest unfinished checkpoint that directly supports ${lowerProjectSentenceStart(cleanGoal)} and gives the next milestone a dependable starting point.`
+      : "This is the earliest unfinished checkpoint the work that follows depends on.";
 }
 
 function inferDomainProjectRisks(projectBody: string, milestones: string[]) {
-   const body = compactText(projectBody, 50000).toLowerCase();
-   const risks: string[] = [];
+   const sentences = getNaturalProjectSentences(projectBody);
+   const risks = inferProjectLeadRisks(sentences, milestones);
 
-   if (/\bwebsite|site|web app|software company|product ecosystem\b/.test(body)) {
-      if (/\bbrand|positioning|parent brand|parent company|ecosystem\b/.test(body)) {
-         risks.push("If the parent company and product roles are not clearly differentiated, the website may feel like several unrelated products sharing one page.");
-      }
+   // Treat explicit constraints and unresolved conditions as project evidence.
+   // Domain interpretation belongs to the senior response layer, which receives
+   // these exact statements together with the project goal and milestones.
+   const constraintSignals = sentences
+      .filter((sentence) => /\b(?:must|cannot|can't|avoid|limit|limited|under \$|no more than|without|not decided|not confirmed|not researched|not tested)\b/i.test(sentence))
+      .map((sentence) => ensureProjectLeadSentence(sentence));
 
-      if (/\bone-page|one page|magazine-style|editorial\b/.test(body)) {
-         risks.push("A one-page editorial layout can become too text-heavy unless the reading order and feature-story hierarchy are decided early.");
-      }
-
-      if (/\biphone|mobile|tablet|responsive\b/.test(body)) {
-         risks.push("The magazine hierarchy may weaken on smaller screens unless the mobile stacking order is designed deliberately.");
-      }
-
-      if (/\bwcag|accessibility|keyboard|contrast\b/.test(body)) {
-         risks.push("Accessibility could become a late-stage repair if contrast, semantics, focus behavior, and keyboard navigation are not treated as design constraints from the start.");
-      }
-   }
-
-   if (/\bparty|event|guests|retirement\b/.test(body)) {
-      risks.push(...inferProjectLeadRisks(getNaturalProjectSentences(projectBody), milestones));
-   }
-
-   return uniqueStrings(risks, 6);
+   return uniqueStrings([...risks, ...constraintSignals], 8);
 }
 
 function getProjectUnderstandingSuccessState(goal: string, profileSignals: ProjectProfileSignals, projectBody: string) {
@@ -2528,44 +2674,109 @@ function getProjectUnderstandingTimeline(projectBody: string, profileSignals: Pr
 }
 
 function getProjectUnderstandingMilestones(input: { lead: ProjectLeadState; buildOrder: ProjectBuildStep[]; profileSignals: ProjectProfileSignals; risks: ProjectRiskSignal[] }): ProjectUnderstandingMilestone[] {
-   const completedTitles = uniqueStrings([...input.buildOrder.filter((build) => build.status === "completed").map((build) => build.title), ...input.profileSignals.checklistItems.filter((item) => item.status === "completed").map((item) => item.text)], 12);
-   const openTitles = uniqueStrings(
-      [...input.lead.unresolvedWork, ...input.buildOrder.filter((build) => build.status !== "completed").map((build) => build.title), ...input.profileSignals.checklistItems.filter((item) => item.status !== "completed").map((item) => item.text)],
-      12,
-   );
-   const titles = uniqueStrings([...completedTitles, ...openTitles], 12);
-   const activeTitle = input.lead.nextMove || openTitles[0] || "";
+   // ALLEVIN MK VIII — one authoritative milestone source.
+   // A saved/build roadmap is already an ordered project decision. Do not
+   // promote constraints, open questions, or generic unresolved work into
+   // competing milestones when that roadmap exists.
+   const orderedBuilds = [...input.buildOrder].sort((left, right) => {
+      const leftOrder = left.order || left.index + 1;
+      const rightOrder = right.order || right.index + 1;
+      return leftOrder - rightOrder;
+   });
 
-   return titles.map((title, index) => {
-      const isComplete = completedTitles.some((item) => normalizeProjectKey(item) === normalizeProjectKey(title));
-      const isActive = !isComplete && normalizeProjectKey(title) === normalizeProjectKey(activeTitle);
-      const matchingBuild = input.buildOrder.find((build) => normalizeProjectKey(build.title) === normalizeProjectKey(title));
-      const relatedRisks = input.risks.filter((risk) => getDecisionOverlap(risk.text, title) > 0).map((risk) => risk.text);
+   const fallbackChecklist = orderedBuilds.length
+      ? []
+      : input.profileSignals.checklistItems.map((item, index) => ({
+           id: `checklist-milestone-${stableHash(`${index}:${item.text}`)}`,
+           index,
+           number: index + 1,
+           title: item.text,
+           description: item.text,
+           status: item.status === "completed" ? ("completed" as const) : ("not-started" as const),
+           statusSource: "inferred" as const,
+           completionSignals: item.status === "completed" ? [item.text] : [],
+           readinessCriteria: [],
+           dependencies: index > 0 ? [input.profileSignals.checklistItems[index - 1]?.text || ""] : [],
+           goal: item.text,
+           whyItMatters: "",
+           startingPrompt: "",
+           workingContent: "",
+           decisions: [],
+           openQuestions: [],
+           order: index + 1,
+        }));
+
+   const authoritativeBuilds = orderedBuilds.length ? orderedBuilds : fallbackChecklist;
+   const firstOpenIndex = authoritativeBuilds.findIndex((build) => build.status !== "completed");
+   const explicitActiveIndex = authoritativeBuilds.findIndex((build) => build.status === "in-progress" || build.status === "ready-for-review");
+   const activeIndex = explicitActiveIndex >= 0 ? explicitActiveIndex : firstOpenIndex;
+
+   if (!authoritativeBuilds.length) {
+      const fallbackTitle = compactText(input.lead.nextMove, 500);
+
+      if (!fallbackTitle) {
+         return [];
+      }
+
+      return [
+         {
+            id: `milestone-${stableHash(fallbackTitle)}`,
+            title: fallbackTitle,
+            status: "active",
+            purpose: resolveMilestoneRationale(compactText(input.lead.whyNow, 1500), fallbackTitle, "", input.lead.goal, [fallbackTitle]),
+            completionCriteria: [],
+            completionEvidence: [],
+            dependencies: [],
+            risks: input.risks.filter((risk) => getDecisionOverlap(risk.text, fallbackTitle) > 0).map((risk) => risk.text),
+            goal: fallbackTitle,
+            whyItMatters: resolveMilestoneRationale(compactText(input.lead.whyNow, 1500), fallbackTitle, "", input.lead.goal, [fallbackTitle]),
+            startingPrompt: `What concrete decision, artifact, or evidence would close ${lowerProjectSentenceStart(fallbackTitle)}?`,
+            workingContent: "",
+            decisions: [],
+            openQuestions: [],
+            order: 1,
+         },
+      ];
+   }
+
+   const milestoneTitles = authoritativeBuilds.map((build) => build.title);
+
+   return authoritativeBuilds.map((build, index) => {
+      const isComplete = build.status === "completed";
+      const isActive = !isComplete && index === activeIndex;
+      const relatedRisks = input.risks.filter((risk) => getDecisionOverlap(risk.text, build.title) > 0).map((risk) => risk.text);
+      const nextTitle = authoritativeBuilds[index + 1]?.title || "";
+      const candidateRationale = compactText(build.whyItMatters, 1500) || (isActive ? compactText(input.lead.whyNow, 1500) : "");
+      const resolvedRationale = resolveMilestoneRationale(candidateRationale, build.title, nextTitle, input.lead.goal, milestoneTitles);
 
       return {
-         id: matchingBuild?.id || `milestone-${stableHash(`${index}:${title}`)}`,
-         title,
-         status: isComplete ? "complete" : isActive ? "active" : matchingBuild?.status === "ready-for-review" ? "needs-confirmation" : "waiting",
-         purpose: matchingBuild?.whyItMatters || (isActive ? input.lead.whyNow : ensureProjectLeadSentence(`This checkpoint helps move the project toward ${lowerProjectSentenceStart(input.lead.goal)}`)),
-         completionEvidence: uniqueStrings([...(matchingBuild?.completionSignals || []), ...(matchingBuild?.readinessCriteria || [])], 20),
-         dependencies: matchingBuild?.dependencies || [],
+         id: build.id || `milestone-${stableHash(`${index}:${build.title}`)}`,
+         title: build.title,
+         status: isComplete ? "complete" : isActive ? "active" : build.status === "ready-for-review" ? "needs-confirmation" : "waiting",
+         purpose: resolvedRationale,
+         completionCriteria: uniqueStrings(build.readinessCriteria || [], 20),
+         completionEvidence: uniqueStrings(build.completionSignals || [], 20),
+         dependencies: uniqueStrings((build.dependencies || []).filter(Boolean), 20),
          risks: relatedRisks,
-         goal: compactText(matchingBuild?.goal || matchingBuild?.description || title, 1500),
-         whyItMatters: compactText(matchingBuild?.whyItMatters || (isActive ? input.lead.whyNow : ensureProjectLeadSentence(`This checkpoint helps move the project toward ${lowerProjectSentenceStart(input.lead.goal)}`)), 1500),
-         startingPrompt: compactText(matchingBuild?.startingPrompt || `What must be decided, created, or verified to complete ${lowerProjectSentenceStart(title)}?`, 1500),
-         workingContent: cleanText(matchingBuild?.workingContent, 100000),
-         decisions: uniqueStrings(matchingBuild?.decisions || [], 40),
-         openQuestions: uniqueStrings(matchingBuild?.openQuestions || [], 40),
-         order: matchingBuild?.order || index + 1,
+         goal: compactText(build.goal || build.description || build.title, 1500),
+         whyItMatters: resolvedRationale,
+         startingPrompt: compactText(build.startingPrompt, 1500) || `What concrete decision, artifact, or evidence would close ${lowerProjectSentenceStart(build.title)}?`,
+         workingContent: cleanText(build.workingContent, 100000),
+         decisions: uniqueStrings(build.decisions || [], 40),
+         openQuestions: uniqueStrings(build.openQuestions || [], 40),
+         order: build.order || index + 1,
       } satisfies ProjectUnderstandingMilestone;
    });
 }
+
+type SemanticSourceAuthority = "foundation" | "working" | "reference";
 
 interface SemanticProjectSource {
    sourceType: ProjectEvidenceReference["sourceType"];
    sourceId: string;
    text: string;
    affects: string[];
+   authority: SemanticSourceAuthority;
 }
 
 interface SemanticProjectExtraction {
@@ -2584,6 +2795,123 @@ function buildEvidenceReference(sourceType: ProjectEvidenceReference["sourceType
       sourceId: cleanTitle(sourceId) || sourceType,
       quote: compactText(quote, 1200),
    };
+}
+
+function isSemanticSectionHeading(statement: string) {
+   const clean = compactText(statement, 180);
+
+   return (
+      /^[A-Z][A-Za-z0-9 &'’/()+_-]{1,64}:$/.test(clean) ||
+      /^(?:project goal|goal|success looks like|success criteria|current situation|current status|current state|working notes|notes|materials|references|overview|summary|background|context|milestones?|roadmap|timeline|constraints?|requirements?|decisions?|open questions?|options?|assumptions?|risks?|dependencies?)\s*:?\s*$/i.test(
+         clean,
+      )
+   );
+}
+
+function isAssistantMetaPrompt(statement: string) {
+   const clean = compactText(statement, 900)
+      .replace(/[.!?]+$/g, "")
+      .toLowerCase();
+
+   return (
+      /^(?:what|which) project am i working on$/.test(clean) ||
+      /^what is my current project$/.test(clean) ||
+      /^what should i work on now$/.test(clean) ||
+      /^why is that the right next move$/.test(clean) ||
+      /^what comes after (?:that|this)$/.test(clean) ||
+      /^make that simpler$/.test(clean) ||
+      /^what decisions are already made$/.test(clean) ||
+      /^what is still unresolved$/.test(clean) ||
+      /^compare the options$/.test(clean) ||
+      /^does this material reveal a tension$/.test(clean) ||
+      /^who is the primary audience for the finished project$/.test(clean) ||
+      /^is there a target date or outside deadline that should shape the order of work$/.test(clean) ||
+      /^what should someone understand or do after viewing the finished (?:project|website|product|deliverable)$/.test(clean)
+   );
+}
+
+function isMaterialCommentary(statement: string) {
+   const clean = compactText(statement, 1400);
+
+   return (
+      /^(?:this|the)\s+(?:material|document|brief|reference|source)\b/i.test(clean) ||
+      /\b(?:nailing down|clarifying|helps? clarify|helps? define|is directly aligned|gives the decision an evidence base|is useful because|is relevant because|supports the next step|is key to|is crucial for|is essential for)\b/i.test(clean)
+   );
+}
+
+function isSequencingRecommendation(statement: string) {
+   const clean = compactText(statement, 1400);
+
+   return (
+      /^(?:then|next|after that|from there)\b/i.test(clean) ||
+      /\b(?:first|before moving to|before moving into|before proceeding to|before starting|then move to|then proceed to)\b/i.test(clean) ||
+      /^(?:define|decide|choose|confirm|finalize|clarify|resolve|map|identify|establish)\b.+\b(?:first|next)\.?$/i.test(clean)
+   );
+}
+
+function hasNegatedDecisionLanguage(statement: string) {
+   const clean = compactText(statement, 1600);
+
+   return (
+      /\b(?:not|never)\s+(?:yet\s+)?(?:selected|chosen|approved|confirmed|decided|agreed|finalized|locked)\b/i.test(clean) || /^no\b.+\b(?:has|have|is|are)\s+been\s+(?:selected|chosen|approved|confirmed|decided|agreed|finalized|locked)\b/i.test(clean)
+   );
+}
+
+function hasExplicitDecisionLanguage(statement: string) {
+   if (/^(?:none|none confirmed|none confirmed yet|nothing confirmed|unknown|n\/a)\.?$/i.test(compactText(statement))) return false;
+   if (hasExplicitOpenDecisionLanguage(statement) || hasNegatedDecisionLanguage(statement)) return false;
+   return /\b(?:selected|chosen|approved|confirmed|decided|agreed|finalized|locked|will serve as|will be built with|will use|will include|will exclude|will remain|the first release is|the first public-facing deliverable is)\b/i.test(statement);
+}
+
+function hasExplicitOpenDecisionLanguage(statement: string) {
+   return (
+      /\b(?:TBD|to be decided|not yet decided|still undecided|have not decided|has not decided|haven't decided|hasn't decided|not yet chosen|not yet selected|not yet finalized|not yet confirmed|have not chosen|has not chosen|have not selected|has not selected|have not finalized|has not finalized|have not confirmed|has not confirmed|do not know|don't know|unsure|uncertain|not committed|decision needed|open question|needs a decision|must decide|need to decide|need to choose|need to confirm|whether)\b/i.test(
+         statement,
+      ) ||
+      /\b(?:has|have|is|are|was|were)\s+not\s+(?:yet\s+)?been\s+(?:decided|chosen|selected|finalized|confirmed|approved|verified|settled)\b/i.test(statement) ||
+      /\b(?:has|have|is|are|was|were)\s+not\s+(?:yet\s+)?(?:decided|chosen|selected|finalized|confirmed|approved|verified|settled)\b/i.test(statement) ||
+      /\b(?:remain|remains|remaining)\s+(?:unresolved|undecided|unconfirmed|unverified|open)\b/i.test(statement) ||
+      /\?$/.test(statement)
+   );
+}
+
+function shouldExtractConfirmedFromSource(source: SemanticProjectSource, statement: string) {
+   if (isSemanticSectionHeading(statement) || isAssistantMetaPrompt(statement) || isMaterialCommentary(statement) || hasExplicitOpenDecisionLanguage(statement)) {
+      return false;
+   }
+
+   // Freeform prose contains goals, status, constraints, and recommendations.
+   // Promote a sentence to a confirmed decision only when it explicitly records
+   // a commitment. This keeps descriptive project context out of the decision list.
+   if (source.authority === "reference") {
+      return hasExplicitDecisionLanguage(statement);
+   }
+
+   return hasExplicitDecisionLanguage(statement) || looksLikeExplicitDecisionStatement(statement);
+}
+
+function shouldExtractUnresolvedFromSource(source: SemanticProjectSource, statement: string) {
+   if (isSemanticSectionHeading(statement) || isAssistantMetaPrompt(statement) || isMaterialCommentary(statement) || isSequencingRecommendation(statement)) {
+      return false;
+   }
+
+   // An unresolved decision must be an actual question or explicitly undecided
+   // choice. Imperative work items belong to milestones/open work instead.
+   return looksLikeSemanticQuestion(statement) || hasExplicitOpenDecisionLanguage(statement);
+}
+
+function cleanUnresolvedStatement(statement: string) {
+   return compactText(statement, 1200)
+      .replace(/^before .+?,\s*i need to\s+/i, "")
+      .replace(/^(?:i|we)\s+(?:also\s+)?(?:have|has)\s+not\s+(?:yet\s+)?(?:decided|chosen|selected|finalized|confirmed)\s+(?:whether\s+)?/i, "Decide ")
+      .replace(/^(?:i|we)\s+(?:do not|don't)\s+know\s+(?:whether\s+)?/i, "Decide ")
+      .replace(/^(?:i am|i'm|we are|we're)\s+(?:still\s+)?(?:unsure|uncertain)\s+(?:about|whether)?\s*/i, "Decide ")
+      .replace(/^(?:i|we)\s+(?:need|needs)\s+to\s+/i, "")
+      .replace(/^open question\s*:\s*/i, "")
+      .replace(/^decision needed\s*:\s*/i, "")
+      .replace(/\?+$/, "")
+      .replace(/\s+/g, " ")
+      .trim();
 }
 
 function splitSemanticStatements(value?: string) {
@@ -2615,7 +2943,8 @@ function splitSemanticStatements(value?: string) {
    return uniqueStrings(
       statements.filter((statement) => {
          if (statement.length < 8 || statement.length > 1400) return false;
-         if (/^(?:project|goal|current status|current state|milestones?|materials?|notes?|overview|summary|background|context)$/i.test(statement)) return false;
+         if (isSemanticSectionHeading(statement)) return false;
+         if (isAssistantMetaPrompt(statement)) return false;
          return true;
       }),
       160,
@@ -2629,28 +2958,35 @@ function buildSemanticProjectSources(input: { projectBody: string; canvasContent
          sourceId: "project-foundation",
          text: input.projectBody,
          affects: [],
+         authority: "foundation",
       },
       {
          sourceType: "project",
          sourceId: "canvas-working-state",
          text: input.canvasContent,
          affects: input.milestones.filter((milestone) => milestone.status === "active").map((milestone) => milestone.id),
+         authority: "working",
       },
       ...input.milestones.map((milestone) => ({
          sourceType: "milestone" as const,
          sourceId: milestone.id,
-         // Only user-authored milestone workspace content belongs in semantic
-         // extraction. Goal, purpose, starter prompts, and completion evidence
-         // may be generated by Project Intelligence and must not be promoted
-         // back into decisions or unresolved questions.
-         text: [milestone.workingContent, ...milestone.decisions, ...milestone.openQuestions].filter(Boolean).join("\n"),
+         // Explicit milestone decisions and open questions are handled by
+         // buildGenericProjectDecisions as authoritative fields. Semantic
+         // extraction reads only freeform working content to avoid promoting
+         // generated starter prompts or duplicating authoritative entries.
+         text: milestone.workingContent,
          affects: [milestone.id],
+         authority: "working" as const,
       })),
       ...input.materials.map((material) => ({
          sourceType: "material" as const,
          sourceId: material.id,
-         text: [material.title, material.summary, material.details].filter(Boolean).join("\n"),
+         // Material titles and interpretation commentary are useful context,
+         // but they are not decisions. Reference text can only promote a
+         // decision when the wording explicitly records one.
+         text: [material.summary, material.details].filter(Boolean).join("\n"),
          affects: material.relevantBuildIds,
+         authority: "reference" as const,
       })),
    ];
 
@@ -2692,7 +3028,16 @@ function isGeneratedOrDescriptiveProjectStatement(statement: string) {
 }
 
 function looksLikeSemanticQuestion(statement: string) {
-   return /\?$/.test(statement) || /^(?:who|what|when|where|why|how|which|whether|is|are|do|does|did|can|could|should|would|will)\b/i.test(statement);
+   const clean = compactText(statement, 1400);
+
+   if (/\?$/.test(clean)) {
+      return true;
+   }
+
+   // Question words can survive punctuation cleanup. Auxiliary verbs such as
+   // "do" or "will" are only questions when the source retained a question
+   // mark; otherwise imperatives such as "Do not purchase..." are constraints.
+   return /^(?:who|what|when|where|why|how|which|whether)\b/i.test(clean);
 }
 
 function looksLikeSemanticWorkItem(statement: string) {
@@ -2700,7 +3045,7 @@ function looksLikeSemanticWorkItem(statement: string) {
 }
 
 function looksLikeExplicitDecisionStatement(statement: string) {
-   if (looksLikeSemanticQuestion(statement) || looksLikeSemanticWorkItem(statement) || isGeneratedOrDescriptiveProjectStatement(statement)) {
+   if (looksLikeSemanticQuestion(statement) || looksLikeSemanticWorkItem(statement) || isGeneratedOrDescriptiveProjectStatement(statement) || hasExplicitOpenDecisionLanguage(statement) || hasNegatedDecisionLanguage(statement)) {
       return false;
    }
 
@@ -2718,16 +3063,25 @@ function looksLikeExplicitDecisionStatement(statement: string) {
       /^(?:the|this|our|its)\s+(?:first|initial|public|pilot|release|deliverable|website|application|app|product|portal|company|brand|project)\b/i.test(statement) &&
       /\b(?:is|will be|will serve|will use|will include|will exclude|will remain|will launch|uses|includes|excludes|remains)\b/i.test(statement);
 
-   const namedCommitment = /^[A-Z][A-Za-z0-9'’& -]{1,80}\s+(?:is|will be|will serve as|uses|includes|remains)\b/.test(statement);
-
-   return explicitCommitment || scopedCommitment || namedCommitment;
+   // Named-subject prose is too broad to prove a decision. For example,
+   // success criteria such as "Visitors understand what Kin is" contain "is"
+   // but do not record a commitment. Section-based confirmed decisions are
+   // already preserved by profileSignals.decisions.
+   return explicitCommitment || scopedCommitment;
 }
 
 function looksLikeConstraintStatement(statement: string) {
+   const clean = compactText(statement, 1600);
+
    return (
-      /\b(?:only|limited to|not\b|cannot|can't|must|must not|required|requirement|within|without|no more than|at most|at least|browser-only|browser based|browser-based|internal-only|single-page|one-page)\b/i.test(statement) ||
-      /\b(?:deadline|budget|WCAG|accessibility|platform|stack)\b/i.test(statement)
+      /\b(?:must|must not|cannot|can't|required|requirement|limited to|restricted to|no more than|at most|at least|within (?:a|an|the|\$|\d)|without (?:using|requiring|access to)|under \$?\d|budget(?:ed)? (?:at|under|below|of)|deadline|due (?:on|by)|browser-only|browser based|browser-based|internal-only|single-page|one-page)\b/i.test(
+         clean,
+      ) || /^(?:avoid|do not|don't|must|must not|keep|limit|stay|remain)\b/i.test(clean)
    );
+}
+
+function hasStrongConstraintLanguage(statement: string) {
+   return looksLikeConstraintStatement(statement);
 }
 
 function looksLikeAssumptionStatement(statement: string) {
@@ -2774,6 +3128,22 @@ function extractSemanticContrast(statement: string) {
    return left && right ? [left, right] : [];
 }
 
+function getDecisionSemanticOverlapRatio(left?: string, right?: string) {
+   const leftTokens = getDecisionTokens(left);
+   const rightTokens = getDecisionTokens(right);
+
+   if (!leftTokens.size || !rightTokens.size) {
+      return 0;
+   }
+
+   let overlap = 0;
+   leftTokens.forEach((token) => {
+      if (rightTokens.has(token)) overlap += 1;
+   });
+
+   return overlap / Math.min(leftTokens.size, rightTokens.size);
+}
+
 function mergeProjectDecisions(values: ProjectDecision[], limit = 40) {
    const merged: ProjectDecision[] = [];
 
@@ -2781,7 +3151,7 @@ function mergeProjectDecisions(values: ProjectDecision[], limit = 40) {
       const key = normalizeProjectKey(value.statement);
       if (!key) return;
 
-      const existing = merged.find((item) => normalizeProjectKey(item.statement) === key);
+      const existing = merged.find((item) => normalizeProjectKey(item.statement) === key || (item.status === value.status && getDecisionSemanticOverlapRatio(item.statement, value.statement) >= 0.76));
 
       if (existing) {
          existing.evidence = [
@@ -2789,6 +3159,12 @@ function mergeProjectDecisions(values: ProjectDecision[], limit = 40) {
             ...value.evidence.filter((evidence) => !existing.evidence.some((item) => item.sourceType === evidence.sourceType && item.sourceId === evidence.sourceId && normalizeProjectKey(item.quote) === normalizeProjectKey(evidence.quote))),
          ].slice(0, 12);
          existing.affects = uniqueStrings([...existing.affects, ...value.affects], 20);
+
+         // Prefer a direct question for unresolved choices because it is clearer
+         // in conversational readback than a duplicate imperative title.
+         if (value.status === "unresolved" && looksLikeSemanticQuestion(value.statement) && !looksLikeSemanticQuestion(existing.statement)) {
+            existing.statement = value.statement;
+         }
          return;
       }
 
@@ -2820,20 +3196,21 @@ function extractSemanticProjectUnderstanding(input: { projectBody: string; canva
             const choicePair = extractSemanticChoicePair(statement);
             const contrastPair = extractSemanticContrast(statement);
 
-            if (looksLikeSemanticQuestion(statement) || looksLikeSemanticWorkItem(statement) || /\b(?:TBD|to be decided|not yet decided|still undecided)\b/i.test(statement)) {
-               unresolved.push({
-                  id: `semantic-unresolved-${stableHash(`${source.sourceId}:${statement}`)}`,
-                  statement: statement
-                     .replace(/^before .+?,\s*i need to\s+/i, "")
-                     .replace(/^i need to\s+/i, "")
-                     .replace(/\?+$/, ""),
-                  status: "unresolved",
-                  evidence,
-                  affects: source.affects,
-               });
+            if (shouldExtractUnresolvedFromSource(source, statement)) {
+               const unresolvedStatement = cleanUnresolvedStatement(statement);
+
+               if (unresolvedStatement) {
+                  unresolved.push({
+                     id: `semantic-unresolved-${stableHash(`${source.sourceId}:${unresolvedStatement}`)}`,
+                     statement: unresolvedStatement,
+                     status: "unresolved",
+                     evidence,
+                     affects: source.affects,
+                  });
+               }
             }
 
-            if (looksLikeExplicitDecisionStatement(statement) && !looksLikeSuccessCriterionStatement(statement)) {
+            if (shouldExtractConfirmedFromSource(source, statement) && !looksLikeSuccessCriterionStatement(statement)) {
                confirmed.push({
                   id: `semantic-confirmed-${stableHash(`${source.sourceId}:${statement}`)}`,
                   statement,
@@ -2843,7 +3220,7 @@ function extractSemanticProjectUnderstanding(input: { projectBody: string; canva
                });
             }
 
-            if (looksLikeAssumptionStatement(statement)) {
+            if (!isMaterialCommentary(statement) && looksLikeAssumptionStatement(statement)) {
                assumptions.push({
                   id: `semantic-assumption-${stableHash(`${source.sourceId}:${statement}`)}`,
                   statement,
@@ -2853,7 +3230,7 @@ function extractSemanticProjectUnderstanding(input: { projectBody: string; canva
                });
             }
 
-            if (looksLikeConstraintStatement(statement)) {
+            if (!isMaterialCommentary(statement) && looksLikeConstraintStatement(statement)) {
                constraints.push({
                   id: `semantic-constraint-${stableHash(`${source.sourceId}:${statement}`)}`,
                   statement,
@@ -2861,7 +3238,7 @@ function extractSemanticProjectUnderstanding(input: { projectBody: string; canva
                });
             }
 
-            if (looksLikeSuccessCriterionStatement(statement)) {
+            if (!isMaterialCommentary(statement) && looksLikeSuccessCriterionStatement(statement)) {
                successCriteria.push({
                   id: `semantic-success-${stableHash(`${source.sourceId}:${statement}`)}`,
                   statement,
@@ -2941,11 +3318,26 @@ function buildGenericProjectDecisions(
    unresolved: ProjectDecision[];
    assumptions: ProjectDecision[];
 } {
-   const confirmedStatements = uniqueStrings([...profileSignals.decisions, ...milestones.flatMap((milestone) => milestone.decisions)], 40);
+   const confirmedStatements = uniqueStrings(
+      [...profileSignals.decisions, ...milestones.flatMap((milestone) => milestone.decisions)].filter(
+         (statement) => !isSemanticSectionHeading(statement) && !isAssistantMetaPrompt(statement) && !isMaterialCommentary(statement) && !hasExplicitOpenDecisionLanguage(statement),
+      ),
+      40,
+   );
 
-   const unresolvedStatements = uniqueStrings([...milestones.flatMap((milestone) => milestone.openQuestions)], 40);
+   const unresolvedStatements = uniqueStrings(
+      milestones
+         .flatMap((milestone) => milestone.openQuestions)
+         .filter((statement) => !isSemanticSectionHeading(statement) && !isAssistantMetaPrompt(statement) && !isMaterialCommentary(statement))
+         .map(cleanUnresolvedStatement)
+         .filter(Boolean),
+      40,
+   );
 
-   const assumptionStatements = uniqueStrings(profileSignals.assumptions, 30);
+   const assumptionStatements = uniqueStrings(
+      profileSignals.assumptions.filter((statement) => !isSemanticSectionHeading(statement) && !isAssistantMetaPrompt(statement) && !isMaterialCommentary(statement)),
+      30,
+   );
 
    const confirmed = confirmedStatements.map((statement) => {
       const milestone = milestones.find((item) => item.decisions.some((decision) => normalizeProjectKey(decision) === normalizeProjectKey(statement)));
@@ -3027,10 +3419,10 @@ function buildGenericProjectConstraints(profileSignals: ProjectProfileSignals): 
 }
 
 function buildGenericSuccessCriteria(profileSignals: ProjectProfileSignals, milestones: ProjectUnderstandingMilestone[]): ProjectSuccessCriterion[] {
-   const criteria = uniqueStrings([...profileSignals.successCriteria, ...milestones.flatMap((milestone) => milestone.completionEvidence)], 40);
+   const criteria = uniqueStrings([...profileSignals.successCriteria, ...milestones.flatMap((milestone) => milestone.completionCriteria)], 40);
 
    return criteria.map((statement) => {
-      const milestone = milestones.find((item) => item.completionEvidence.some((criterion) => normalizeProjectKey(criterion) === normalizeProjectKey(statement)));
+      const milestone = milestones.find((item) => item.completionCriteria.some((criterion) => normalizeProjectKey(criterion) === normalizeProjectKey(statement)));
 
       return {
          id: `success-${stableHash(statement)}`,
@@ -3039,6 +3431,169 @@ function buildGenericSuccessCriteria(profileSignals: ProjectProfileSignals, mile
          evidence: [buildEvidenceReference(milestone ? "milestone" : "project", milestone?.id || "project-foundation", statement)],
       };
    });
+}
+
+interface RankedProjectDecision {
+   decision: ProjectDecision;
+   score: number;
+   reasons: string[];
+}
+
+function getDecisionPriorityTokens(value?: string) {
+   return new Set(
+      compactText(value, 4000)
+         .toLowerCase()
+         .split(/[^a-z0-9]+/)
+         .filter((token) => token.length >= 4 && !["this", "that", "with", "from", "into", "project", "work", "working", "should", "could", "would", "about", "after", "before"].includes(token)),
+   );
+}
+
+function getDecisionPriorityOverlap(left?: string, right?: string) {
+   const leftTokens = getDecisionPriorityTokens(left);
+   const rightTokens = getDecisionPriorityTokens(right);
+   let overlap = 0;
+
+   leftTokens.forEach((token) => {
+      if (rightTokens.has(token)) {
+         overlap += 1;
+      }
+   });
+
+   return overlap;
+}
+
+function scoreUnresolvedDecisionPriority(input: {
+   decision: ProjectDecision;
+   activeMilestone?: ProjectUnderstandingMilestone;
+   recommendedMove: string;
+   dependencies: ProjectDependencySignal[];
+   risks: ProjectRiskSignal[];
+   timeline: ProjectUnderstandingTimelineSignal[];
+}) {
+   const { decision, activeMilestone, recommendedMove, dependencies, risks, timeline } = input;
+   const statement = compactText(decision.statement, 1600);
+   const lower = statement.toLowerCase();
+   const reasons: string[] = [];
+   let score = 0;
+
+   const affectsActiveMilestone = Boolean(activeMilestone && (decision.affects.includes(activeMilestone.id) || getDecisionPriorityOverlap(statement, activeMilestone.title) >= 2 || getDecisionPriorityOverlap(statement, activeMilestone.goal) >= 2));
+
+   if (affectsActiveMilestone) {
+      score += 16;
+      reasons.push("directly affects the active milestone");
+   }
+
+   const recommendedMoveOverlap = getDecisionPriorityOverlap(statement, recommendedMove);
+
+   if (recommendedMoveOverlap >= 2) {
+      score += Math.min(recommendedMoveOverlap * 3, 12);
+      reasons.push("is closely tied to the current recommended move");
+   }
+
+   const explicitDecisionVerb = /^(?:define|decide|choose|determine|confirm|verify|select|clarify|finalize|identify|establish|resolve|approve|lock|settle|map|specify)\b/i.test(statement);
+
+   if (explicitDecisionVerb) {
+      score += 5;
+      reasons.push("requires an explicit project decision");
+   }
+
+   const blockingLanguage = /\b(?:block|blocked|blocking|depends on|dependent on|dependency|prerequisite|required before|must happen first|cannot proceed|can't proceed|before .* can|gates?|critical path)\b/i.test(statement);
+
+   if (blockingLanguage) {
+      score += 12;
+      reasons.push("contains dependency or blocking language");
+   }
+
+   const scopeSettingLanguage = /\b(?:scope|audience|owner|ownership|approval|approver|deadline|date|budget|platform|architecture|structure|requirements?|privacy|accessibility|authentication|success criteria|definition of done)\b/i.test(statement);
+
+   if (scopeSettingLanguage) {
+      score += 6;
+      reasons.push("sets a boundary or condition for downstream work");
+   }
+
+   const matchingDependency = dependencies.find((dependency) => dependency.state !== "satisfied" && getDecisionPriorityOverlap(statement, dependency.text) >= 2);
+
+   if (matchingDependency) {
+      score += matchingDependency.state === "unsatisfied" ? 12 : 7;
+      reasons.push("matches an unresolved project dependency");
+   }
+
+   const matchingRisk = risks.find((risk) => getDecisionPriorityOverlap(statement, risk.text) >= 2);
+
+   if (matchingRisk) {
+      score += matchingRisk.severity === "high" ? 10 : matchingRisk.severity === "medium" ? 6 : 3;
+      reasons.push(`is connected to a ${matchingRisk.severity}-severity risk`);
+   }
+
+   const timeSensitive = /\b(?:today|tomorrow|this week|next week|deadline|due|launch|event date|before the event|before launch|within \d+|by [A-Z][a-z]+ \d{1,2})\b/i.test(statement);
+
+   if (timeSensitive) {
+      score += 8;
+      reasons.push("is time-sensitive");
+   }
+
+   const timelineOverlap = timeline.some((item) => item.importance === "high" && getDecisionPriorityOverlap(statement, `${item.label} ${item.dateText}`) >= 1);
+
+   if (timelineOverlap) {
+      score += 7;
+      reasons.push("is connected to a high-importance timeline signal");
+   }
+
+   const explicitMilestoneEvidence = decision.evidence.some((evidence) => evidence.sourceType === "milestone");
+
+   const explicitProjectEvidence = decision.evidence.some((evidence) => evidence.sourceType === "project");
+
+   if (explicitMilestoneEvidence) {
+      score += 5;
+      reasons.push("is explicitly recorded in milestone context");
+   } else if (explicitProjectEvidence) {
+      score += 3;
+      reasons.push("is explicitly recorded in the project foundation");
+   }
+
+   // Stable tie-break support: shorter, clearer decision statements are easier
+   // to act on and should slightly outrank broad compound statements.
+   if (statement.length <= 120) {
+      score += 2;
+   } else if (statement.length > 320) {
+      score -= 2;
+   }
+
+   return {
+      decision,
+      score,
+      reasons: uniqueStrings(reasons, 8),
+   } satisfies RankedProjectDecision;
+}
+
+function rankUnresolvedProjectDecisions(input: {
+   decisions: ProjectDecision[];
+   activeMilestone?: ProjectUnderstandingMilestone;
+   recommendedMove: string;
+   dependencies: ProjectDependencySignal[];
+   risks: ProjectRiskSignal[];
+   timeline: ProjectUnderstandingTimelineSignal[];
+}) {
+   return input.decisions
+      .map((decision, index) => ({
+         ...scoreUnresolvedDecisionPriority({
+            decision,
+            activeMilestone: input.activeMilestone,
+            recommendedMove: input.recommendedMove,
+            dependencies: input.dependencies,
+            risks: input.risks,
+            timeline: input.timeline,
+         }),
+         originalIndex: index,
+      }))
+      .sort((left, right) => {
+         if (right.score !== left.score) {
+            return right.score - left.score;
+         }
+
+         return left.originalIndex - right.originalIndex;
+      })
+      .map((item) => item.decision);
 }
 
 function buildProjectUnderstanding(input: {
@@ -3067,24 +3622,32 @@ function buildProjectUnderstanding(input: {
            const isActive = !milestone.completed && index === firstOpenIndex;
 
            const matchingBuild = input.buildOrder.find((build) => normalizeProjectKey(build.title) === normalizeProjectKey(milestone.title));
-           const purpose =
-              matchingBuild?.whyItMatters || (isActive ? inferMilestoneWhyNow(milestone.title, input.projectBody, input.lead.goal) : ensureProjectLeadSentence(`This checkpoint helps move the project toward ${lowerProjectSentenceStart(input.lead.goal)}`));
+           const nextTitle = all[index + 1]?.title || "";
+           const candidatePurpose = compactText(milestone.whyItMatters || matchingBuild?.whyItMatters, 1500) || (isActive ? inferMilestoneWhyNow(milestone.title, input.projectBody, input.lead.goal) : "");
+           const purpose = resolveMilestoneRationale(
+              candidatePurpose,
+              milestone.title,
+              nextTitle,
+              input.lead.goal,
+              all.map((item) => item.title),
+           );
 
            return {
               id: milestone.id || matchingBuild?.id || `stored-milestone-${stableHash(`${index}:${milestone.title}`)}`,
               title: milestone.title,
               status: milestone.completed ? "complete" : isActive ? "active" : "waiting",
               purpose,
-              completionEvidence: uniqueStrings([...(matchingBuild?.completionSignals || []), ...(matchingBuild?.readinessCriteria || []), ...(milestone.completedAt ? [`Completed ${new Date(milestone.completedAt).toLocaleDateString()}`] : [])], 20),
-              dependencies: matchingBuild?.dependencies?.length ? matchingBuild.dependencies : index > 0 ? [all[index - 1].title] : [],
+              completionCriteria: uniqueStrings([...(milestone.completionCriteria || []), ...(matchingBuild?.readinessCriteria || [])], 40),
+              completionEvidence: uniqueStrings([...(milestone.completionEvidence || []), ...(matchingBuild?.completionSignals || []), ...(milestone.completedAt ? [`Completed ${new Date(milestone.completedAt).toLocaleDateString()}`] : [])], 40),
+              dependencies: milestone.dependencies.length ? milestone.dependencies : matchingBuild?.dependencies?.length ? matchingBuild.dependencies : index > 0 ? [all[index - 1].title] : [],
               risks: [],
-              goal: compactText(matchingBuild?.goal || matchingBuild?.description || milestone.title, 1500),
+              goal: compactText(milestone.goal || matchingBuild?.goal || matchingBuild?.description || milestone.title, 1500),
               whyItMatters: compactText(purpose, 1500),
-              startingPrompt: compactText(matchingBuild?.startingPrompt || `What must be decided, created, or verified to complete ${lowerProjectSentenceStart(milestone.title)}?`, 1500),
-              workingContent: cleanText(matchingBuild?.workingContent, 100000),
-              decisions: uniqueStrings(matchingBuild?.decisions || [], 40),
-              openQuestions: uniqueStrings(matchingBuild?.openQuestions || [], 40),
-              order: matchingBuild?.order || index + 1,
+              startingPrompt: compactText(milestone.startingPrompt || matchingBuild?.startingPrompt || `Create the smallest concrete result that would prove ${lowerProjectSentenceStart(milestone.title)} is ready to close.`, 1500),
+              workingContent: cleanText(milestone.workingContent || matchingBuild?.workingContent, 100000),
+              decisions: uniqueStrings([...(milestone.decisions || []), ...(matchingBuild?.decisions || [])], 40),
+              openQuestions: uniqueStrings([...(milestone.openQuestions || []), ...(matchingBuild?.openQuestions || [])], 40),
+              order: milestone.order || matchingBuild?.order || index + 1,
            } satisfies ProjectUnderstandingMilestone;
         })
       : inferredMilestones;
@@ -3095,16 +3658,18 @@ function buildProjectUnderstanding(input: {
    const recommendedMove = activeMilestone?.title || storedProgress?.nextStep || input.lead.nextMove;
    const afterThis = milestones.find((milestone) => milestone.status === "waiting")?.title || input.lead.afterNextMove;
    const domainRisks = inferDomainProjectRisks(input.projectBody, openWork);
-   const combinedRisks = uniqueStrings([...domainRisks, ...input.lead.risks, ...input.risks.map((risk) => risk.text)], 12).filter((risk) => {
-      const body = compactText(input.projectBody, 50000).toLowerCase();
-      const eventRisk = /\ba\/v|slideshow|chair delivery|attendance|rsvp|close to the event\b/i.test(risk);
-      return !eventRisk || /\bparty|event|guests|retirement\b/.test(body);
-   });
+   const combinedRisks = uniqueStrings(
+      [...domainRisks, ...input.lead.risks, ...input.risks.map((risk) => risk.text)].filter(
+         (risk) => !isAssistantMetaPrompt(risk) && !/^(?:is there a target date|what is the target date|does this project have a deadline|is there an outside deadline)\b/i.test(compactText(risk, 900)),
+      ),
+      12,
+   );
 
    const fieldDecisions = buildGenericProjectDecisions(milestones, input.profileSignals);
    const fieldOptions = buildGenericProjectOptions(input.profileSignals, input.lead.goal);
    const fieldConstraints = buildGenericProjectConstraints(input.profileSignals);
    const fieldSuccessCriteria = buildGenericSuccessCriteria(input.profileSignals, milestones);
+   const successState = getProjectUnderstandingSuccessState(input.lead.goal, input.profileSignals, input.projectBody);
    const semanticExtraction = extractSemanticProjectUnderstanding({
       projectBody: input.projectBody,
       canvasContent: input.canvasContent,
@@ -3113,9 +3678,20 @@ function buildProjectUnderstanding(input: {
       goal: input.lead.goal,
    });
 
+   const timeline = getProjectUnderstandingTimeline(input.projectBody, input.profileSignals);
+
+   const mergedUnresolvedDecisions = mergeProjectDecisions([...fieldDecisions.unresolved, ...semanticExtraction.unresolved], 50);
+
    const structuredDecisions = {
       confirmed: mergeProjectDecisions([...fieldDecisions.confirmed, ...semanticExtraction.confirmed], 50),
-      unresolved: mergeProjectDecisions([...fieldDecisions.unresolved, ...semanticExtraction.unresolved], 50),
+      unresolved: rankUnresolvedProjectDecisions({
+         decisions: mergedUnresolvedDecisions,
+         activeMilestone,
+         recommendedMove,
+         dependencies: input.dependencies,
+         risks: input.risks,
+         timeline,
+      }),
       assumptions: mergeProjectDecisions([...fieldDecisions.assumptions, ...semanticExtraction.assumptions], 30),
    };
 
@@ -3125,24 +3701,38 @@ function buildProjectUnderstanding(input: {
       .filter((tension, index, all) => all.findIndex((item) => normalizeProjectKey(item.sideA) === normalizeProjectKey(tension.sideA) && normalizeProjectKey(item.sideB) === normalizeProjectKey(tension.sideB)) === index)
       .slice(0, 20);
 
-   const constraints = [...fieldConstraints, ...semanticExtraction.constraints.filter((constraint) => !fieldConstraints.some((item) => normalizeProjectKey(item.statement) === normalizeProjectKey(constraint.statement)))].slice(0, 40);
+   const projectFactCorpus = uniqueStrings([input.lead.goal, input.lead.situation, successState, ...fieldSuccessCriteria.map((criterion) => criterion.statement), ...structuredDecisions.confirmed.map((decision) => decision.statement)], 80);
+
+   const constraints = [...fieldConstraints, ...semanticExtraction.constraints]
+      .filter((constraint, index, all) => all.findIndex((item) => normalizeProjectKey(item.statement) === normalizeProjectKey(constraint.statement)) === index)
+      .filter((constraint) => {
+         const statement = compactText(constraint.statement, 1600);
+         if (!statement) return false;
+
+         const exactProjectFact = projectFactCorpus.some((fact) => normalizeProjectKey(fact) === normalizeProjectKey(statement));
+         if (exactProjectFact) return false;
+
+         const duplicatesProjectFact = projectFactCorpus.some((fact) => getDecisionSemanticOverlapRatio(fact, statement) >= 0.86);
+         return !duplicatesProjectFact || hasStrongConstraintLanguage(statement);
+      })
+      .slice(0, 40);
 
    const successCriteria = [...fieldSuccessCriteria, ...semanticExtraction.successCriteria.filter((criterion) => !fieldSuccessCriteria.some((item) => normalizeProjectKey(item.statement) === normalizeProjectKey(criterion.statement)))].slice(0, 40);
-   const whyNow = inferMilestoneWhyNow(recommendedMove, input.projectBody, input.lead.goal);
+   const whyNow = compactText(activeMilestone?.whyItMatters, 1500) || inferMilestoneWhyNow(recommendedMove, input.projectBody, input.lead.goal);
    const whatItUnlocks = afterThis
-      ? ensureProjectLeadSentence(`Completing this should allow the project to move into ${lowerProjectSentenceStart(afterThis)}`)
+      ? ensureProjectLeadSentence(`Completing the active milestone should unlock ${lowerProjectSentenceStart(afterThis)}`)
       : ensureProjectLeadSentence("Completing this should reduce the most immediate uncertainty in the project");
    const watchOuts = uniqueStrings([...combinedRisks.slice(0, 3), ...structuredDecisions.unresolved.slice(0, 2).map((decision) => decision.statement)], 5);
 
    return {
       version: "MK VIII",
       goal: input.lead.goal,
-      successState: getProjectUnderstandingSuccessState(input.lead.goal, input.profileSignals, input.projectBody),
+      successState,
       situation: input.lead.situation,
       momentum: storedProgress?.status === "done" ? "complete" : input.lead.momentum,
       milestones,
       activeMilestoneId: activeMilestone?.id,
-      timeline: getProjectUnderstandingTimeline(input.projectBody, input.profileSignals),
+      timeline,
       openWork,
       completedWork,
       decisions: structuredDecisions.confirmed.map((decision) => decision.statement),
@@ -3153,13 +3743,20 @@ function buildProjectUnderstanding(input: {
       tensions,
       constraints,
       successCriteria,
-      dependencies: milestones.slice(1).map((milestone, index) => ({
-         id: `understanding-dependency-${stableHash(`${milestones[index].title}:${milestone.title}`)}`,
-         before: milestones[index].title,
-         after: milestone.title,
-         reason: `${milestones[index].title} informs ${milestone.title}.`,
-         state: milestones[index].status === "complete" ? "satisfied" : "unsatisfied",
-      })),
+      dependencies: milestones.slice(1).map((milestone, index) => {
+         const prerequisite = milestones[index];
+         const reason = compactText(prerequisite.whyItMatters || prerequisite.purpose)
+            ? ensureProjectLeadSentence(prerequisite.whyItMatters || prerequisite.purpose)
+            : ensureProjectLeadSentence(`${prerequisite.title} must produce a usable result before ${lowerProjectSentenceStart(milestone.title)} begins`);
+
+         return {
+            id: `understanding-dependency-${stableHash(`${prerequisite.title}:${milestone.title}`)}`,
+            before: prerequisite.title,
+            after: milestone.title,
+            reason,
+            state: prerequisite.status === "complete" ? "satisfied" : "unsatisfied",
+         };
+      }),
       risks: combinedRisks.map((riskText) => {
          const packetRisk = input.risks.find((risk) => risk.text === riskText);
          return {
@@ -3267,11 +3864,7 @@ export function buildProjectIntelligencePacket(input: BuildProjectIntelligenceIn
       dependencies,
       readiness,
    }).filter((risk) => !/add the current state|record the current state|intended outcome|before-and-after condition/i.test(risk.text));
-   const projectBodyLower = compactText(input.projectBody, 50000).toLowerCase();
-   const risks = rawRisks.filter((risk) => {
-      const eventRisk = /a\/v|slideshow|chair delivery|attendance|rsvp|close to the event/i.test(risk.text);
-      return !eventRisk || /party|event|guests|retirement/.test(projectBodyLower);
-   });
+   const risks = rawRisks;
 
    const baseProjectLeadState = buildProjectLeadState({
       title: cleanTitle(input.title),

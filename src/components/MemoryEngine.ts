@@ -61,7 +61,7 @@ export interface CognitiveLoadState {
 }
 
 // ========================================
-// MK VII Session / Welcome Summary
+// ALLEVIN MK VIII Session / Welcome Summary
 // Purpose:
 // Lightweight system memory read for the
 // welcome layer, AIDock, and calm status UI.
@@ -145,7 +145,7 @@ export interface WorkflowTimelineEvent {
 }
 
 // ========================================
-// Active Thread Awareness V1
+// ALLEVIN MK VIII Active Project and Legacy Thread Awareness
 // ========================================
 
 export interface ActiveThreadState {
@@ -183,7 +183,7 @@ export interface ActiveThreadState {
 }
 
 // ========================================
-// Thread Memory V2
+// ALLEVIN MK VIII Thread Memory Compatibility
 // ========================================
 
 export type ThreadMemoryLocation = "canvas" | "task" | "board" | "notes" | "integrations" | "system" | "unknown";
@@ -315,7 +315,7 @@ export interface SourceAwareActiveProject {
 
    updatedAt: number;
 
-   // MK VII Project Awareness:
+   // ALLEVIN MK VIII Project Awareness:
    // Preserve the saved roadmap and current Canvas as separate signals.
    projectBody?: string;
 
@@ -401,7 +401,7 @@ const ACTIVE_PROJECT_SELECTION_STORAGE_KEY = "allevin-active-project-selection-m
 const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
 
 // ========================================
-// MK VII — Memory Engine Sanitization
+// ALLEVIN MK VIII — Memory Engine Sanitization
 // MemoryEngine reads Canvas, Projects, Calendar, and Materials sources. Every stored field is treated as untrusted.
 // ========================================
 
@@ -628,7 +628,7 @@ function removeMemoryEngineStorageValues(key: string, values: string[]) {
    }
 }
 
-// MK VII — Live Canvas revival
+// ALLEVIN MK VIII — Live Canvas revival compatibility
 // A real project visibly open in Canvas is the current source of truth.
 // Clear stale deletion tombstones so a recreated project can immediately
 // rebuild its canonical project context and Project Intelligence Packet.
@@ -858,7 +858,7 @@ export function saveMemory(entry: MemoryEntry) {
    const existing = getMemory();
 
    // Keep local memory useful and lightweight.
-   // Thread Memory V2 remains the stronger long-term project memory layer.
+   // ALLEVIN MK VIII Thread Memory Compatibility remains the stronger long-term project memory layer.
    const updated = [...existing, safeEntry].slice(-250);
 
    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
@@ -2325,7 +2325,7 @@ export function getActiveThreadAwareness(): ActiveThreadState {
 }
 
 // ========================================
-// Thread Memory V2 Storage
+// ALLEVIN MK VIII Thread Memory Compatibility Storage
 // ========================================
 
 export function getThreadMemory(): ThreadMemoryObject[] {
@@ -2431,7 +2431,7 @@ export function clearThreadMemory() {
 }
 
 // ========================================
-// Thread Memory V2 Helpers
+// ALLEVIN MK VIII Thread Memory Compatibility Helpers
 // ========================================
 
 function getLocationFromEvent(event?: WorkflowTimelineEvent): ThreadMemoryLocation {
@@ -3195,6 +3195,10 @@ function getProjectMaterialsForMemory() {
       source?: string;
       notes?: string;
       summary?: string;
+      documentText?: string;
+      interpretationSummary?: string;
+      interpretationUsefulContext?: string;
+      interpretationNextStep?: string;
       createdAt?: number;
       updatedAt?: number;
    }>(PROJECT_MATERIALS_STORAGE_KEY)
@@ -3208,6 +3212,10 @@ function getProjectMaterialsForMemory() {
          source: sanitizeMemoryEngineText(material.source, MEMORY_ENGINE_SANITIZE_LIMITS.smallText),
          notes: sanitizeMemoryEngineText(material.notes, MEMORY_ENGINE_SANITIZE_LIMITS.summary),
          summary: sanitizeMemoryEngineSummary(material.summary),
+         documentText: sanitizeMemoryEngineText(material.documentText, MEMORY_ENGINE_SANITIZE_LIMITS.body),
+         interpretationSummary: sanitizeMemoryEngineSummary(material.interpretationSummary),
+         interpretationUsefulContext: sanitizeMemoryEngineText(material.interpretationUsefulContext, MEMORY_ENGINE_SANITIZE_LIMITS.summary),
+         interpretationNextStep: sanitizeMemoryEngineText(material.interpretationNextStep, MEMORY_ENGINE_SANITIZE_LIMITS.recommendation),
          createdAt: isValidMemoryEngineTimestamp(material.createdAt) ? Number(material.createdAt) : Date.now(),
          updatedAt: isValidMemoryEngineTimestamp(material.updatedAt) ? Number(material.updatedAt) : isValidMemoryEngineTimestamp(material.createdAt) ? Number(material.createdAt) : Date.now(),
       }));
@@ -3255,7 +3263,7 @@ function getSourceAwareMaterialCandidates(): SourceAwareActiveProject[] {
             .map((material, index) => {
                const label = material.type ? `${material.type}: ` : "";
 
-               const usefulText = material.summary || material.notes || material.title;
+               const usefulText = material.interpretationSummary || material.interpretationUsefulContext || material.summary || material.notes || material.documentText || material.title;
 
                return `${index + 1}. ${label}${material.title || "Project material"}${usefulText ? ` — ${truncateText(usefulText, 180)}` : ""}`;
             })
@@ -3275,7 +3283,7 @@ function getSourceAwareMaterialCandidates(): SourceAwareActiveProject[] {
             status: "active" as const,
             recommendedNextAction: "Use the attached materials as project references while continuing in Canvas.",
             score: 780 + getSourceAwareTemporalBoost(group.updatedAt) + Math.min(group.materials.length, 8) * 18,
-            reason: "Project Materials provide reference context for the active project.",
+            reason: "Project Materials provide evidence, constraints, decisions, and reference context for the active project.",
             updatedAt: group.updatedAt || Date.now(),
          } satisfies SourceAwareActiveProject;
       })
@@ -3381,6 +3389,9 @@ function readActiveProjectSelectionForMemory() {
    };
 }
 
+// ALLEVIN MK VIII active-project authority:
+// The project selected in Projects outranks recency-based Canvas, material,
+// calendar, and thread candidates until the user selects another project.
 function getPersistedSelectedProjectCandidate(projectCandidates: SourceAwareActiveProject[]) {
    const selection = readActiveProjectSelectionForMemory();
 
@@ -4109,7 +4120,7 @@ export function getActiveThreadSummary() {
 }
 
 // ========================================
-// Thread Memory V2 Summary
+// ALLEVIN MK VIII Thread Memory Compatibility Summary
 // Purpose:
 // Short text helper for V2 UI cards.
 // ========================================

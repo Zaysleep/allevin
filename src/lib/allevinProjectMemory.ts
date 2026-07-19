@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK VII Project Memory Foundation
+// ALLEVIN MK VIII Project Memory Foundation
 // Purpose: shared utility for clean project identity,
 // persistence, dedupe, merge behavior, and stable
 // canonical project metadata across ALLEVIN modules.
@@ -12,7 +12,7 @@ import type { AllevinDestination, AllevinPriority, AllevinProject, AllevinProjec
 export const ALLEVIN_PROJECT_MEMORY_STORAGE_KEY = "allevin-mkii-project-memory";
 
 // ========================================
-// MK VI — Project Memory Sanitization
+// ALLEVIN MK VIII — Project Memory Sanitization
 // Memory is shared across modules, so this layer treats every stored field as untrusted.
 // ========================================
 
@@ -114,6 +114,9 @@ export interface ProjectRoadmapMemoryItem {
    dependencies: string[];
    completionCriteria: string[];
 
+   // Actual proof recorded when work or a material satisfies the criteria.
+   completionEvidence: string[];
+
    createdAt: number;
    updatedAt: number;
 }
@@ -151,7 +154,7 @@ export interface ProjectMemoryInput {
    recommendedNextAction?: string;
    latestMovement?: string;
 
-   // MK VII canonical metadata. These fields store durable project facts only.
+   // ALLEVIN MK VIII canonical metadata. These fields store durable project facts only.
    // Readiness, risks, evidence quality, and recommendations remain derived.
    projectType?: ProjectMemoryProjectType | string;
    projectMetadata?: Partial<CanonicalProjectMetadata>;
@@ -654,6 +657,7 @@ function createProjectRoadmapMemoryItem(value: Partial<ProjectRoadmapMemoryItem>
       openQuestions: sanitizeProjectMemoryStringList(value.openQuestions, 40),
       dependencies: sanitizeProjectMemoryStringList(value.dependencies, 16),
       completionCriteria: sanitizeProjectMemoryStringList(value.completionCriteria, 40),
+      completionEvidence: sanitizeProjectMemoryStringList(value.completionEvidence, 40),
       createdAt: isValidProjectMemoryTimestamp(value.createdAt) ? Number(value.createdAt) : now,
       updatedAt: isValidProjectMemoryTimestamp(value.updatedAt) ? Number(value.updatedAt) : now,
    };
@@ -714,6 +718,7 @@ function buildRoadmapFromParsedDocument(parsed: ParsedProjectDocument) {
          decisions: [],
          openQuestions: [],
          completionCriteria: [],
+         completionEvidence: [],
          createdAt: Date.now(),
          updatedAt: Date.now(),
       })),
@@ -745,6 +750,7 @@ function mergeProjectRoadmapMetadata(existing: ProjectRoadmapMemoryItem[] = [], 
                openQuestions: item.openQuestions.length ? item.openQuestions : previous.openQuestions,
                dependencies: item.dependencies.length ? item.dependencies : previous.dependencies,
                completionCriteria: item.completionCriteria.length ? item.completionCriteria : previous.completionCriteria,
+               completionEvidence: item.completionEvidence.length ? item.completionEvidence : previous.completionEvidence,
                createdAt: previous.createdAt || item.createdAt,
                updatedAt: Math.max(previous.updatedAt || 0, item.updatedAt || 0, Date.now()),
             };
