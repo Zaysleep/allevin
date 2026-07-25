@@ -1,7 +1,7 @@
 // ========================================
-// ALLEVIN MK VIII Project Intelligence and Understanding Engine
+// ALLEVIN MK IX Project Intelligence and Understanding Engine
 // Purpose:
-// Convert Projects, Working Notes, saved progress,
+// Convert Projects, ALLEVIN’s Guide, saved progress,
 // materials, and project structure into one
 // canonical senior project-lead understanding.
 // ========================================
@@ -36,7 +36,7 @@ export interface ProjectBuildStep {
    readinessCriteria: string[];
    dependencies: string[];
 
-   // MK VIII milestone workspace context.
+   // MK IX milestone workspace context.
    goal?: string;
    whyItMatters?: string;
    startingPrompt?: string;
@@ -175,7 +175,7 @@ export interface ProjectUnderstandingMilestone {
    status: ProjectUnderstandingMilestoneStatus;
    purpose: string;
    completionCriteria: string[];
-   completionEvidence: string[];
+   completedCriteria: string[];
    dependencies: string[];
    risks: string[];
 
@@ -342,7 +342,8 @@ export interface ProjectMilestoneWorkspaceInput {
    decisions?: string[];
    openQuestions?: string[];
    completionCriteria?: string[];
-   completionEvidence?: string[];
+   completedCriteria?: string[];
+
    dependencies?: string[];
    order?: number;
 }
@@ -390,6 +391,13 @@ function cleanText(value?: string, limit = 100000) {
       .trim();
 
    return clean.length > limit ? clean.slice(0, limit).trim() : clean;
+}
+
+function ensureProjectIntelligenceQuestionMark(value?: string) {
+   const clean = cleanText(value, 1400)
+      .replace(/[.!?]+$/, "")
+      .trim();
+   return clean ? `${clean}?` : "";
 }
 
 function compactText(value?: string, limit = 1500) {
@@ -683,6 +691,23 @@ function getLabeledBlockItems(value: string, labels: string[], limit = 20) {
 // Project-type and reasoning-profile detection
 // ========================================
 
+function maskNegatedProjectTypeMentions(value: string) {
+   return value
+      .replace(
+         /\b(?:not|never|without|avoid(?:ing)?|do not|don't|does not|doesn't|will not|won't|cannot|can't|is not|isn't|are not|aren't|not planning to|not going to)\b[^.!?\n]{0,100}\b(?:software|app|application|website|web app|platform|api|frontend|backend|database|codebase)\b[^.!?\n]*/gi,
+         " ",
+      )
+      .replace(/\s+/g, " ")
+      .trim();
+}
+
+function maskExcludedResearchMentions(value: string) {
+   return value
+      .replace(/\b(?:rather than|instead of|not|without|avoid(?:ing)?)\b[^.!?\n]{0,100}\b(?:research report|research brief|formal study|literature review)\b[^.!?\n]*/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+}
+
 function normalizeExplicitProjectType(value: string): ProjectType | undefined {
    const lower = compactText(value, 500).toLowerCase();
 
@@ -720,8 +745,11 @@ function normalizeExplicitProjectType(value: string): ProjectType | undefined {
 export function detectProjectReasoningProfile(input: { title: string; projectDocument: ParsedProjectDocument; projectBody: string; canvasContent: string; materials?: ProjectMaterialInput[] }): ProjectReasoningProfileDetection {
    const combined = cleanText([input.title, input.projectBody, input.canvasContent, getDocumentField(input.projectDocument, ["type", "projectType", "category", "goal", "currentState"])].filter(Boolean).join("\n\n"), 80000);
    const lower = combined.toLowerCase();
+   const softwarePositiveText = maskNegatedProjectTypeMentions(lower);
+   const researchPositiveText = maskExcludedResearchMentions(lower);
    const goalText = compactText(getDocumentField(input.projectDocument, ["goal", "projectGoal", "objective"]), 2400).toLowerCase();
    const deliverableText = compactText(findLabeledValue(combined, ["Deliverable", "Expected Output", "Final Deliverable", "Project Goal"]) || goalText, 3000).toLowerCase();
+   const softwareOutcomeText = maskNegatedProjectTypeMentions(`${goalText} ${deliverableText}`);
 
    const scores: Record<ProjectType, number> = {
       software: 0,
@@ -737,9 +765,11 @@ export function detectProjectReasoningProfile(input: { title: string; projectDoc
    if (explicitType) scores[explicitType] += 20;
 
    const addSignals = (projectType: ProjectType, groups: Array<[string[], number]>) => {
+      const signalText = projectType === "software" ? softwarePositiveText : projectType === "research" ? researchPositiveText : lower;
+
       for (const [phrases, weight] of groups) {
          for (const phrase of phrases) {
-            if (lower.includes(phrase)) scores[projectType] += weight;
+            if (signalText.includes(phrase)) scores[projectType] += weight;
          }
       }
    };
@@ -753,7 +783,7 @@ export function detectProjectReasoningProfile(input: { title: string; projectDoc
       [["github", "vercel", "code", "software", "web app", "application"], 3],
    ]);
 
-   const explicitResearchStructure = /\bresearch question\b|\bsources? needed\b|\bsource requirements?\b|\bcredible sources?\b|\bliterature review\b|\bcitations?\b|\bmethodology\b/i.test(lower);
+   const explicitResearchStructure = /\bresearch question\b|\bsources? needed\b|\bsource requirements?\b|\bcredible sources?\b|\bliterature review\b|\bcitations?\b|\bmethodology\b/i.test(researchPositiveText);
    if (explicitResearchStructure) {
       addSignals("research", [
          [["research question"], 10],
@@ -761,7 +791,7 @@ export function detectProjectReasoningProfile(input: { title: string; projectDoc
          [["literature review", "methodology", "key findings"], 5],
          [["study", "academic", "research brief"], 3],
       ]);
-   } else if (/\bresearch\b/i.test(lower)) {
+   } else if (/\bresearch\b/i.test(researchPositiveText)) {
       // Research may be one activity inside a launch, build, event, or planning
       // project. Without a research deliverable or source structure, it should
       // not become the governing reasoning profile.
@@ -795,7 +825,7 @@ export function detectProjectReasoningProfile(input: { title: string; projectDoc
       /\b(?:launch|operate|run|organize|coordinate|implement|roll out|pilot|open|install|upgrade|deliver|establish)\b/i.test(`${goalText} ${deliverableText}`) ||
       /\b(?:service|program|event|business|operation|installation|operating model|first version)\b/i.test(deliverableText);
    const outcomeIsWritten = /\b(?:essay|article|report|brief|script|paper|documentation)\b/i.test(deliverableText);
-   const outcomeIsSoftware = /\b(?:software|web app|application|website|platform|api|frontend|backend)\b/i.test(deliverableText);
+   const outcomeIsSoftware = /\b(?:software|web app|application|website|platform|api|frontend|backend)\b/i.test(softwareOutcomeText);
 
    if (outcomeIsOperational && !outcomeIsWritten) scores.planning += 8;
    if (outcomeIsSoftware) scores.software += 8;
@@ -838,7 +868,7 @@ export function detectProjectReasoningProfile(input: { title: string; projectDoc
                  ? "The finished outcome depends on decisions, dependencies, logistics, resources, and real-world validation."
                  : winningType === "checklist"
                    ? "The project is primarily represented as ordered checks with explicit completion states."
-                   : "No stronger governing workflow was detected, so ALLEVIN should use the general profile.";
+                   : "The project combines several kinds of work, so ALLEVIN should follow its stated dependencies instead of forcing one category.";
 
    return {
       projectType: winningType,
@@ -1137,7 +1167,7 @@ export function parseProjectBuildPlan(projectBody: string, canvasContent: string
 
 function buildProjectPlanFromMilestoneWorkspaces(workspaces: ProjectMilestoneWorkspaceInput[] = []) {
    return workspaces
-      .filter((workspace) => workspace && workspace.status !== "archived")
+      .filter((workspace) => Boolean(workspace))
       .map((workspace, index) => {
          const statusText = compactText(workspace.status).toLowerCase();
          const status: ProjectBuildStatus =
@@ -1159,7 +1189,7 @@ function buildProjectPlanFromMilestoneWorkspaces(workspaces: ProjectMilestoneWor
             description: compactText(workspace.goal || workspace.whyItMatters || workspace.startingPrompt, 1200),
             status,
             statusSource: "explicit" as const,
-            completionSignals: uniqueStrings(workspace.completionEvidence || [], 20),
+            completionSignals: uniqueStrings(workspace.completedCriteria || [], 20),
             readinessCriteria: uniqueStrings(workspace.completionCriteria || [], 20),
             dependencies: uniqueStrings(workspace.dependencies || [], 20),
             goal: compactText(workspace.goal, 1500),
@@ -1167,7 +1197,9 @@ function buildProjectPlanFromMilestoneWorkspaces(workspaces: ProjectMilestoneWor
             startingPrompt: compactText(workspace.startingPrompt, 1500),
             workingContent: cleanText(workspace.workingContent, 100000),
             decisions: uniqueStrings(workspace.decisions || [], 40),
-            openQuestions: uniqueStrings(workspace.openQuestions || [], 40),
+            openQuestions: uniqueStrings(workspace.openQuestions || [], 40)
+               .map(ensureProjectIntelligenceQuestionMark)
+               .filter(Boolean),
             order: typeof workspace.order === "number" && Number.isFinite(workspace.order) ? workspace.order : index + 1,
          } satisfies ProjectBuildStep;
       })
@@ -2010,7 +2042,7 @@ function buildRiskSignals(input: {
       add("The intended audience is not defined, which weakens revision decisions.", "inference", "medium");
    }
 
-   // ALLEVIN MK VIII planning guidance:
+   // ALLEVIN MK IX planning guidance:
    // A project can have a reliable dependency order without having a fixed
    // deadline. Do not invent a timeline risk merely because no date was found.
 
@@ -2434,7 +2466,7 @@ interface StoredProjectProgressMilestone {
    openQuestions: string[];
    dependencies: string[];
    completionCriteria: string[];
-   completionEvidence: string[];
+   completedCriteria: string[];
    order: number;
 }
 
@@ -2480,10 +2512,17 @@ function readStoredProjectProgress(projectTitle: string): StoredProjectProgress 
                startingPrompt: compactText(milestone.startingPrompt, 1600),
                workingContent: cleanText(milestone.workingContent, 100000),
                decisions: uniqueStrings(Array.isArray(milestone.decisions) ? milestone.decisions : [], 40),
-               openQuestions: uniqueStrings(Array.isArray(milestone.openQuestions) ? milestone.openQuestions : [], 40),
+               openQuestions: uniqueStrings(Array.isArray(milestone.openQuestions) ? milestone.openQuestions : [], 40)
+                  .map(ensureProjectIntelligenceQuestionMark)
+                  .filter(Boolean),
                dependencies: uniqueStrings(Array.isArray(milestone.dependencies) ? milestone.dependencies : [], 20),
                completionCriteria: uniqueStrings(Array.isArray(milestone.completionCriteria) ? milestone.completionCriteria : [], 40),
-               completionEvidence: uniqueStrings(Array.isArray(milestone.completionEvidence) ? milestone.completionEvidence : [], 40),
+               completedCriteria:
+                  Array.isArray((milestone as any).completedCriteria) && (milestone as any).completedCriteria.length
+                     ? uniqueStrings((milestone as any).completedCriteria, 40)
+                     : milestone.completed === true || compactText(milestone.status).toLowerCase() === "complete"
+                       ? uniqueStrings(Array.isArray(milestone.completionCriteria) ? milestone.completionCriteria : [], 40)
+                       : [],
                order: typeof milestone.order === "number" && Number.isFinite(milestone.order) ? Math.max(1, Math.floor(milestone.order)) : index + 1,
             }))
             .filter((milestone) => milestone.title)
@@ -2674,7 +2713,7 @@ function getProjectUnderstandingTimeline(projectBody: string, profileSignals: Pr
 }
 
 function getProjectUnderstandingMilestones(input: { lead: ProjectLeadState; buildOrder: ProjectBuildStep[]; profileSignals: ProjectProfileSignals; risks: ProjectRiskSignal[] }): ProjectUnderstandingMilestone[] {
-   // ALLEVIN MK VIII — one authoritative milestone source.
+   // ALLEVIN MK IX — one authoritative milestone source.
    // A saved/build roadmap is already an ordered project decision. Do not
    // promote constraints, open questions, or generic unresolved work into
    // competing milestones when that roadmap exists.
@@ -2725,7 +2764,7 @@ function getProjectUnderstandingMilestones(input: { lead: ProjectLeadState; buil
             status: "active",
             purpose: resolveMilestoneRationale(compactText(input.lead.whyNow, 1500), fallbackTitle, "", input.lead.goal, [fallbackTitle]),
             completionCriteria: [],
-            completionEvidence: [],
+            completedCriteria: [],
             dependencies: [],
             risks: input.risks.filter((risk) => getDecisionOverlap(risk.text, fallbackTitle) > 0).map((risk) => risk.text),
             goal: fallbackTitle,
@@ -2755,7 +2794,7 @@ function getProjectUnderstandingMilestones(input: { lead: ProjectLeadState; buil
          status: isComplete ? "complete" : isActive ? "active" : build.status === "ready-for-review" ? "needs-confirmation" : "waiting",
          purpose: resolvedRationale,
          completionCriteria: uniqueStrings(build.readinessCriteria || [], 20),
-         completionEvidence: uniqueStrings(build.completionSignals || [], 20),
+         completedCriteria: uniqueStrings(build.completionSignals || [], 20),
          dependencies: uniqueStrings((build.dependencies || []).filter(Boolean), 20),
          risks: relatedRisks,
          goal: compactText(build.goal || build.description || build.title, 1500),
@@ -2763,7 +2802,9 @@ function getProjectUnderstandingMilestones(input: { lead: ProjectLeadState; buil
          startingPrompt: compactText(build.startingPrompt, 1500) || `What concrete decision, artifact, or evidence would close ${lowerProjectSentenceStart(build.title)}?`,
          workingContent: cleanText(build.workingContent, 100000),
          decisions: uniqueStrings(build.decisions || [], 40),
-         openQuestions: uniqueStrings(build.openQuestions || [], 40),
+         openQuestions: uniqueStrings(build.openQuestions || [], 40)
+            .map(ensureProjectIntelligenceQuestionMark)
+            .filter(Boolean),
          order: build.order || index + 1,
       } satisfies ProjectUnderstandingMilestone;
    });
@@ -2802,7 +2843,7 @@ function isSemanticSectionHeading(statement: string) {
 
    return (
       /^[A-Z][A-Za-z0-9 &'’/()+_-]{1,64}:$/.test(clean) ||
-      /^(?:project goal|goal|success looks like|success criteria|current situation|current status|current state|working notes|notes|materials|references|overview|summary|background|context|milestones?|roadmap|timeline|constraints?|requirements?|decisions?|open questions?|options?|assumptions?|risks?|dependencies?)\s*:?\s*$/i.test(
+      /^(?:project goal|goal|success looks like|success criteria|current situation|current status|current state|working notes|allevin['’]s guide|notes|materials|references|overview|summary|background|context|milestones?|roadmap|timeline|constraints?|requirements?|decisions?|open questions?|options?|assumptions?|risks?|dependencies?)\s*:?\s*$/i.test(
          clean,
       )
    );
@@ -3286,10 +3327,10 @@ function extractSemanticProjectUnderstanding(input: { projectBody: string; canva
          });
    });
 
-   const completedEvidenceKeys = new Set(
+   const completedCriteriaKeys = new Set(
       input.milestones
          .filter((milestone) => milestone.status === "complete")
-         .flatMap((milestone) => milestone.completionEvidence)
+         .flatMap((milestone) => milestone.completedCriteria)
          .map((item) => normalizeProjectKey(item)),
    );
 
@@ -3304,7 +3345,7 @@ function extractSemanticProjectUnderstanding(input: { projectBody: string; canva
          .filter((criterion, index, all) => all.findIndex((item) => normalizeProjectKey(item.statement) === normalizeProjectKey(criterion.statement)) === index)
          .map((criterion) => ({
             ...criterion,
-            satisfied: completedEvidenceKeys.has(normalizeProjectKey(criterion.statement)),
+            satisfied: completedCriteriaKeys.has(normalizeProjectKey(criterion.statement)),
          }))
          .slice(0, 40),
    };
@@ -3638,7 +3679,7 @@ function buildProjectUnderstanding(input: {
               status: milestone.completed ? "complete" : isActive ? "active" : "waiting",
               purpose,
               completionCriteria: uniqueStrings([...(milestone.completionCriteria || []), ...(matchingBuild?.readinessCriteria || [])], 40),
-              completionEvidence: uniqueStrings([...(milestone.completionEvidence || []), ...(matchingBuild?.completionSignals || []), ...(milestone.completedAt ? [`Completed ${new Date(milestone.completedAt).toLocaleDateString()}`] : [])], 40),
+              completedCriteria: uniqueStrings([...(milestone.completedCriteria || []), ...(matchingBuild?.completionSignals || [])], 40),
               dependencies: milestone.dependencies.length ? milestone.dependencies : matchingBuild?.dependencies?.length ? matchingBuild.dependencies : index > 0 ? [all[index - 1].title] : [],
               risks: [],
               goal: compactText(milestone.goal || matchingBuild?.goal || matchingBuild?.description || milestone.title, 1500),
@@ -3646,7 +3687,9 @@ function buildProjectUnderstanding(input: {
               startingPrompt: compactText(milestone.startingPrompt || matchingBuild?.startingPrompt || `Create the smallest concrete result that would prove ${lowerProjectSentenceStart(milestone.title)} is ready to close.`, 1500),
               workingContent: cleanText(milestone.workingContent || matchingBuild?.workingContent, 100000),
               decisions: uniqueStrings([...(milestone.decisions || []), ...(matchingBuild?.decisions || [])], 40),
-              openQuestions: uniqueStrings([...(milestone.openQuestions || []), ...(matchingBuild?.openQuestions || [])], 40),
+              openQuestions: uniqueStrings([...(milestone.openQuestions || []), ...(matchingBuild?.openQuestions || [])], 40)
+                 .map(ensureProjectIntelligenceQuestionMark)
+                 .filter(Boolean),
               order: milestone.order || matchingBuild?.order || index + 1,
            } satisfies ProjectUnderstandingMilestone;
         })

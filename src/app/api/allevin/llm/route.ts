@@ -1,12 +1,12 @@
 // ========================================
-// ALLEVIN MK VI OpenAI Response Layer
+// ALLEVIN MK IX OpenAI Response Layer
 // Path:
 // src/app/api/allevin/llm/route.ts
 //
 // Purpose:
 // Server-only controlled LLM helper.
 // Keeps the OpenAI API key out of the browser.
-// Uses the MK VI internal context packet so ALLEVIN can
+// Uses the compatible internal context packet so ALLEVIN can
 // respond with stronger project awareness, material awareness,
 // natural variation, and calm ALLEVIN personality while keeping actions internal.
 // ========================================
@@ -44,6 +44,10 @@ type AllevinLLMRequestWithContext = Omit<AllevinLLMRequest, "mode"> & {
    materialInterpretation?: MaterialInterpretationPayload;
 };
 
+function isProjectIntakeRequest(request?: { mode?: AllevinLLMMode; projectStage?: string }) {
+   return request?.mode === "project-guidance" && request.projectStage === "mk-ix-project-intake";
+}
+
 // ========================================
 // Text Helpers
 // ========================================
@@ -57,7 +61,7 @@ function compactText(value?: string) {
 }
 
 // ========================================
-// MK VI — Server Route Sanitization
+// MK IX — Server Route Sanitization
 // ========================================
 
 const ROUTE_SANITIZE_LIMITS = {
@@ -70,6 +74,8 @@ const ROUTE_SANITIZE_LIMITS = {
    imageDataUrl: 3000000,
    summary: 1500,
    nextStep: 1000,
+   projectGuideSection: 7000,
+   projectGuideNextStep: 3600,
    smallText: 300,
    error: 160,
 } as const;
@@ -277,7 +283,10 @@ function sanitizeRouteUnderstanding(value?: AllevinLLMRequest["projectUnderstand
               workingContent: sanitizeRouteBody(value.activeMilestone.workingContent),
               decisions: sanitizeRouteStringArray(value.activeMilestone.decisions, 30, ROUTE_SANITIZE_LIMITS.material),
               openQuestions: sanitizeRouteStringArray(value.activeMilestone.openQuestions, 30, ROUTE_SANITIZE_LIMITS.material),
-              completionEvidence: sanitizeRouteStringArray(value.activeMilestone.completionEvidence, 30, ROUTE_SANITIZE_LIMITS.material),
+              completionCriteria: sanitizeRouteStringArray(value.activeMilestone.completionCriteria, 30, ROUTE_SANITIZE_LIMITS.material),
+              completedCriteria: sanitizeRouteStringArray(value.activeMilestone.completedCriteria, 30, ROUTE_SANITIZE_LIMITS.material),
+              dependencies: sanitizeRouteStringArray(value.activeMilestone.dependencies, 30, ROUTE_SANITIZE_LIMITS.material),
+              whatItUnlocks: sanitizeRouteSummary(value.activeMilestone.whatItUnlocks),
               status: sanitizeRouteSmallText(value.activeMilestone.status),
            }
          : undefined,
@@ -290,7 +299,7 @@ function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinCon
    }
 
    return {
-      version: sanitizeRouteSmallText(contextPacket.version || "MK VI"),
+      version: sanitizeRouteSmallText(contextPacket.version || "MK VIII"),
       userIntent: {
          rawPrompt: sanitizeRouteText(contextPacket.userIntent?.rawPrompt, ROUTE_SANITIZE_LIMITS.prompt),
          normalizedPrompt: sanitizeRouteText(contextPacket.userIntent?.normalizedPrompt, ROUTE_SANITIZE_LIMITS.prompt),
@@ -386,7 +395,7 @@ function sanitizePayload(payload: AllevinLLMRequestWithContext): AllevinLLMReque
       projectStage: sanitizeRouteSmallText(payload.projectStage),
       currentLocation: sanitizeRouteSmallText(payload.currentLocation),
       priority: payload.priority === "low" || payload.priority === "medium" || payload.priority === "high" ? payload.priority : undefined,
-      maxWords: typeof payload.maxWords === "number" && Number.isFinite(payload.maxWords) ? Math.max(40, Math.min(700, payload.maxWords)) : undefined,
+      maxWords: typeof payload.maxWords === "number" && Number.isFinite(payload.maxWords) ? Math.max(40, Math.min(isProjectIntakeRequest(payload) ? 1200 : 700, payload.maxWords)) : undefined,
       responseStyle: payload.responseStyle === "direct" || payload.responseStyle === "conversational" || payload.responseStyle === "editorial" || payload.responseStyle === "detailed" ? payload.responseStyle : undefined,
       groundedResponse: sanitizeRouteText(payload.groundedResponse, 7000),
       conversation: payload.conversation
@@ -404,13 +413,15 @@ function sanitizePayload(payload: AllevinLLMRequestWithContext): AllevinLLMReque
    };
 }
 
-function sanitizeLLMResult(result: AllevinLLMResponse): AllevinLLMResponse {
+function sanitizeLLMResult(result: AllevinLLMResponse, options: { projectIntake?: boolean } = {}): AllevinLLMResponse {
+   const projectIntake = options.projectIntake === true;
+
    return {
       ...result,
       title: sanitizeRouteTitle(result.title),
-      focus: sanitizeRouteSummary(result.focus),
-      usefulContext: sanitizeRouteSummary(result.usefulContext),
-      nextStep: sanitizeRouteNextStep(result.nextStep),
+      focus: projectIntake ? sanitizeRouteText(result.focus, ROUTE_SANITIZE_LIMITS.projectGuideSection) : sanitizeRouteSummary(result.focus),
+      usefulContext: projectIntake ? sanitizeRouteText(result.usefulContext, ROUTE_SANITIZE_LIMITS.projectGuideSection) : sanitizeRouteSummary(result.usefulContext),
+      nextStep: projectIntake ? sanitizeRouteText(result.nextStep, ROUTE_SANITIZE_LIMITS.projectGuideNextStep) : sanitizeRouteNextStep(result.nextStep),
       summary: sanitizeRouteSummary(result.summary || result.focus),
       confidence: clampRouteConfidence(result.confidence, result.usedFallback ? 55 : 72),
       error: result.error ? "LLM request fell back safely." : undefined,
@@ -424,7 +435,7 @@ function limitText(value?: string, max = 6000) {
       return text;
    }
 
-   return `${text.slice(0, max).trim()}\n\n[Content trimmed for MK VI internal guidance layer.]`;
+   return `${text.slice(0, max).trim()}\n\n[Content trimmed for the MK IX internal guidance layer.]`;
 }
 
 function extractSection(text: string, label: string) {
@@ -439,12 +450,12 @@ function stringifyContextPacket(contextPacket?: AllevinContextPacket) {
    const safeContextPacket = sanitizeContextPacket(contextPacket);
 
    if (!safeContextPacket) {
-      return "No MK VII context packet provided.";
+      return "No compatible project context packet was provided.";
    }
 
    return JSON.stringify(
       {
-         version: safeContextPacket.version || "MK VII",
+         version: safeContextPacket.version || "compatible",
          userIntent: safeContextPacket.userIntent || {},
          currentProject: safeContextPacket.currentProject || {},
          projects: safeContextPacket.projects || {},
@@ -522,7 +533,7 @@ function buildMaterialInterpretationPrompt(request: AllevinLLMRequestWithContext
    const contextPacketText = stringifyContextPacket(request.contextPacket);
 
    return `
-You are ALLEVIN MK VI interpreting one selected project material for the user.
+You are ALLEVIN MK IX interpreting one selected project material for the user.
 
 The goal:
 - Make the material feel useful enough that the user wants to keep using ALLEVIN materials.
@@ -564,8 +575,10 @@ title, focus, usefulContext, nextStep, summary, confidence
 function buildOpenAIMessages(request: AllevinLLMRequestWithContext) {
    const systemContent =
       request.mode === "material-interpretation"
-         ? "You are ALLEVIN MK VI's controlled material interpretation layer. Return only valid JSON. Be specific, helpful, natural, and lightly witty. Do not pretend. Do not use robotic analysis language."
-         : "You are ALLEVIN MK VI's controlled internal guidance layer. Return only valid JSON. Never claim to perform actions. Be concise, calm, lightly witty, project-aware, and material-aware. Avoid vague advice, export language, hype, roleplay, and repeated theme words. Only use schedule language when the user asks what to schedule.";
+         ? "You are ALLEVIN MK IX's controlled material interpretation layer. Return only valid JSON. Be specific, helpful, natural, and lightly witty. Do not pretend. Do not use robotic analysis language."
+         : isProjectIntakeRequest(request)
+           ? "You are ALLEVIN MK IX's controlled project-intake reasoning layer. Return only valid JSON. Read the whole project before planning, preserve certainty, derive dependencies, and use the project's own language."
+           : "You are ALLEVIN MK IX's controlled internal guidance layer. Return only valid JSON. Never claim to perform actions. Be concise, calm, lightly witty, project-aware, and material-aware. Avoid vague advice, export language, hype, roleplay, and repeated theme words. Only use schedule language when the user asks what to schedule.";
 
    const userText = request.mode === "material-interpretation" ? buildMaterialInterpretationPrompt(request) : buildPrompt(request);
 
@@ -613,6 +626,22 @@ function buildOpenAIMessages(request: AllevinLLMRequestWithContext) {
 
 function buildFallbackResponse(request: AllevinLLMRequestWithContext, error?: string): AllevinLLMResponse {
    const safeRequest = sanitizePayload(request);
+
+   if (isProjectIntakeRequest(safeRequest)) {
+      return {
+         ok: true,
+         mode: safeRequest.mode as AllevinLLMResponse["mode"],
+         source: safeRequest.source,
+         title: sanitizeRouteTitle(safeRequest.title || "New Project"),
+         focus: "",
+         usefulContext: "",
+         nextStep: "",
+         summary: "",
+         confidence: 45,
+         usedFallback: true,
+         error: error ? "LLM request fell back safely." : undefined,
+      };
+   }
 
    const material = safeRequest.materialInterpretation;
 
@@ -723,7 +752,7 @@ function getModeInstruction(mode: AllevinLLMMode | undefined) {
       case "calendar-to-task":
          return "Turn calendar or event context into one clear scheduling/task suggestion.";
       case "aidock-guidance":
-         return "Respond as ALLEVIN in a natural, lightly witty, project-aware way using the MK VII context packet.";
+         return "Respond as ALLEVIN in a natural, lightly witty, project-aware way using the compatible project context packet.";
       case "general-knowledge":
          return "Answer the general question clearly while keeping ALLEVIN's calm, useful tone. Do not invent live or current information.";
       case "tool-guidance":
@@ -771,12 +800,107 @@ function getProjectSpecificToneGuide(request: AllevinLLMRequestWithContext) {
       : `${baseRule} For general projects, keep the next move specific and reduce ambiguity without inventing domain details.`;
 }
 
+function buildProjectIntakePrompt(request: AllevinLLMRequestWithContext) {
+   const title = sanitizeRouteTitle(request.title || "New Project");
+   const description = sanitizeRouteBody(request.rawContent || request.focus);
+   const additionalInstruction = sanitizeRouteText(request.userInstruction, ROUTE_SANITIZE_LIMITS.prompt);
+
+   return `
+You are ALLEVIN MK IX's project-intake reasoning layer.
+
+Your job is to understand the project the user is actually trying to complete, preserve the useful evidence in the ramble, and turn it into a grounded project guide with a complete dependency sequence.
+
+PROJECT TITLE:
+${title}
+
+FULL PROJECT DESCRIPTION:
+${description}
+
+ADDITIONAL INSTRUCTION:
+${additionalInstruction}
+
+Reasoning process — complete this silently before writing JSON:
+1. Identify the governing goal and the observable finished result.
+2. Separate current facts, confirmed decisions, tentative options, open questions, and hard constraints.
+3. Build a dependency ledger covering every supported facet:
+   - first-version scope
+   - approvals, safety, privacy, accessibility, legal, or professional requirements
+   - existing evidence, assets, and current gaps
+   - ownership and decision authority
+   - unresolved choices that block later work
+   - operating structure, communication, layout, workflow, or content design
+   - budget, supplies, staffing, or other resources
+   - the actual artifact, change, or deliverable to produce
+   - real-world verification and testing
+   - handoff, release, or transition
+   - ongoing maintenance and review
+4. Order the supported facets by dependency. A draft is not allowed to jump ahead of approvals, privacy rules, evidence, or blocking decisions that materially shape it.
+5. Convert that dependency ledger into natural milestones using the project's own nouns.
+
+Interpretation rules:
+- The explicit goal outranks incidental mentions of tools, rooms, events, programs, supplies, software, records, participants, or organizations.
+- Preserve hybrid projects. Do not choose one rigid project-category template.
+- Do not promote another person's suggestion into a confirmed decision unless the user adopted it.
+- Tentative language remains tentative. Never turn “may,” “might,” “possibly,” “around,” “thinking about,” or “would like” into a confirmed fact, hard budget cap, deadline, approval, or commitment.
+- An offer of help, interested person, willing reviewer, possible artist, or available tool is a current fact—not a confirmed decision unless the user explicitly assigns it.
+- A broad direction inferred from the goal is not automatically a Confirmed Decision. Only include commitments the user explicitly adopted with language such as “will,” “must,” “decided,” “confirmed,” or an equally clear commitment.
+- Conversational framing is not project content. Never copy requests such as “Can you help me…,” “I’m not sure where to start,” “What should I do first,” or “turn this into a project plan” into Open Questions, ALLEVIN’s Guide, milestones, or the starting point.
+- Negative language such as "not building an app" is a constraint, never the goal.
+- Keep facts that materially affect scope, safety, accessibility, ownership, timing, evidence, production, testing, or maintenance.
+- A factual complication becomes a constraint only when it creates a real limit, exclusion, approval boundary, budget cap, deadline, or quality requirement. State the governing limit rather than copying the whole fact.
+- ALLEVIN’s Guide should provide senior-level operating guidance tied to the user's materials, decisions, and limits. Do not merely restate facts. Every guide note must name at least one recognizable object from this project.
+- Open Questions must be complete, self-contained, and end with a question mark. Resolve pronouns from nearby context, and never output meta-questions such as "What needs to be decided about there are several things I have not decided," "What should be decided first?", "Can you help me turn this into a plan?", or any sentence about not knowing where to start.
+- Put each list item and each numbered milestone on its own line. Never combine multiple milestones into one line.
+- The GOAL section must contain one sentence only. Recover the project action from conversational phrasing such as “I’ve been thinking about organizing…” but never use first-person filler such as “I also want to make sure…” as the project object. Never append SUCCESS or another label to the goal sentence.
+- Success criteria must fit the actual deliverable. Do not say a mural, installation, event, physical space, or creative artifact “can be used successfully” unless usability is genuinely the project’s goal.
+- Use concrete project nouns instead of generic labels such as "existing information, assets, and gaps," "operating design," "first-phase resources," or "real conditions" when the description provides more specific language.
+- Each milestone must use a direct verb plus a recognizable object from this project. A milestone should name what is being selected, verified, written, built, tested, handed off, or maintained.
+- Never invent a launch event, promotion, marketing task, fundraising event, public announcement, social-media campaign, recruitment step, outreach campaign, committee, or permanent role unless the user explicitly requested it or the operating need clearly requires it.
+- Never use internal planning phrases such as “decision gate,” “operating design decisions,” “first-phase resources,” or “resolve the choices blocking.” State the actual decision in ordinary language.
+- Maintenance and damage questions must name the actual project object. For lending or borrowing projects, name the items being lent and address inspection, returns, overdue items, loss, and damage directly.
+- For lending, borrowing, checkout, or shared-resource projects, use this natural dependency order when supported: host approval, accepted-item scope, safety and condition rules, borrowing and damage policy, ongoing manager, tracking method, first collection, small test, then revision before expansion.
+- For place-based physical or creative work, order the plan naturally: confirm site ownership and approval, inspect the site, confirm insurance or safety rules, decide how input will be gathered, approve the design or lead, finalize budget and materials, complete the work, inspect it, and assign maintenance when supported.
+- Reject abstract milestone wording such as “confirm outside requirements,” “resolve operating design decisions,” “design the project’s structure and workflow,” or “test in real conditions” when the description provides concrete nouns.
+- Every supported dependency-ledger facet must be represented. Do not omit privacy, communication, resources, testing, ownership, or maintenance when the ramble makes them material.
+- Use eight to ten milestones for a complex hybrid project. Use six or seven only when fewer dependencies are genuinely supported.
+- Rank possible first actions by how many downstream decisions they unlock. Prefer an inventory, source map, requirements table, or baseline when it informs scope, permissions, testing, and production at once. A permission-only action should come first only when it truly blocks every other useful step.
+- The first action must create a concrete decision, artifact, evidence set, or professional confirmation that the next milestone can use.
+- Write START as one direct sentence, normally 15–35 words. Prefer a real action such as contacting the site owner, requesting an inspection, or creating an inventory. Do not expose internal phrases such as “what it must prove,” “requirements brief,” “dependency,” “irreversible commitments,” or “use it to complete milestone one.”
+- Do not invent completed work, approvals, owners, requirements, or facts.
+- Do not expose generic internal phrases such as "smallest complete user flow," "workflow, capacity, and ownership," "tools, equipment, and materials," "earliest dependency," "realistic user scenarios," or "minimum acceptable quality" unless the user's own project genuinely requires that exact language.
+- Keep sentences natural, direct, and user-friendly.
+
+Completeness targets when the ramble supports them:
+- SUCCESS: two to four observable outcomes
+- CURRENT FACTS: four to eight material facts
+- CONFIRMED DECISIONS: four to eight firm commitments
+- OPEN QUESTIONS: five to ten natural complete questions
+- CONSTRAINTS: four to eight hard limits or exclusions
+- ALLEVIN'S GUIDE: four to seven project-lead insights
+- MILESTONES: six to ten dependency-ordered milestones, normally eight to ten for a hybrid project
+
+Return ONLY valid JSON with exactly these top-level keys:
+{
+  "title": "${title}",
+  "focus": "GOAL:\\nOne direct goal sentence\\nSUCCESS:\\n- Observable outcome\\n- Observable outcome",
+  "usefulContext": "CURRENT FACTS:\\n- Grounded fact\\nCONFIRMED DECISIONS:\\n- Firm commitment\\nOPEN QUESTIONS:\\n- Natural complete question\\nCONSTRAINTS:\\n- Hard limit or exclusion\\nALLEVIN'S GUIDE:\\n- Senior-level project guidance",
+  "nextStep": "MILESTONES:\\n1. Dependency-ordered milestone\\n2. Dependency-ordered milestone\\n3. Continue for six to ten milestones\\nSTART:\\nOne concrete first action",
+  "summary": "One-sentence project readback",
+  "confidence": 0
+}
+
+Formatting rules:
+- Use no markdown fences.
+- Do not place the instruction itself inside any output field.
+   `.trim();
+}
+
 function buildProjectGuidanceDeliveryPrompt(request: AllevinLLMRequestWithContext) {
    const groundedResponse = cleanText(request.groundedResponse || request.contextPacket?.responseRules?.groundedResponse || request.focus);
    const understanding = request.projectUnderstanding || request.contextPacket?.projectUnderstanding;
 
    return `
-You are ALLEVIN MK VIII's conversational delivery layer.
+You are ALLEVIN MK IX's conversational delivery layer.
 
 USER QUESTION:
 ${cleanText(request.conversation?.lastUserPrompt || request.contextPacket?.userIntent?.rawPrompt || request.userInstruction)}
@@ -803,6 +927,10 @@ Rules:
 }
 
 function buildPrompt(request: AllevinLLMRequestWithContext) {
+   if (isProjectIntakeRequest(request)) {
+      return buildProjectIntakePrompt(request);
+   }
+
    if (request.mode === "project-guidance" && cleanText(request.groundedResponse || request.contextPacket?.responseRules?.groundedResponse || request.focus)) {
       return buildProjectGuidanceDeliveryPrompt(request);
    }
@@ -811,7 +939,7 @@ function buildPrompt(request: AllevinLLMRequestWithContext) {
    const materialInterpretationText = stringifyMaterialInterpretation(request.materialInterpretation);
 
    return `
-You are ALLEVIN MK VII — Internal Project Guidance Layer.
+You are ALLEVIN MK IX — Internal Project Guidance Layer.
 
 Identity:
 - ALLEVIN is a calm, useful, lightly witty project assistant inside a personal workspace.
@@ -836,7 +964,7 @@ Hard rules:
 - Do not use project-flavor hype words like "neon", "sizzle", "waves", "chaos", "vibrant", "thrill", "gritty", "dive", "magic", or "pedal to the metal" unless the user explicitly asks for that style.
 - Prefer calm precision over hype.
 - Keep wit subtle: one quiet, useful line is enough.
-- Use the MK VII context packet as the source of truth.
+- Use the compatible project context packet as the source of truth.
 - currentProject is the active project and must dominate the answer.
 - Project type is a descriptive hint only. Never let type-based wording override explicit project content.
 - The saved project document is the roadmap source for goals, constraints, planned order, and explicit next steps.
@@ -881,7 +1009,7 @@ ${getModeInstruction(request.mode)}
 Project-specific tone guide:
 ${getProjectSpecificToneGuide(request)}
 
-MK VII Context Packet:
+Project Context Packet:
 ${limitText(contextPacketText, 5000)}
 
 Selected material payload, when provided:
@@ -1077,6 +1205,7 @@ export async function POST(request: Request) {
    const apiKey = process.env.OPENAI_API_KEY;
 
    const model = process.env.ALLEVIN_LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
+   const projectIntake = isProjectIntakeRequest(payload);
 
    if (!apiKey) {
       return NextResponse.json(buildFallbackResponse(payload, "Missing OPENAI_API_KEY. Using local fallback."), { status: 200 });
@@ -1091,8 +1220,14 @@ export async function POST(request: Request) {
          },
          body: JSON.stringify({
             model,
-            temperature: payload.mode === "aidock-guidance" || payload.mode === "material-interpretation" ? 0.42 : 0.35,
-            max_tokens: payload.mode === "project-guidance" ? Math.max(520, Math.min(1200, Math.round((payload.maxWords || 520) * 1.65))) : payload.mode === "material-interpretation" ? 620 : 420,
+            temperature: projectIntake ? 0.18 : payload.mode === "aidock-guidance" || payload.mode === "material-interpretation" ? 0.42 : 0.35,
+            max_tokens: projectIntake
+               ? Math.max(1500, Math.min(2400, Math.round((payload.maxWords || 1100) * 1.75)))
+               : payload.mode === "project-guidance"
+                 ? Math.max(520, Math.min(1200, Math.round((payload.maxWords || 520) * 1.65)))
+                 : payload.mode === "material-interpretation"
+                   ? 620
+                   : 420,
             response_format: { type: "json_object" },
             messages: buildOpenAIMessages(payload),
          }),
@@ -1114,7 +1249,7 @@ export async function POST(request: Request) {
 
       const parsed = parseLLMJson(content);
 
-      if (payload.mode === "project-guidance" && !projectGuidanceCandidatePassesBoundary(payload, parsed.focus || parsed.summary || parsed.usefulContext)) {
+      if (payload.mode === "project-guidance" && !projectIntake && !projectGuidanceCandidatePassesBoundary(payload, parsed.focus || parsed.summary || parsed.usefulContext)) {
          const groundedResponse = getProjectGuidanceGroundedResponse(payload);
          return NextResponse.json(
             sanitizeLLMResult({
@@ -1133,18 +1268,21 @@ export async function POST(request: Request) {
          );
       }
 
-      const result: AllevinLLMResponse = sanitizeLLMResult({
-         ok: true,
-         mode: payload.mode as AllevinLLMResponse["mode"],
-         source: payload.source,
-         title: sanitizeRouteTitle(parsed.title || getContextProjectTitle(payload)),
-         focus: sanitizeRouteSummary(parsed.focus || payload.focus || payload.rawContent || "Review the current project content."),
-         usefulContext: sanitizeRouteSummary(parsed.usefulContext || payload.usefulContext || `Source: ${payload.source}`),
-         nextStep: sanitizeRouteNextStep(parsed.nextStep || getContextNextAction(payload)),
-         summary: sanitizeRouteSummary(parsed.summary || parsed.focus || payload.focus || payload.rawContent || "Project summary unavailable."),
-         confidence: clampConfidence(parsed.confidence),
-         usedFallback: false,
-      });
+      const result: AllevinLLMResponse = sanitizeLLMResult(
+         {
+            ok: true,
+            mode: payload.mode as AllevinLLMResponse["mode"],
+            source: payload.source,
+            title: sanitizeRouteTitle(parsed.title || getContextProjectTitle(payload)),
+            focus: parsed.focus || payload.focus || payload.rawContent || "Review the current project content.",
+            usefulContext: parsed.usefulContext || payload.usefulContext || `Source: ${payload.source}`,
+            nextStep: parsed.nextStep || getContextNextAction(payload),
+            summary: parsed.summary || parsed.focus || payload.focus || payload.rawContent || "Project summary unavailable.",
+            confidence: clampConfidence(parsed.confidence),
+            usedFallback: false,
+         },
+         { projectIntake },
+      );
 
       return NextResponse.json(result);
    } catch {

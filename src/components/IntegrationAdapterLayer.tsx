@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { motion, AnimatePresence } from "framer-motion";
 
-import { Boxes, CheckCircle2, FileText, NotebookPen, Send, Sparkles, XCircle, CalendarDays, ListChecks, ChevronDown, FolderKanban, Flag, RotateCw } from "lucide-react";
+import { Boxes, FileText, NotebookPen, Send, Sparkles, XCircle, CalendarDays, ListChecks, ChevronDown, FolderKanban, Flag, RotateCw } from "lucide-react";
 
 import { useWorkspace } from "@/components/WorkspaceContext";
 
@@ -12,13 +12,15 @@ import { upsertProjectMemory, deleteProjectMemory } from "@/lib/allevinProjectMe
 
 import { interpretMaterialWithLLM, requestAllevinLLM } from "@/lib/allevinLLMClient";
 
+import { buildLocalProjectDraftGuide, buildProjectDraftGuide, renderProjectDraftGuide } from "@/lib/projectDraftIntelligence";
+
 import { rememberDeletedProjectMemorySignal } from "@/components/MemoryEngine";
 
 // ========================================
 // ALLEVIN Projects Workspace
 // Purpose:
-// MK VIII project home base.
-// Projects keeps each project, Working Notes, milestones, schedule, and materials together.
+// MK IX project home base.
+// Projects keeps each project, ALLEVIN's Guide, milestones, schedule, and materials together.
 // ALLEVIN turns a user's description into an editable project draft before it is saved.
 // ========================================
 
@@ -57,7 +59,7 @@ const PROJECT_MATERIAL_STORAGE_SAFE_LIMIT = 4500000;
 const APPROVED_INTERNAL_INTEGRATION_HANDLED_KEY = "allevin-approved-internal-integration-handled";
 
 // ========================================
-// MK VIII — Projects Sanitization Parameters
+// MK IX — Projects Sanitization Parameters
 // Projects should preserve saved work, but every stored/displayed field is untrusted.
 // ========================================
 
@@ -328,7 +330,7 @@ interface ProjectLibraryItem {
 
 type ProjectTrackingStatus = "idea" | "active" | "check" | "done";
 
-type ProjectMilestoneStatus = "waiting" | "active" | "needs-review" | "complete" | "archived";
+type ProjectMilestoneStatus = "waiting" | "active" | "needs-review" | "complete";
 
 interface ProjectMilestone {
    id: string;
@@ -347,11 +349,11 @@ interface ProjectMilestone {
    openQuestions: string[];
 
    // Hidden milestone intelligence. The Progress list stays light, while
-   // AIDock and the milestone workspace can reason from real dependencies,
-   // completion checks, and recorded evidence.
+   // AIDock and the milestone workspace can reason from real dependencies
+   // and the completion checks the user has explicitly confirmed.
    dependencies: string[];
    completionCriteria: string[];
-   completionEvidence: string[];
+   completedCriteria: string[];
 
    order: number;
    createdAt: number;
@@ -1435,7 +1437,22 @@ function makeProjectIntakeQuestion(value: string) {
    if (specMatch) return `What specifications should be used for ${specMatch[1].toLowerCase()}?`;
    if (/^(?:exact\s+)?(?:parts?|options?|tools?|vendors?|sources?|systems?|platforms?|methods?|approaches?)$/i.test(clean)) return `Which ${clean.toLowerCase()} should be chosen?`;
    if (/^(?:final\s+)?(?:budgets?|requirements?|dates?|owners?|locations?|limits?)$/i.test(clean)) return `What are the ${clean.toLowerCase()}?`;
-   return `What still needs to be decided about ${clean.charAt(0).toLowerCase()}${clean.slice(1)}?`;
+
+   const storyOrTheme = clean.match(/^(?:the\s+)?(?:main\s+|central\s+)?((?:story|theme|message)(?:\s+or\s+(?:story|theme|message))?)\s+of\s+(.+)$/i);
+   if (storyOrTheme) {
+      return `What ${storyOrTheme[1].toLowerCase()} should connect ${storyOrTheme[2].replace(/^the\s+/i, "the ")}?`;
+   }
+
+   if (/^(?:the\s+)?(?:final\s+)?(?:distribution|release|sharing|publication)\s+decision$/i.test(clean)) {
+      return "What would need to be true before the finished work is shared more widely?";
+   }
+
+   const decisionSubject = clean
+      .replace(/^(?:the\s+)?/i, "")
+      .replace(/\s+decision$/i, "")
+      .trim();
+
+   return decisionSubject ? `What decision is still open about ${decisionSubject.charAt(0).toLowerCase()}${decisionSubject.slice(1)}?` : "What decision is still open?";
 }
 
 function splitProjectDecisionItems(value: string) {
@@ -1458,10 +1475,15 @@ function extractProjectSuccessCriteria(description: string) {
       return uniqueProjectIntakeStatements(splitProjectDescriptionSentences(clean).filter(projectStatementIsSuccess), 5);
    }
 
-   const tail = clean.slice(match.index + match[0].length).split(/\n{2,}|\b(?:current situation|confirmed decisions|open questions|constraints|working notes|initial milestones|recommended starting point)\s*:/i)[0];
-   const criteria = splitProjectDescriptionSentences(tail)
-      .map((sentence) => stripProjectIntakeLead(sentence.replace(/^(?:success\s+)?(?:would\s+)?mean\s*/i, "").replace(/^(?:and|also)\s+/i, "")))
-      .filter((sentence) => sentence.length >= 10);
+   const tail = clean.slice(match.index + match[0].length).split(/\n{2,}|\b(?:current situation|confirmed decisions|open questions|constraints|working notes|allevin['’]s guide|initial milestones|recommended starting point)\s*:/i)[0];
+   const hasExplicitList = /(?:^|\n)\s*[-*•]\s+/.test(tail);
+   const sourceItems = hasExplicitList
+      ? tail
+           .split("\n")
+           .map((line) => line.replace(/^\s*[-*•]\s+/, ""))
+           .filter(Boolean)
+      : splitProjectDescriptionSentences(tail).slice(0, 1);
+   const criteria = sourceItems.map((sentence) => stripProjectIntakeLead(sentence.replace(/^(?:success\s+)?(?:would\s+)?mean\s*/i, "").replace(/^(?:and|also)\s+/i, ""))).filter((sentence) => sentence.length >= 10);
 
    return uniqueProjectIntakeStatements(criteria, 6);
 }
@@ -1539,10 +1561,14 @@ function normalizeConfirmedProjectDecision(value: string) {
 }
 
 function splitProjectQuestionList(value: string) {
-   const clean = cleanProjectIntakeStatement(value, 1600).replace(/\s+(?:or|and)\s+(?=(?:whether|which|what|how|where|who|when)\b)/gi, ", ");
+   const clean = cleanProjectIntakeStatement(value, 1600)
+      .replace(/\s+(?:or|and)\s+(?=(?:whether|which|what|how|where|who|when)\b)/gi, ", ")
+      .replace(/\s+and\s+(?=(?:the\s+)?(?:final\s+)?[a-z][a-z -]{2,60}\s+decision\b)/gi, ", ");
 
    const hasInterrogativeClauses = /\b(?:whether|how|what|which|where|who|when)\b/i.test(clean);
-   const parts = hasInterrogativeClauses ? clean.split(/,\s*(?=(?:whether|how|what|which|where|who|when)\b)|\s+and\s+(?=(?:whether|how|what|which|where|who|when)\b)/i) : clean.split(/,\s*|\s+and\s+/i);
+   const parts = hasInterrogativeClauses
+      ? clean.split(/,\s*(?=(?:whether|how|what|which|where|who|when)\b|(?:the\s+)?(?:final\s+)?[a-z][a-z -]{2,60}\s+decision\b)|\s+and\s+(?=(?:whether|how|what|which|where|who|when)\b)/i)
+      : clean.split(/,\s*|\s+and\s+/i);
 
    return parts.map((item) => normalizeProjectQuestionSubject(item)).filter((item) => item.length >= 4);
 }
@@ -1691,6 +1717,326 @@ function joinProjectLabels(labels: string[]) {
    if (values.length === 1) return values[0];
    if (values.length === 2) return `${values[0]} and ${values[1]}`;
    return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+}
+
+// ========================================
+// ALLEVIN MK IX — Project-specific intake intelligence
+// Purpose:
+// Read the user's actual project objects and dependency facets before a broad
+// reasoning profile is selected. A negated tool mention is not a project type,
+// and a hybrid project keeps its research, permissions, logistics, production,
+// and real-world testing dependencies in one plan.
+// ========================================
+
+interface ProjectFacetPlan {
+   milestones: string[];
+   workingNotes: string[];
+   constraints: string[];
+}
+
+function hasPositiveProjectSignal(source: string, pattern: RegExp) {
+   return splitProjectDescriptionSentences(source).some((statement) => {
+      const match = statement.match(pattern);
+
+      if (!match || typeof match.index !== "number") {
+         return false;
+      }
+
+      const beforeMatch = statement.slice(Math.max(0, match.index - 90), match.index);
+      const negated = /\b(?:not|never|no|without|avoid(?:ing)?|do not|don't|does not|doesn't|will not|won't|cannot|can't|is not|isn't|are not|aren't|not planning to|not going to)\b[\s\S]{0,80}$/i.test(beforeMatch);
+      const contrasted = /\b(?:rather than|instead of)\b[\s\S]{0,80}$/i.test(beforeMatch);
+
+      return !negated && !contrasted;
+   });
+}
+
+function singularizeProjectFacetLabel(value: string) {
+   const clean = value.trim().toLowerCase();
+
+   if (/ies$/.test(clean)) return clean.replace(/ies$/, "y");
+   if (/sses$/.test(clean)) return clean.replace(/es$/, "");
+   if (/s$/.test(clean) && !/ss$/.test(clean)) return clean.slice(0, -1);
+   return clean;
+}
+
+function getProjectObjectLabel(title: string, source: string) {
+   const commonObjects: Array<[RegExp, string]> = [
+      [/\btours?\b/i, "tour"],
+      [/\bguides?\b/i, "guide"],
+      [/\bbriefs?\b/i, "brief"],
+      [/\breports?\b/i, "report"],
+      [/\bbooks?\b/i, "book"],
+      [/\bprograms?\b/i, "program"],
+      [/\bpilots?\b/i, "pilot"],
+      [/\bevents?\b/i, "event"],
+      [/\barchives?\b/i, "archive"],
+      [/\bcollections?\b/i, "collection"],
+      [/\bworkspaces?\b/i, "workspace"],
+      [/\bservices?\b/i, "service"],
+      [/\bproducts?\b/i, "product"],
+      [/\bcampaigns?\b/i, "campaign"],
+      [/\bmanuscripts?\b/i, "manuscript"],
+      [/\bstories?\b/i, "story"],
+   ];
+
+   const cleanTitle = sanitizeProjectTitle(title);
+   const titleMatch = commonObjects.find(([pattern]) => pattern.test(cleanTitle));
+   if (titleMatch) return titleMatch[1];
+
+   const sourceMatch = commonObjects.find(([pattern]) => hasPositiveProjectSignal(source, pattern));
+   return sourceMatch?.[1] || "project";
+}
+
+function getProjectFacetItemLabel(source: string) {
+   const labels: Array<[RegExp, string]> = [
+      [/\bstops?\b/i, "stops"],
+      [/\blandmarks?\b/i, "landmarks"],
+      [/\bsites?\b/i, "sites"],
+      [/\blocations?\b/i, "locations"],
+      [/\bsections?\b/i, "sections"],
+      [/\bchapters?\b/i, "chapters"],
+      [/\bscenes?\b/i, "scenes"],
+      [/\bfeatures?\b/i, "features"],
+      [/\bcollections?\b/i, "collections"],
+      [/\bparticipants?\b/i, "participants"],
+      [/\boptions?\b/i, "options"],
+      [/\bitems?\b/i, "items"],
+   ];
+
+   return labels.find(([pattern]) => hasPositiveProjectSignal(source, pattern))?.[1] || "";
+}
+
+function getProjectFacetDeliverableLabels(source: string) {
+   const labels: Array<[RegExp, string]> = [
+      [/\bprintable booklet\b/i, "printable booklet"],
+      [/\bbooklet\b/i, "booklet"],
+      [/\bphone[- ]friendly pdf\b/i, "phone-friendly PDF"],
+      [/\bmobile[- ]friendly pdf\b/i, "mobile-friendly PDF"],
+      [/\bprint[- ]ready files?\b/i, "print-ready files"],
+      [/\bpdf\b/i, "PDF"],
+      [/\bprototype\b/i, "prototype"],
+      [/\bresearch brief\b/i, "research brief"],
+      [/\breport\b/i, "report"],
+      [/\bpresentation\b/i, "presentation"],
+      [/\bmanuscript\b/i, "manuscript"],
+      [/\bguide\b/i, "guide"],
+   ];
+
+   return uniqueProjectIntakeStatements(
+      labels.filter(([pattern]) => hasPositiveProjectSignal(source, pattern)).map(([, label]) => label),
+      3,
+   ).map((label) => label.replace(/^./, (character) => character.toLowerCase()));
+}
+
+function getProjectFacetMaterialLabels(source: string) {
+   const labels: Array<[RegExp, string]> = [
+      [/\bmaps?\b/i, "maps"],
+      [/\b(?:historical )?photographs?\b|\bphotos?\b/i, "photographs"],
+      [/\b(?:resident|stakeholder|participant|customer) conversations?\b|\bconversations?\s+with\s+(?:longtime\s+)?residents?\b|\binterviews?\b/i, "interviews"],
+      [/\bnewspaper archive\b|\blibrary archive\b|\barchive research\b/i, "archive research"],
+      [/\bsource notes?\b|\bresearch notes?\b/i, "research notes"],
+      [/\bdocuments?\b/i, "documents"],
+      [/\bscreenshots?\b/i, "screenshots"],
+      [/\breferences?\b/i, "references"],
+   ];
+
+   return labels
+      .filter(([pattern]) => pattern.test(source))
+      .map(([, label]) => label)
+      .filter((label, index, values) => values.indexOf(label) === index)
+      .slice(0, 4);
+}
+
+function getProjectFacetRightsLabels(source: string) {
+   const labels: Array<[RegExp, string]> = [
+      [/\b(?:images?|photographs?|photos?)\b/i, "images"],
+      [/\bmaps?\b/i, "maps"],
+      [/\bsensitive (?:stories?|details?|information)\b/i, "sensitive stories"],
+      [/\bparticipant (?:data|information)\b/i, "participant information"],
+      [/\bpersonal information\b/i, "personal information"],
+   ];
+
+   return labels
+      .filter(([pattern]) => pattern.test(source))
+      .map(([, label]) => label)
+      .filter((label, index, values) => values.indexOf(label) === index)
+      .slice(0, 3);
+}
+
+function joinProjectDisplayLabels(labels: string[]) {
+   const values = labels.map((label) => label.trim()).filter(Boolean);
+   if (!values.length) return "";
+   if (values.length === 1) return values[0];
+   if (values.length === 2) return `${values[0]} and ${values[1]}`;
+   return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+}
+
+function getProjectNarrativeFocus(source: string) {
+   const match = source.match(/\b(?:help|show|allow|enable)\s+(?:people|visitors|readers|users|participants|testers)\s+(?:to\s+)?understand\s+(.+?)(?:\s+through\b|[.!?]|$)/i);
+   const focus = cleanProjectIntakeStatement(match?.[1] || "", 180)
+      .replace(/[.!?]+$/, "")
+      .trim();
+   return focus ? `${focus.charAt(0).toLowerCase()}${focus.slice(1)}` : "";
+}
+
+function buildProjectFacetMilestones(title: string, source: string) {
+   const projectObject = getProjectObjectLabel(title, source);
+   const itemLabel = getProjectFacetItemLabel(source);
+   const deliverables = getProjectFacetDeliverableLabels(source);
+   const outputLabel = deliverables[0] || projectObject;
+   const rightsLabels = getProjectFacetRightsLabels(source);
+   const result: string[] = [];
+
+   const add = (value: string, supported: boolean) => {
+      if (!supported) return;
+      const clean = normalizeProjectCheckpoint(value);
+      if (clean && !result.some((item) => getProjectIntakeSemanticOverlap(item, clean) >= 0.72)) result.push(clean);
+   };
+
+   const storyNeed = /\b(?:main|central|clear)\s+(?:story|theme|message)\b|\bstory arc\b|\bnarrative thread\b|\bwhat .* will tell\b/i.test(source);
+   const evidenceNeed = /\b(?:historical claims?|traceable sources?|source records?|fact[- ]?check|verify|verified|unverified|evidence|citations?|archive research)\b/i.test(source);
+   const routeNeed = /\b(?:route|path|walking order|travel order)\b/i.test(source);
+   const accessOrSafetyNeed = /\b(?:safe|safety|accessible|accessibility|public sidewalks?|public spaces?|walked and checked)\b/i.test(source);
+   const rightsNeed = /\b(?:permission|permissions|rights|legally reproduce|attribution|consent|sensitive stories?|privacy)\b/i.test(source);
+   const contentNeed = /\b(?:stop text|visitor directions?|readable history|draft|write|copy|instructions?|manuscript|script|content)\b/i.test(source);
+   const deliverableNeed = deliverables.length > 0;
+   const testNeed = /\b(?:test|tested|pilot|walk and test|walked and checked|rehearse|feedback|real conditions|follow it without)\b/i.test(source);
+   const revisionNeed = /\b(?:revise|revision|private pilot|before any public release|share it more widely|distribution decision|public release)\b/i.test(source);
+   const facetCount = [storyNeed, Boolean(itemLabel), evidenceNeed, routeNeed, rightsNeed, contentNeed, deliverableNeed, testNeed, revisionNeed].filter(Boolean).length;
+
+   if (facetCount < 5) {
+      return [] as string[];
+   }
+
+   add(`Choose the story the ${projectObject} will tell`, storyNeed);
+   add(itemLabel && evidenceNeed ? `Select and verify the strongest ${itemLabel}` : itemLabel ? `Select the strongest ${itemLabel}` : `Verify the evidence behind the ${outputLabel}`, Boolean(itemLabel) || evidenceNeed);
+   add(routeNeed ? `Map a safe and accessible route` : "", routeNeed && accessOrSafetyNeed);
+   add(rightsLabels.length ? `Clear the ${joinProjectLabels(rightsLabels)}` : "Clear permissions, attribution, and sensitive material", rightsNeed);
+
+   if (contentNeed) {
+      if (/\bstops?\b/i.test(source) && /\b(?:visitor directions?|testers? can follow|follow it without|clear location|self-guided)\b/i.test(source)) {
+         add("Write the stop text and visitor directions", true);
+      } else if (itemLabel) {
+         add(`Draft the content for each ${singularizeProjectFacetLabel(itemLabel)}`, true);
+      } else {
+         add(`Draft the ${outputLabel}`, true);
+      }
+   }
+
+   if (deliverableNeed) {
+      add(`Build the ${joinProjectDisplayLabels(deliverables)}`, true);
+   }
+
+   if (testNeed) {
+      add(routeNeed && /\bwalk(?:ed|ing)?\b/i.test(source) ? `Walk and test the full ${projectObject}` : `Test the ${outputLabel} in real conditions`, true);
+   }
+
+   if (revisionNeed) {
+      add(/\bprivate pilot\b|\btested privately\b/i.test(source) ? `Revise the ${outputLabel} and prepare the private pilot` : `Revise the ${outputLabel} and decide what is ready to share`, true);
+   }
+
+   return result.length >= 5 ? result.slice(0, 8) : [];
+}
+
+function inferProjectBoundaryConstraints(title: string, description: string) {
+   const source = sanitizeProjectBody(description);
+   const projectObject = getProjectObjectLabel(title, source);
+   const constraints: string[] = [];
+   const add = (value?: string) => {
+      const clean = normalizeProjectCheckpoint(value || "");
+      if (clean && !constraints.some((item) => getProjectIntakeSemanticOverlap(item, clean) >= 0.72)) constraints.push(clean);
+   };
+
+   const numberWord = "(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)";
+   const range = new RegExp(`\\b(?:include|contain|cover|use)\\s+((?:${numberWord})\\s*(?:[-–]|to)\\s*(?:${numberWord})\\s+(?:stops?|items?|sections?|chapters?|locations?|sites?|participants?|features?))`, "i").exec(source);
+   if (range?.[1]) add(`Keep the first version to ${range[1]}`);
+
+   const distance = new RegExp(`\\b(?:stay|remain|be)\\s+(?:at\\s+or\\s+)?(?:under|below|within|no more than|at most)\\s+(${numberWord}\\s+(?:miles?|kilometers?|metres?|meters?|feet))`, "i").exec(source);
+   if (distance?.[1]) add(`Keep the ${/\\broute\\b/i.test(source) ? "route" : projectObject} under ${distance[1]}`);
+
+   const duration = new RegExp(`\\b(?:take|last|run)\\s+(?:no more than|under|below|within|up to|at most)\\s+(${numberWord}\\s+(?:minutes?|hours?))`, "i").exec(source);
+   if (duration?.[1]) add(`Keep the full ${projectObject} to no more than ${duration[1]}`);
+
+   const publicRoute = source.match(/\broute\s+(?:should|must|will)\s+remain\s+on\s+([^.!?]+)/i);
+   if (publicRoute?.[1]) add(`Keep the route on ${publicRoute[1].replace(/\s+and\s+be[\s\S]*$/i, "").trim()}`);
+
+   const budget =
+      source.match(/\b(?:budget|spending|costs?)\s+(?:will|should|must)?\s*(?:stay|remain|be)?\s*(?:at\s+or\s+)?(?:under|below|within|no more than|at most)\s+(\$[\d,]+(?:\.\d{1,2})?)/i) ||
+      source.match(/\bkeep\s+(?:the\s+)?(?:first[- ]phase\s+)?budget\s+(?:at\s+or\s+)?(?:under|below|within)\s+(\$[\d,]+(?:\.\d{1,2})?)/i);
+   if (budget?.[1]) add(`Keep first-phase spending at or below ${budget[1]}`);
+
+   const timeline = new RegExp(`\\b(${numberWord})[- ](day|week|month)\\s+timeline\\b`, "i").exec(source);
+   if (timeline?.[1] && timeline?.[2]) add(`Complete the first phase within ${timeline[1]} ${timeline[2]}${/^one$/i.test(timeline[1]) ? "" : "s"}`);
+
+   const deliverables = getProjectFacetDeliverableLabels(source);
+   if (deliverables.length >= 2) add(`Deliver both a ${deliverables[0]} and a ${deliverables[1]}`);
+
+   const excludedDigitalBuild = source.match(/\b(?:not planning to|do not plan to|don't plan to|will not|won't|do not want to|don't want to)\s+(?:build|create|make|add)\s+(?:an?\s+)?((?:app|website)(?:\s+or\s+(?:an?\s+)?(?:app|website))?)/i);
+   if (excludedDigitalBuild?.[1]) {
+      const excluded = excludedDigitalBuild[1].replace(/\ban\s+/gi, "").trim();
+      add(`Do not add ${/^app\b/i.test(excluded) ? `an ${excluded}` : excluded} to the first phase`);
+   }
+
+   if (/\b(?:tested privately|private pilot)\b/i.test(source) && /\b(?:before any public release|before .* public|share it more widely)\b/i.test(source)) {
+      add("Keep the first test private before any wider release");
+   }
+
+   return uniqueProjectIntakeStatements(constraints, 10);
+}
+
+function inferProjectLeadWorkingNotes(title: string, description: string) {
+   const source = sanitizeProjectBody(description);
+   const projectObject = getProjectObjectLabel(title, source);
+   const itemLabel = getProjectFacetItemLabel(source);
+   const materialLabels = getProjectFacetMaterialLabels(source);
+   const deliverables = getProjectFacetDeliverableLabels(source);
+   const notes: string[] = [];
+   const add = (value?: string) => {
+      const clean = makeProjectWorkingNoteReadable(value || "");
+      if (clean && !notes.some((item) => getProjectIntakeSemanticOverlap(item, clean) >= 0.68)) notes.push(clean);
+   };
+
+   if (materialLabels.length >= 2 && itemLabel) {
+      add(`Organize the existing ${joinProjectLabels(materialLabels)} around possible ${itemLabel} before drafting`);
+   }
+
+   if (/\b(?:historical claims?|claims?|facts?)\b/i.test(source) && /\b(?:traceable sources?|verified|unverified|fact[- ]?check|evidence)\b/i.test(source)) {
+      add("Give every factual claim a traceable source and label material that cannot be independently verified");
+   }
+
+   const narrativeFocus = getProjectNarrativeFocus(source);
+   if (narrativeFocus && itemLabel) {
+      add(`Use the central idea—${narrativeFocus}—as the test for whether a ${singularizeProjectFacetLabel(itemLabel)} belongs in the first version`);
+   }
+
+   const eachItem = source.match(/\bEach\s+([a-z][a-z-]*)\s+should\s+have\s+(.+?)(?:[.!?]|$)/i);
+   if (eachItem?.[1] && eachItem?.[2]) {
+      add(`Keep each ${eachItem[1].toLowerCase()} focused on ${eachItem[2].replace(/^a\s+/i, "one ")}`);
+   }
+
+   if (deliverables.length >= 2 && /\b(?:printed again|without rebuilding|single source|same source|reusable files?)\b/i.test(source)) {
+      add("Create every delivery format from one approved source so revisions only need to be made once");
+   }
+
+   if (/\b(?:private pilot|tested privately)\b/i.test(source)) {
+      add(`Treat the first version as a private pilot; wider distribution stays a later decision for the ${projectObject}`);
+   }
+
+   if (/\b(?:not planning to|do not plan to|don't plan to|will not|won't)\s+(?:build|create|make|add)\s+(?:an?\s+)?(?:app|website)/i.test(source)) {
+      add("Keep the first phase focused on the stated deliverables rather than adding an app or website");
+   }
+
+   return uniqueProjectIntakeStatements(notes, 7);
+}
+
+function normalizeProjectSituationStatement(value: string) {
+   const clean = cleanProjectIntakeStatement(value, 360);
+
+   if (/^Nothing has been finalized beyond\b/i.test(clean)) {
+      return "Most of the project is not finalized yet";
+   }
+
+   return clean;
 }
 
 function isEventProjectIntake(description: string) {
@@ -1854,7 +2200,7 @@ function inferProjectDraftSituation(description: string) {
    return uniqueProjectIntakeStatements(
       splitProjectDescriptionSentences(description)
          .filter((statement) => projectStatementIsCurrentFact(statement) && !projectStatementIsSuccess(statement))
-         .map((statement) => cleanProjectIntakeStatement(statement, 360)),
+         .map((statement) => normalizeProjectSituationStatement(statement)),
       6,
    );
 }
@@ -1911,6 +2257,20 @@ function inferExplicitProjectCommitments(description: string) {
          .replace(/[.!?]+$/, "")
          .trim();
       if (!clean) continue;
+
+      const firstVersionCommitment = clean.match(/^(?:the\s+)?(?:first|initial)\s+(?:version|phase|release|pilot)\s+(?:will|must|should)\s+(.+)$/i);
+      if (firstVersionCommitment && !/\b(?:probably|may|might|could|considering)\b/i.test(clean)) {
+         const clauses = firstVersionCommitment[1]
+            .replace(/,\s+and\s+/gi, ", ")
+            .split(/,\s*(?=(?:include|contain|cover|support|stay|remain|take|last|run|be|use|exclude|avoid)\b)|\s+and\s+(?=(?:include|contain|cover|support|stay|remain|take|last|run|be|use|exclude|avoid)\b)/i)
+            .map((clause) => clause.trim())
+            .filter(Boolean);
+
+         clauses.forEach((clause) => {
+            const normalizedClause = clause.replace(/^and\s+/i, "").trim();
+            if (normalizedClause) commitments.push(`The first version will ${normalizedClause}`);
+         });
+      }
 
       const decided = clean.match(/^(?:i|we)\s+(?:have|had)\s+(?:already\s+)?decided\s+that\s+(.+)$/i);
       if (decided) {
@@ -2202,44 +2562,48 @@ function normalizeProjectConstraint(value: string) {
    return `${clean.charAt(0).toUpperCase()}${clean.slice(1)}`;
 }
 
-function inferProjectDraftConstraints(description: string, decisions: string[]) {
+function inferProjectDraftConstraints(title: string, description: string, decisions: string[]) {
    const decisionKeys = new Set(decisions.map(getProjectIntakeStatementKey));
+   const boundaryConstraints = inferProjectBoundaryConstraints(title, description);
 
    return uniqueProjectIntakeStatements(
-      splitProjectDescriptionSentences(description)
-         .filter(
-            (statement) =>
-               projectStatementIsConstraint(statement) &&
-               !projectStatementIsCurrentFact(statement) &&
-               !projectStatementIsGoal(statement) &&
-               !isProjectResourceGap(statement) &&
-               !projectStatementIsUncertain(statement) &&
-               !projectStatementIsSuccess(statement) &&
-               !/\b(?:need|needs)\s+to\s+(?:understand|confirm|know|determine|verify|find out)\b/i.test(statement) &&
-               !/\b(?:do|does)\s+not\s+know\s+(?:whether|how|what|which|where|who|when)\b/i.test(statement) &&
-               !/\b(?:are|remain)\s+(?:still\s+)?unresolved\b/i.test(statement) &&
-               !/\bmay\s+need\s+to\s+cover\b/i.test(statement),
-         )
-         .map(normalizeProjectConstraint)
-         .filter((statement) => {
-            if (!statement) return false;
-            const key = getProjectIntakeStatementKey(statement);
-            if (decisionKeys.has(key)) return false;
-            const tokens = new Set(key.split(/\s+/).filter((token) => token.length > 2));
-            return !decisions.some((decision) => {
-               const decisionTokens = new Set(
-                  getProjectIntakeStatementKey(decision)
-                     .split(/\s+/)
-                     .filter((token) => token.length > 2),
-               );
-               let shared = 0;
-               tokens.forEach((token) => {
-                  if (decisionTokens.has(token)) shared += 1;
+      [
+         ...boundaryConstraints,
+         ...splitProjectDescriptionSentences(description)
+            .filter(
+               (statement) =>
+                  projectStatementIsConstraint(statement) &&
+                  !projectStatementIsCurrentFact(statement) &&
+                  !projectStatementIsGoal(statement) &&
+                  !isProjectResourceGap(statement) &&
+                  !projectStatementIsUncertain(statement) &&
+                  !projectStatementIsSuccess(statement) &&
+                  !/\b(?:need|needs)\s+to\s+(?:understand|confirm|know|determine|verify|find out)\b/i.test(statement) &&
+                  !/\b(?:do|does)\s+not\s+know\s+(?:whether|how|what|which|where|who|when)\b/i.test(statement) &&
+                  !/\b(?:are|remain)\s+(?:still\s+)?unresolved\b/i.test(statement) &&
+                  !/\bmay\s+need\s+to\s+cover\b/i.test(statement),
+            )
+            .map(normalizeProjectConstraint)
+            .filter((statement) => {
+               if (!statement) return false;
+               const key = getProjectIntakeStatementKey(statement);
+               if (decisionKeys.has(key)) return false;
+               const tokens = new Set(key.split(/\s+/).filter((token) => token.length > 2));
+               return !decisions.some((decision) => {
+                  const decisionTokens = new Set(
+                     getProjectIntakeStatementKey(decision)
+                        .split(/\s+/)
+                        .filter((token) => token.length > 2),
+                  );
+                  let shared = 0;
+                  tokens.forEach((token) => {
+                     if (decisionTokens.has(token)) shared += 1;
+                  });
+                  return tokens.size > 0 && decisionTokens.size > 0 && shared / Math.min(tokens.size, decisionTokens.size) >= 0.65;
                });
-               return tokens.size > 0 && decisionTokens.size > 0 && shared / Math.min(tokens.size, decisionTokens.size) >= 0.65;
-            });
-         }),
-      6,
+            }),
+      ],
+      10,
    );
 }
 
@@ -2386,7 +2750,7 @@ function getHumanCoordinationMilestones(source: string): HumanCoordinationMilest
    };
 }
 
-function extractProjectDescriptionMilestones(description?: string, openQuestions: string[] = []) {
+function extractProjectDescriptionMilestones(title: string, description?: string, openQuestions: string[] = []) {
    const cleanDescription = sanitizeProjectBody(description);
    const source = [cleanDescription, ...openQuestions].join("\n");
    const result: string[] = [];
@@ -2432,7 +2796,7 @@ function extractProjectDescriptionMilestones(description?: string, openQuestions
       add("Finalize the movie, seating, communication, and cleanup plan", eventPlanNeed || workflowNeed);
       add("Run the event and review what to change", validationNeed || true);
    } else if (physicalWorkspace) {
-      add("Choose the first projects the workspace must support", firstUseNeed || scopeNeed);
+      add("Define what the first version must support", firstUseNeed || scopeNeed);
       const safetyLabels: string[] = [];
       if (has(/\b(?:electrical|power|outlets?)\b/i)) safetyLabels.push("power");
       if (has(/\blighting\b/i)) safetyLabels.push("lighting");
@@ -2459,14 +2823,22 @@ function extractProjectDescriptionMilestones(description?: string, openQuestions
       const reviewOrIdentificationNeed = has(/\b(?:identify unknown|unknown people|unknown items|review with|family review|stakeholder review|collect their input|annotations?|fact checking|resolve unknown)\b/i);
       const qualityStandardNeed = has(/\b(?:quality standard|useful quality|resolution|scanning standard|capture standard|editing should be limited|acceptance criteria|professional(?:ly)? scanned|specialist handling)\b/i);
       const secondaryDeliverableNeed = has(/\b(?:printed book|memory book|report|presentation|exhibit|portfolio|publication|shareable version|final deliverable)\b/i);
-      const softwareProject = has(/\b(?:software|app|website|web application|browser[- ]based|api|codebase|database|user flow|frontend|backend)\b/i);
+      const softwareProject = hasPositiveProjectSignal(source, /\b(?:software|app|website|web application|browser[- ]based|api|codebase|database|user flow|frontend|backend)\b/i);
       const participantProgramProject = isParticipantProgramProjectIntake(source);
-      const explicitResearchArtifact = has(/\b(?:research question|research brief|literature review|evidence review|credible sources?|citations?|bibliography|research findings?|field observations?|research interviews?)\b/i);
-      const structuredResearchStudy = has(/\b(?:study design|data collection plan|research methods?|hypothesis|sample size|control group|analysis plan)\b/i) && has(/\b(?:research|study|findings?|data|evidence)\b/i);
-      const researchDeliverablePair = has(/\b(?:research paper|research report|evidence report|literature review|source-based brief|research findings report)\b/i);
+      const explicitResearchArtifact = hasPositiveProjectSignal(source, /\b(?:research question|research brief|literature review|evidence review|credible sources?|citations?|bibliography|research findings?|field observations?|research interviews?)\b/i);
+      const structuredResearchStudy =
+         hasPositiveProjectSignal(source, /\b(?:study design|data collection plan|research methods?|hypothesis|sample size|control group|analysis plan)\b/i) && hasPositiveProjectSignal(source, /\b(?:research|study|findings?|data|evidence)\b/i);
+      const researchDeliverablePair = hasPositiveProjectSignal(source, /\b(?:research paper|research report|evidence report|literature review|source-based brief|research findings report)\b/i);
       const researchProject = !participantProgramProject && !has(/\b(?:not|without)\b.{0,28}\b(?:research study|complicated research|formal study)\b/i) && (explicitResearchArtifact || structuredResearchStudy || researchDeliverablePair);
-      const narrativeProject = has(/\b(?:story|novel|short story|picture book|children['’]s book|screenplay|script|comic|graphic novel|characters?|plot|story arc|ending|manuscript)\b/i) && !researchProject;
-      const writingProject = (narrativeProject || has(/\b(?:article|essay|newsletter|copywriting|manuscript|draft|write|writing|book)\b/i)) && !collectionOrCatalogProject && !researchProject;
+      const explicitNarrativeArtifact = hasPositiveProjectSignal(source, /\b(?:novel|short story|picture book|children['’]s book|screenplay|script|comic|graphic novel|manuscript)\b/i);
+      const structuredNarrativeWork =
+         hasPositiveProjectSignal(source, /\b(?:story|narrative)\b/i) &&
+         hasPositiveProjectSignal(source, /\b(?:characters?|plot|story arc|ending|emotional progression)\b/i) &&
+         hasPositiveProjectSignal(source, /\b(?:draft|write|revise|illustrate|publish)\b/i);
+      const narrativeProject = !researchProject && (explicitNarrativeArtifact || structuredNarrativeWork);
+      const explicitWritingArtifact = hasPositiveProjectSignal(source, /\b(?:article|essay|newsletter|copywriting|manuscript|draft|write|writing)\b/i);
+      const bookWritingArtifact = hasPositiveProjectSignal(source, /\b(?:write|draft|publish|author|create)\b.{0,40}\bbook\b|\bbook\b.{0,30}\b(?:manuscript|chapters?|author|publication)\b/i);
+      const writingProject = (narrativeProject || explicitWritingArtifact || bookWritingArtifact) && !collectionOrCatalogProject && !researchProject;
       const illustratedNarrativeProject = narrativeProject && has(/\b(?:illustrated|illustrations?|artwork|visual style|character sketches?|page layouts?|picture[- ]book|page-by-page|spreads?)\b/i);
       const storyStructureNeed = narrativeProject && has(/\b(?:story structure|story arc|plot|tension|ending|character change|emotional progression|what finally helps|how .* changes?)\b/i);
       const pageFlowNeed = narrativeProject && has(/\b(?:page-by-page|page plan|page range|picture[- ]book format|spreads?|24-to-32-page|24 to 32 page)\b/i);
@@ -2500,6 +2872,11 @@ function extractProjectDescriptionMilestones(description?: string, openQuestions
       const transitionExecutionNeed = has(/\b(?:move|relocat|transition|switch|change over|cut over|handoff|first day|first week|go live)\b/i);
       const coordinationLanguage = getHumanCoordinationMilestones(source);
       const explicitFirstSet = has(/\b(?:first|priority|initial|pilot|sample|meaningful)\s+(?:collection|set|batch|group|case|segment|folder|archive|records?|materials?|items?)\b|\bfocus\s+on\s+one\b/i);
+      const facetMilestones = buildProjectFacetMilestones(title, source);
+
+      if (facetMilestones.length && !participantProgramProject && !collectionOrCatalogProject && !researchProject && !narrativeProject && !softwareProject && !serviceOrProgramProject) {
+         return facetMilestones;
+      }
 
       if (participantProgramProject) {
          const programLabel = has(/\bpilot\b/i) ? "pilot" : "program";
@@ -2644,8 +3021,8 @@ function extractProjectDescriptionMilestones(description?: string, openQuestions
    return result.slice(0, 8);
 }
 
-function buildDependencyAwareMilestones(description: string, openQuestions: string[], constraints: string[]) {
-   const result = extractProjectDescriptionMilestones(description, openQuestions);
+function buildDependencyAwareMilestones(title: string, description: string, openQuestions: string[], constraints: string[]) {
+   const result = extractProjectDescriptionMilestones(title, description, openQuestions);
    if (result.length) return result;
 
    const clean = sanitizeProjectBody([description, ...openQuestions, ...constraints].join("\n"));
@@ -2664,7 +3041,7 @@ function buildDependencyAwareMilestones(description: string, openQuestions: stri
    return ["Define the finished outcome and the first dependency", "Create the smallest usable version", "Validate it against the success criteria"];
 }
 
-function inferSeniorProjectStartingPoint(milestones: string[], openQuestions: string[], constraints: string[], llmNextStep?: string) {
+function inferSeniorProjectStartingPoint(title: string, description: string, milestones: string[], openQuestions: string[], constraints: string[], llmNextStep?: string) {
    const first = milestones[0] || "Define the finished outcome and first dependency";
    const cleanLLMNextStep = sanitizeProjectNextStep(llmNextStep);
 
@@ -2672,7 +3049,17 @@ function inferSeniorProjectStartingPoint(milestones: string[], openQuestions: st
       return cleanLLMNextStep;
    }
 
-   let reason = "It resolves the earliest dependency the later work relies on.";
+   const source = sanitizeProjectBody(description);
+   const projectObject = getProjectObjectLabel(title, source);
+   const itemLabel = getProjectFacetItemLabel(source);
+   const narrativeFocus = getProjectNarrativeFocus(source);
+
+   if (/\b(?:story|theme|central message|narrative)\b/i.test(first) && itemLabel) {
+      const focus = narrativeFocus || `the central idea this ${projectObject} should communicate`;
+      return `Start by writing one sentence that explains ${focus}. Use that sentence to sort the possible ${itemLabel} into those that support the story and those that do not belong in the first version.`;
+   }
+
+   let reason = "It gives the rest of the project a clear starting point and reduces avoidable rework.";
    if (/\b(?:choose|select)\b.{0,40}\b(?:first|priority|initial)\b.{0,40}\b(?:collection|set|batch|sample|case|group)\b|\binventory\b.{0,30}\b(?:first|priority|initial)\b/i.test(first)) {
       reason = "One bounded starting set reveals the real volume, condition, information gaps, access needs, and workflow demands before the project scales.";
    } else if (/\b(?:move timeline|lease deadlines?)\b/i.test(first)) {
@@ -2712,7 +3099,7 @@ function makeProjectWorkingNoteReadable(value: string) {
       .trim();
    if (!clean || /^(?:for|about|regarding)\s+.{1,80}$/i.test(clean)) return "";
    if (/\b(?:are|remain)\s+(?:still\s+)?unresolved$/i.test(clean)) return "";
-   if (/^Nothing has been (?:booked|purchased|installed|started)/i.test(clean)) return "";
+   if (/^Nothing has been (?:booked|purchased|installed|started|finalized)/i.test(clean)) return "";
 
    const priorityShift = clean.match(/\bbut\s+(?:i|we)\s+(?:probably\s+)?(?:should|need\s+to|must)\s+(.+)$/i);
    if (priorityShift) {
@@ -2750,17 +3137,21 @@ function renderProjectDraftItems(items: string[], fallback: string) {
    return items.length ? items.map((item) => `- ${item.replace(/[.!?]+$/, "")}`).join("\n") : fallback;
 }
 
-function buildDetailedProjectDraft({ title, description, llmSummary, llmUsefulContext, llmNextStep }: { title: string; description: string; llmSummary?: string; llmUsefulContext?: string; llmNextStep?: string }) {
+function buildLegacyDetailedProjectDraft({ title, description, llmSummary, llmUsefulContext, llmNextStep }: { title: string; description: string; llmSummary?: string; llmUsefulContext?: string; llmNextStep?: string }) {
    const goal = inferProjectDraftGoal(title, description);
    const success = inferProjectDraftSuccess(description);
    const situation = inferProjectDraftSituation(description);
    const decisions = inferProjectDraftDecisions(description);
    const openQuestions = inferProjectDraftOpenQuestions(description);
-   const constraints = inferProjectDraftConstraints(description, decisions);
-   const milestones = buildDependencyAwareMilestones(description, openQuestions, constraints);
-   const startingPoint = inferSeniorProjectStartingPoint(milestones, openQuestions, constraints, llmNextStep);
+   const constraints = inferProjectDraftConstraints(title, description, decisions);
+   const milestones = buildDependencyAwareMilestones(title, description, openQuestions, constraints);
+   const startingPoint = inferSeniorProjectStartingPoint(title, description, milestones, openQuestions, constraints, llmNextStep);
    const workingAssumptions = uniqueProjectIntakeStatements([...inferEventProjectWorkingAssumptions(description), ...inferGeneralProjectWorkingAssumptions(description)], 6);
-   const workingNotes = inferProjectWorkingNotes(description, [goal, ...success, ...situation, ...decisions, ...openQuestions, ...constraints, ...milestones, ...workingAssumptions]);
+   const leadWorkingNotes = inferProjectLeadWorkingNotes(title, description);
+   const workingNotes = uniqueProjectIntakeStatements(
+      [...leadWorkingNotes, ...inferProjectWorkingNotes(description, [goal, ...success, ...situation, ...decisions, ...openQuestions, ...constraints, ...milestones, ...workingAssumptions, ...leadWorkingNotes])],
+      8,
+   );
 
    const structuredSections = [goal, ...success, ...situation, ...decisions, ...openQuestions, ...constraints, ...milestones, ...workingAssumptions, ...workingNotes];
    const modelNotes = uniqueProjectIntakeStatements(
@@ -2794,7 +3185,7 @@ ${renderProjectDraftItems(openQuestions, "None identified yet.")}
 Constraints:
 ${renderProjectDraftItems(constraints, "None confirmed yet.")}
 
-Working Notes:
+ALLEVIN's Guide:
 ${renderProjectDraftItems([...workingAssumptions, ...workingNotes, ...modelNotes].slice(0, 8), "- Add useful details as the project develops")}
 
 Initial Milestones:
@@ -2830,7 +3221,7 @@ function getProjectMilestoneCandidates(project: ProjectLibraryItem) {
       .split("\n")
       .map((line) => sanitizeProjectTitle(line.replace(/^\s*(?:[-*•]|\d+[.)]|[☐☑✓○])\s*/, "")))
       .filter((line) => line && !/^(add|write|describe|list)\b/i.test(line))
-      .slice(0, 6);
+      .slice(0, 10);
 
    if (candidates.length) {
       return candidates;
@@ -3548,15 +3939,34 @@ function getMilestoneDefaultStartingPrompt(title: string) {
 }
 
 function getMilestoneStatus(value: any, completed = false): ProjectMilestoneStatus {
-   if (value === "waiting" || value === "active" || value === "needs-review" || value === "complete" || value === "archived") {
+   if (value === "waiting" || value === "active" || value === "needs-review" || value === "complete") {
       return value;
+   }
+
+   // MK IX migration: archived milestones return to the normal roadmap.
+   // Saved work is preserved, but the milestone becomes available to reopen.
+   if (value === "archived") {
+      return completed ? "complete" : "waiting";
    }
 
    return completed ? "complete" : "waiting";
 }
 
-function milestoneHasSavedWork(milestone: ProjectMilestone) {
-   return Boolean(sanitizeProjectBody(milestone.workingContent) || milestone.decisions.length || milestone.openQuestions.length || milestone.completionEvidence.length);
+function ensureProjectQuestionMark(value?: string) {
+   const clean = sanitizeProjectSummary(value)
+      .replace(/[.!?]+$/, "")
+      .trim();
+   return clean ? `${clean}?` : "";
+}
+
+function reconcileCompletedCriteria(criteria: string[], completedValues: string[], legacyEvidence: string[] = [], milestoneComplete = false) {
+   if (milestoneComplete && !completedValues.length) {
+      return [...criteria];
+   }
+
+   const candidates = [...completedValues, ...legacyEvidence].map((value) => sanitizeProjectSummary(value)).filter(Boolean);
+
+   return criteria.filter((criterion) => candidates.some((candidate) => normalizeProjectMatchValue(candidate) === normalizeProjectMatchValue(criterion) || getProjectIntakeSemanticOverlap(candidate, criterion) >= 0.58));
 }
 
 function getDefaultProjectMilestones(project: ProjectLibraryItem): ProjectMilestone[] {
@@ -3576,10 +3986,10 @@ function getDefaultProjectMilestones(project: ProjectLibraryItem): ProjectMilest
          startingPrompt: metadata.startingPrompt,
          workingContent: "",
          decisions: metadata.decisions,
-         openQuestions: metadata.openQuestions,
+         openQuestions: metadata.openQuestions.map(ensureProjectQuestionMark).filter(Boolean),
          dependencies: metadata.dependencies,
          completionCriteria: metadata.completionCriteria,
-         completionEvidence: [],
+         completedCriteria: [],
          order: index + 1,
          createdAt: now,
          updatedAt: now,
@@ -3607,6 +4017,36 @@ function sanitizeProjectMilestones(value: unknown, project: ProjectLibraryItem):
          const status = getMilestoneStatus(item.status, completed);
          const metadata = buildGeneratedProjectMilestoneMetadata(project, title, index, rawTitles);
 
+         const openQuestions = uniqueProjectIntakeStatements(
+            [...getScopedMilestoneQuestions(title, Array.isArray(item.openQuestions) ? item.openQuestions.map((entry: unknown) => sanitizeProjectSummary(String(entry))) : []), ...metadata.openQuestions],
+            40,
+         )
+            .map(ensureProjectQuestionMark)
+            .filter(Boolean);
+
+         const completionCriteria = Array.isArray(item.completionCriteria)
+            ? uniqueProjectIntakeStatements(
+                 [
+                    ...item.completionCriteria
+                       .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
+                       .filter((entry: string) => {
+                          if (!isGeneratedProjectCriterionCompatible(title, entry)) return false;
+                          if (!/^A supported answer is recorded for:/i.test(entry)) return true;
+                          return metadata.completionCriteria.some((criterion) => getProjectIntakeSemanticOverlap(criterion, entry) >= 0.72);
+                       }),
+                    ...metadata.completionCriteria,
+                 ],
+                 40,
+              )
+            : metadata.completionCriteria;
+
+         const completedCriteria = reconcileCompletedCriteria(
+            completionCriteria,
+            Array.isArray(item.completedCriteria) ? item.completedCriteria.map((entry: unknown) => sanitizeProjectSummary(String(entry))).filter(Boolean) : [],
+            Array.isArray(item.completionEvidence) ? item.completionEvidence.map((entry: unknown) => sanitizeProjectSummary(String(entry))).filter(Boolean) : [],
+            status === "complete",
+         );
+
          return {
             id: sanitizeProjectPlainText(item.id, 180) || createProjectMilestoneId(project.id, title, index),
             title,
@@ -3618,40 +4058,10 @@ function sanitizeProjectMilestones(value: unknown, project: ProjectLibraryItem):
             startingPrompt: sanitizeProjectSummary(item.startingPrompt) || metadata.startingPrompt,
             workingContent: sanitizeProjectBody(item.workingContent),
             decisions: Array.isArray(item.decisions) ? uniqueProjectIntakeStatements([...item.decisions.map((entry: unknown) => sanitizeProjectSummary(String(entry))), ...metadata.decisions], 40) : metadata.decisions,
-            openQuestions: Array.isArray(item.openQuestions)
-               ? uniqueProjectIntakeStatements(
-                    [
-                       ...getScopedMilestoneQuestions(
-                          title,
-                          item.openQuestions.map((entry: unknown) => sanitizeProjectSummary(String(entry))),
-                       ),
-                       ...metadata.openQuestions,
-                    ],
-                    40,
-                 )
-               : metadata.openQuestions,
+            openQuestions,
             dependencies: Array.isArray(item.dependencies) ? uniqueProjectIntakeStatements([...item.dependencies.map((entry: unknown) => sanitizeProjectSummary(String(entry))), ...metadata.dependencies], 16) : metadata.dependencies,
-            completionCriteria: Array.isArray(item.completionCriteria)
-               ? uniqueProjectIntakeStatements(
-                    [
-                       ...item.completionCriteria
-                          .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
-                          .filter((entry: string) => {
-                             if (!isGeneratedProjectCriterionCompatible(title, entry)) return false;
-                             if (!/^A supported answer is recorded for:/i.test(entry)) return true;
-                             return metadata.completionCriteria.some((criterion) => getProjectIntakeSemanticOverlap(criterion, entry) >= 0.72);
-                          }),
-                       ...metadata.completionCriteria,
-                    ],
-                    40,
-                 )
-               : metadata.completionCriteria,
-            completionEvidence: Array.isArray(item.completionEvidence)
-               ? item.completionEvidence
-                    .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
-                    .filter(Boolean)
-                    .slice(0, 40)
-               : [],
+            completionCriteria,
+            completedCriteria,
             order: typeof item.order === "number" && Number.isFinite(item.order) ? Math.max(1, Math.floor(item.order)) : index + 1,
             createdAt: isValidProjectTimestamp(item.createdAt) ? Number(item.createdAt) : now,
             updatedAt: isValidProjectTimestamp(item.updatedAt) ? Number(item.updatedAt) : now,
@@ -3668,7 +4078,7 @@ function sanitizeProjectMilestones(value: unknown, project: ProjectLibraryItem):
 
    const activeExists = milestones.some((item) => item.status === "active");
    if (!activeExists) {
-      const firstOpenIndex = milestones.findIndex((item) => item.status !== "complete" && item.status !== "archived");
+      const firstOpenIndex = milestones.findIndex((item) => item.status !== "complete");
       if (firstOpenIndex >= 0) {
          milestones[firstOpenIndex] = { ...milestones[firstOpenIndex], status: "active" };
       }
@@ -4925,7 +5335,7 @@ export default function IntegrationAdapterLayer() {
 
    const [calendarRevision, setCalendarRevision] = useState(0);
 
-   const [workingNotesDraft, setWorkingNotesDraft] = useState("");
+   const [allevinGuideDraft, setAllevinGuideDraft] = useState("");
 
    const [newMilestoneTitle, setNewMilestoneTitle] = useState("");
 
@@ -4985,6 +5395,35 @@ export default function IntegrationAdapterLayer() {
       }
 
       return `${cleanValue.slice(0, limit).trim()}...`;
+   }
+
+   // ========================================
+   // ALLEVIN MK IX — Project Library Summary
+   // Purpose:
+   // Keep the project selector useful and calm by showing the governing goal
+   // instead of a compressed copy of the full generated project document.
+   // ========================================
+   function getProjectLibrarySummary(project?: ProjectLibraryItem | null, limit = 190) {
+      if (!project) {
+         return "Choose a saved project to open its workspace.";
+      }
+
+      const projectBody = sanitizeProjectBody(project.notes[0]?.body || project.latestSummary);
+      const projectGoal = sanitizeProjectSummary(getStructuredProjectSection(projectBody, ["Project Goal", "Goal", "Main Goal", "Objective"]))
+         .split("\n")
+         .map((line) => sanitizeProjectSummary(line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "")))
+         .filter(Boolean)[0];
+
+      if (projectGoal) {
+         return getShortPreview(projectGoal, limit);
+      }
+
+      const summary = sanitizeProjectSummary(project.latestSummary)
+         .replace(/^(?:Project Goal|Goal|Main Goal|Objective)\s*:\s*/i, "")
+         .split(/\b(?:Success Looks Like|Current Situation|Confirmed Decisions|Open Questions|Constraints|ALLEVIN['’]s Guide|Working Notes|Initial Milestones|Recommended Starting Point)\s*:/i)[0]
+         .trim();
+
+      return getShortPreview(summary || "Open the project to review its guide and milestones.", limit);
    }
 
    const activeProject = useMemo(() => projectLibrary.find((project) => project.id === selectedProjectId) || projectLibrary[0] || null, [projectLibrary, selectedProjectId]);
@@ -5127,7 +5566,7 @@ export default function IntegrationAdapterLayer() {
    const activeProjectScheduledTaskLabel = sanitizeProjectTitle(activeProjectCalendarSession?.title || activeProjectTracking?.calendarTaskTitle || "");
 
    useEffect(() => {
-      setWorkingNotesDraft(activeProject ? buildProjectWorkspaceBody(activeProject) : "");
+      setAllevinGuideDraft(activeProject ? buildProjectWorkspaceBody(activeProject) : "");
       setNewMilestoneTitle("");
    }, [activeProject?.id, activeProject?.updatedAt]);
 
@@ -5334,7 +5773,7 @@ export default function IntegrationAdapterLayer() {
    }
 
    function getActiveProjectMilestone(tracking?: ProjectTrackingMeta | null) {
-      return tracking?.milestones.find((milestone) => milestone.status === "active") || tracking?.milestones.find((milestone) => milestone.status !== "complete" && milestone.status !== "archived") || null;
+      return tracking?.milestones.find((milestone) => milestone.status === "active") || tracking?.milestones.find((milestone) => milestone.status !== "complete") || null;
    }
 
    function getCompletedProjectMilestoneTitles(tracking?: ProjectTrackingMeta | null) {
@@ -5643,7 +6082,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                id: milestone.id,
                order: milestone.order,
                title: milestone.title,
-               status: milestone.status === "complete" ? "completed" : milestone.status === "needs-review" ? "ready-for-review" : milestone.status === "active" ? "in-progress" : milestone.status === "archived" ? "archived" : "not-started",
+               status: milestone.status === "complete" ? "completed" : milestone.status === "needs-review" ? "ready-for-review" : milestone.status === "active" ? "in-progress" : "not-started",
                goal: milestone.goal,
                whyItMatters: milestone.whyItMatters,
                startingPrompt: milestone.startingPrompt,
@@ -5652,7 +6091,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                openQuestions: milestone.openQuestions,
                dependencies: milestone.dependencies,
                completionCriteria: milestone.completionCriteria,
-               completionEvidence: milestone.completionEvidence,
+               completedCriteria: milestone.completedCriteria,
                createdAt: milestone.createdAt,
                updatedAt: milestone.updatedAt,
             })),
@@ -5661,7 +6100,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
             id: milestone.id,
             order: milestone.order,
             title: milestone.title,
-            status: milestone.status === "complete" ? "completed" : milestone.status === "needs-review" ? "ready-for-review" : milestone.status === "active" ? "in-progress" : milestone.status === "archived" ? "archived" : "not-started",
+            status: milestone.status === "complete" ? "completed" : milestone.status === "needs-review" ? "ready-for-review" : milestone.status === "active" ? "in-progress" : "not-started",
             goal: milestone.goal,
             whyItMatters: milestone.whyItMatters,
             startingPrompt: milestone.startingPrompt,
@@ -5670,7 +6109,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
             openQuestions: milestone.openQuestions,
             dependencies: milestone.dependencies,
             completionCriteria: milestone.completionCriteria,
-            completionEvidence: milestone.completionEvidence,
+            completedCriteria: milestone.completedCriteria,
             createdAt: milestone.createdAt,
             updatedAt: milestone.updatedAt,
          })),
@@ -5681,11 +6120,11 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       if (!options.quiet) showNotice("Project updated");
    }
 
-   function saveWorkingNotes(project: ProjectLibraryItem) {
-      const body = sanitizeProjectBody(workingNotesDraft);
+   function saveAllevinGuide(project: ProjectLibraryItem) {
+      const body = sanitizeProjectBody(allevinGuideDraft);
 
       if (!body) {
-         showNotice("Add a note before saving");
+         showNotice("Add guidance before saving");
 
          return;
       }
@@ -5724,7 +6163,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       window.dispatchEvent(new CustomEvent("allevin-project-memory-update"));
       window.dispatchEvent(new CustomEvent("allevin-project-library-update"));
 
-      showNotice("Working notes saved");
+      showNotice("ALLEVIN’s Guide saved");
    }
 
    function normalizeMilestoneStatuses(milestones: ProjectMilestone[]) {
@@ -5736,10 +6175,10 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
          }));
 
       const explicitActive = ordered.find((item) => item.status === "active");
-      const activeId = explicitActive?.id || ordered.find((item) => item.status !== "complete" && item.status !== "archived" && item.status !== "needs-review")?.id;
+      const activeId = explicitActive?.id || ordered.find((item) => item.status !== "complete" && item.status !== "needs-review")?.id;
 
       return ordered.map((item) => {
-         const status: ProjectMilestoneStatus = item.status === "complete" || item.status === "archived" || item.status === "needs-review" ? item.status : item.id === activeId ? "active" : "waiting";
+         const status: ProjectMilestoneStatus = item.status === "complete" || item.status === "needs-review" ? item.status : item.id === activeId ? "active" : "waiting";
 
          return {
             ...item,
@@ -5759,6 +6198,16 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       }
 
       const reopening = targetMilestone.status === "complete";
+
+      if (!reopening) {
+         const uncheckedCriteria = targetMilestone.completionCriteria.filter((criterion) => !targetMilestone.completedCriteria.some((completedCriterion) => normalizeProjectMatchValue(completedCriterion) === normalizeProjectMatchValue(criterion)));
+
+         if (uncheckedCriteria.length) {
+            setSelectedMilestoneWorkspaceId(milestoneId);
+            showNotice(`Check ${uncheckedCriteria.length === 1 ? "the remaining criterion" : `the ${uncheckedCriteria.length} remaining criteria`} before completing this milestone`);
+            return;
+         }
+      }
 
       const milestones = normalizeMilestoneStatuses(
          tracking.milestones.map((milestone) => {
@@ -5789,8 +6238,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       );
 
       const nextOpenMilestone = milestones.find((milestone) => milestone.status === "active");
-      const visibleMilestones = milestones.filter((milestone) => milestone.status !== "archived");
-      const allComplete = visibleMilestones.length > 0 && visibleMilestones.every((milestone) => milestone.status === "complete");
+      const allComplete = milestones.length > 0 && milestones.every((milestone) => milestone.status === "complete");
 
       updateProjectTracking(project, {
          milestones,
@@ -5817,6 +6265,31 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
             },
          }),
       );
+   }
+
+   function toggleMilestoneCompletionCriterion(project: ProjectLibraryItem, milestoneId: string, criterion: string) {
+      const tracking = getProjectTracking(project);
+      const target = tracking.milestones.find((milestone) => milestone.id === milestoneId);
+
+      if (!target || target.status === "complete") {
+         return;
+      }
+
+      const criterionKey = normalizeProjectMatchValue(criterion);
+      const isChecked = target.completedCriteria.some((item) => normalizeProjectMatchValue(item) === criterionKey);
+      const completedCriteria = isChecked ? target.completedCriteria.filter((item) => normalizeProjectMatchValue(item) !== criterionKey) : [...target.completedCriteria, criterion];
+
+      const milestones = tracking.milestones.map((milestone) =>
+         milestone.id === milestoneId
+            ? {
+                 ...milestone,
+                 completedCriteria: reconcileCompletedCriteria(milestone.completionCriteria, completedCriteria),
+                 updatedAt: getNow(),
+              }
+            : milestone,
+      );
+
+      updateProjectTracking(project, { milestones }, { quiet: true });
    }
 
    function beginEditingMilestone(milestone: ProjectMilestone) {
@@ -5850,48 +6323,47 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       if (!draft) return;
 
       const milestones = normalizeMilestoneStatuses(
-         tracking.milestones.map((milestone) =>
-            milestone.id === milestoneId
-               ? {
-                    ...milestone,
-                    title: sanitizeProjectTitle(draft.title) || milestone.title,
-                    goal: sanitizeProjectSummary(draft.goal) || milestone.goal,
-                    whyItMatters: sanitizeProjectSummary(draft.whyItMatters),
-                    startingPrompt: sanitizeProjectSummary(draft.startingPrompt),
-                    decisions: Array.isArray(draft.decisions)
-                       ? draft.decisions
-                            .map((item) => sanitizeProjectSummary(item))
-                            .filter(Boolean)
-                            .slice(0, 40)
-                       : milestone.decisions,
-                    openQuestions: Array.isArray(draft.openQuestions)
-                       ? draft.openQuestions
-                            .map((item) => sanitizeProjectSummary(item))
-                            .filter(Boolean)
-                            .slice(0, 40)
-                       : milestone.openQuestions,
-                    dependencies: Array.isArray(draft.dependencies)
-                       ? draft.dependencies
-                            .map((item) => sanitizeProjectSummary(item))
-                            .filter(Boolean)
-                            .slice(0, 16)
-                       : milestone.dependencies,
-                    completionCriteria: Array.isArray(draft.completionCriteria)
-                       ? draft.completionCriteria
-                            .map((item) => sanitizeProjectSummary(item))
-                            .filter(Boolean)
-                            .slice(0, 40)
-                       : milestone.completionCriteria,
-                    completionEvidence: Array.isArray(draft.completionEvidence)
-                       ? draft.completionEvidence
-                            .map((item) => sanitizeProjectSummary(item))
-                            .filter(Boolean)
-                            .slice(0, 40)
-                       : milestone.completionEvidence,
-                    updatedAt: getNow(),
-                 }
-               : milestone,
-         ),
+         tracking.milestones.map((milestone) => {
+            if (milestone.id !== milestoneId) {
+               return milestone;
+            }
+
+            const completionCriteria = Array.isArray(draft.completionCriteria)
+               ? draft.completionCriteria
+                    .map((item) => sanitizeProjectSummary(item))
+                    .filter(Boolean)
+                    .slice(0, 40)
+               : milestone.completionCriteria;
+
+            return {
+               ...milestone,
+               title: sanitizeProjectTitle(draft.title) || milestone.title,
+               goal: sanitizeProjectSummary(draft.goal) || milestone.goal,
+               whyItMatters: sanitizeProjectSummary(draft.whyItMatters),
+               startingPrompt: sanitizeProjectSummary(draft.startingPrompt),
+               decisions: Array.isArray(draft.decisions)
+                  ? draft.decisions
+                       .map((item) => sanitizeProjectSummary(item))
+                       .filter(Boolean)
+                       .slice(0, 40)
+                  : milestone.decisions,
+               openQuestions: Array.isArray(draft.openQuestions)
+                  ? draft.openQuestions
+                       .map((item) => ensureProjectQuestionMark(item))
+                       .filter(Boolean)
+                       .slice(0, 40)
+                  : milestone.openQuestions,
+               dependencies: Array.isArray(draft.dependencies)
+                  ? draft.dependencies
+                       .map((item) => sanitizeProjectSummary(item))
+                       .filter(Boolean)
+                       .slice(0, 16)
+                  : milestone.dependencies,
+               completionCriteria,
+               completedCriteria: reconcileCompletedCriteria(completionCriteria, milestone.completedCriteria),
+               updatedAt: getNow(),
+            };
+         }),
       );
 
       const activeMilestone = milestones.find((item) => item.status === "active");
@@ -5976,7 +6448,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
             openQuestions: metadata.openQuestions,
             dependencies: metadata.dependencies,
             completionCriteria: metadata.completionCriteria,
-            completionEvidence: [],
+            completedCriteria: [],
             order: tracking.milestones.length + 1,
             createdAt: now,
             updatedAt: now,
@@ -5989,37 +6461,6 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       });
 
       setNewMilestoneTitle("");
-   }
-
-   function removeProjectMilestone(project: ProjectLibraryItem, milestoneId: string) {
-      const tracking = getProjectTracking(project);
-      const target = tracking.milestones.find((milestone) => milestone.id === milestoneId);
-
-      if (!target) return;
-
-      const milestones = milestoneHasSavedWork(target)
-         ? normalizeMilestoneStatuses(
-              tracking.milestones.map((milestone) =>
-                 milestone.id === milestoneId
-                    ? {
-                         ...milestone,
-                         status: "archived" as const,
-                         completed: false,
-                         updatedAt: getNow(),
-                      }
-                    : milestone,
-              ),
-           )
-         : normalizeMilestoneStatuses(tracking.milestones.filter((milestone) => milestone.id !== milestoneId));
-
-      const nextOpenMilestone = milestones.find((milestone) => milestone.status === "active");
-
-      updateProjectTracking(project, {
-         milestones,
-         nextStep: nextOpenMilestone?.title || getProjectTypeInsight(project).nextMove,
-      });
-
-      showNotice(milestoneHasSavedWork(target) ? "Milestone archived with its saved work" : "Milestone removed");
    }
 
    function notifyAllevin(message: string, detail?: Record<string, unknown>) {
@@ -6109,7 +6550,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
    useEffect(() => {
       setMounted(true);
 
-      // MK VI simplified Projects: no confirmation queue.
+      // MK IX simplified Projects: no confirmation queue.
       // Old queued drafts are cleared so saved work goes directly into Projects.
       localStorage.removeItem(STORAGE_KEY);
 
@@ -6262,44 +6703,34 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
          try {
             setManualDraftGenerating(true);
-            showNotice("ALLEVIN is shaping the project");
+            showNotice("ALLEVIN MK IX is building the project understanding");
 
-            const response = await requestAllevinLLM({
-               mode: "project-guidance",
-               source: "projects",
-               title: cleanTitle,
-               focus: cleanDescription,
-               usefulContext: "Act as a senior project lead. Identify the first dependency-aware checkpoint, why it matters, and any important framing the user may have missed.",
-               nextStep: "Choose the first move that reduces downstream uncertainty or rework.",
-               rawContent: cleanDescription,
-               projectStage: "starting-point",
-               currentLocation: "ALLEVIN Projects",
-               priority: "medium",
-               maxWords: 500,
-               userInstruction:
-                  "Use the user's full description. Do not merely encourage them to define success. Give project-specific judgment about where to begin, what the later checkpoints should accomplish, and why the first checkpoint comes first. Do not invent completed work.",
-            });
-
-            const generatedBody = buildDetailedProjectDraft({
+            // ========================================
+            // ALLEVIN MK IX — Shared project-draft authority
+            // Projects and AIDock use the same semantic intake path so a ramble
+            // cannot produce one roadmap here and a different roadmap in AIDock.
+            // The older local generator remains below as compatibility code for
+            // existing saved records, but it is not authoritative for new drafts.
+            // ========================================
+            const guide = await buildProjectDraftGuide({
                title: cleanTitle,
                description: cleanDescription,
-               llmSummary: response.summary || response.focus,
-               llmUsefulContext: response.usefulContext,
-               llmNextStep: response.nextStep,
             });
+
+            const generatedBody = renderProjectDraftGuide(guide);
 
             setManualBody(sanitizeLiveProjectBody(generatedBody));
             setManualDraftGenerated(true);
-            showNotice("Project guide ready to review");
+            showNotice("MK IX project guide ready to review");
          } catch {
-            const generatedBody = buildDetailedProjectDraft({
+            const guide = buildLocalProjectDraftGuide({
                title: cleanTitle,
                description: cleanDescription,
             });
 
-            setManualBody(sanitizeLiveProjectBody(generatedBody));
+            setManualBody(sanitizeLiveProjectBody(renderProjectDraftGuide(guide)));
             setManualDraftGenerated(true);
-            showNotice("Project guide ready to review");
+            showNotice("MK IX project guide ready to review");
          } finally {
             setManualDraftGenerating(false);
          }
@@ -6308,7 +6739,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       }
 
       if (!cleanBody) {
-         showNotice("Review or add the Working Notes before saving");
+         showNotice("Review or add ALLEVIN’s Guide before saving");
          return;
       }
 
@@ -6442,7 +6873,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                      openQuestions: metadata.openQuestions,
                      dependencies: metadata.dependencies,
                      completionCriteria: metadata.completionCriteria,
-                     completionEvidence: [],
+                     completedCriteria: [],
                      order: index + 1,
                      createdAt: now,
                      updatedAt: now,
@@ -6471,7 +6902,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
             }
          }
 
-         // No confirmation queue in MK VIII Projects.
+         // No confirmation queue in MK IX Projects.
          // If the item came from an old queue, remove it safely.
          commitOutputs((current) => current.filter((output) => output.id !== item.id));
 
@@ -6806,10 +7237,10 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
       updateProjectTracking(project, {
          nextStep: taskTitle,
-         calendarTaskTitle: taskTitle,
-         calendarTaskDate: tracking.calendarTaskDate,
-         calendarTaskTime: tracking.calendarTaskTime,
-         calendarTaskDurationMinutes: durationMinutes,
+         calendarTaskTitle: "",
+         calendarTaskDate: "",
+         calendarTaskTime: "",
+         calendarTaskDurationMinutes: 60,
       });
 
       workspace.setActiveView("workspace");
@@ -7136,7 +7567,10 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
             <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center xl:w-auto">
                {notice && <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-blue)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">{notice}</div>}
 
-               <button onClick={() => setManualBuilderOpen((current) => !current)} className="studio-button-secondary w-full justify-center sm:w-auto">
+               <button
+                  onClick={() => setManualBuilderOpen((current) => !current)}
+                  className="inline-flex w-full items-center justify-center gap-2 border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40 sm:w-auto"
+               >
                   <ChevronDown size={16} strokeWidth={1.7} className={`transition-transform ${manualBuilderOpen ? "rotate-180" : ""}`} />
                   Add Project
                </button>
@@ -7167,8 +7601,8 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                      <p className="text-lg font-semibold">Start a Project</p>
 
                      <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">
-                        Give ALLEVIN as much useful detail as you can about the project goal, the outcome you want, what you already know, important requirements, deadlines, constraints, and anything that may affect the work. ALLEVIN will turn that
-                        context into a detailed, editable project guide with Working Notes, progress checkpoints, open questions, and a senior project-lead recommendation for where to begin.
+                        Give ALLEVIN as much useful detail as you can about the goal, what already exists, decisions already made, open questions, deadlines, limits, materials, and what a good result should look like. ALLEVIN MK IX will read the project
+                        as a whole and turn that context into a specific ALLEVIN’s Guide, dependency-based milestones, clear open questions, and one concrete place to begin.
                      </p>
 
                      <div className="mt-5">
@@ -7181,7 +7615,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                               if (manualDraftGenerated) setManualDraftGenerated(false);
                            }}
                            placeholder="e.g. Casino-Themed Retirement Party"
-                           className="mt-2 w-full rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm outline-none focus:border-[var(--color-primary)]"
+                           className="mt-2 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm outline-none focus:border-[var(--color-primary)]"
                         />
                      </div>
 
@@ -7195,7 +7629,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                               if (manualDraftGenerated) setManualDraftGenerated(false);
                            }}
                            placeholder="Describe the goal, finished outcome, important context, requirements, dates, constraints, decisions already made, and anything else ALLEVIN should understand."
-                           className="mt-2 min-h-[140px] w-full resize-y rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                           className="mt-2 min-h-[140px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
                         />
                      </div>
 
@@ -7204,10 +7638,10 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                            <div className="flex flex-wrap items-end justify-between gap-3">
                               <div>
                                  <p className="text-sm font-semibold text-[var(--color-text-primary)]">Review the project guide</p>
-                                 <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Change anything that does not match your intent. These notes become the project’s starting understanding.</p>
+                                 <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Change anything that does not match your intent. This becomes ALLEVIN MK IX’s starting understanding of the project.</p>
                               </div>
 
-                              <button type="button" onClick={() => setManualDraftGenerated(false)} className="rounded-full border border-[var(--border-subtle)] bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-bg)]">
+                              <button type="button" onClick={() => setManualDraftGenerated(false)} className="rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-bg)]">
                                  Regenerate
                               </button>
                            </div>
@@ -7215,7 +7649,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                            <textarea
                               value={manualBody}
                               onChange={(event) => setManualBody(sanitizeLiveProjectBody(event.target.value))}
-                              className="mt-3 min-h-[360px] w-full resize-y rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                              className="mt-3 min-h-[360px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
                            />
                         </div>
                      )}
@@ -7228,7 +7662,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                               setManualDraftGenerated(false);
                               setManualDraftGenerating(false);
                            }}
-                           className="rounded-2xl border border-[var(--border-subtle)] bg-white px-5 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]"
+                           className="rounded-md border border-[var(--border-subtle)] bg-white px-5 py-3 text-sm font-medium transition-colors hover:bg-[var(--color-bg)]"
                         >
                            Cancel
                         </button>
@@ -7236,10 +7670,10 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                         <button
                            onClick={() => void createManualOutput()}
                            disabled={manualDraftGenerating}
-                           className="flex items-center justify-center gap-2 rounded-2xl bg-[var(--color-primary)] px-5 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                           className="flex items-center justify-center gap-2 rounded-md bg-[var(--color-primary)] px-5 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                            {manualDraftGenerating ? <RotateCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                           {manualDraftGenerating ? "Shaping project..." : manualDraftGenerated ? "Save Project" : "Generate Project Guide"}
+                           {manualDraftGenerating ? "Reading the project..." : manualDraftGenerated ? "Save Project" : "Build Project Guide"}
                         </button>
                      </div>
                   </div>
@@ -7251,132 +7685,6 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
             {projectLibrary.length > 0 ? (
                <div className="space-y-6">
                   <div>
-                     <div className="mb-3 flex items-center justify-between gap-3">
-                        <div>
-                           <p className="text-sm font-medium">Saved Projects</p>
-
-                           <p className="mt-1 break-words text-xs text-[var(--color-text-secondary)]">
-                              {projectLibrary.length} project
-                              {projectLibrary.length === 1 ? "" : "s"} ready
-                           </p>
-                        </div>
-                     </div>
-
-                     <div ref={projectSelectorRef} className="relative">
-                        <span id="saved-project-selector-label" className="sr-only">
-                           Select the active saved project
-                        </span>
-
-                        <button
-                           type="button"
-                           aria-labelledby="saved-project-selector-label saved-project-selector-title"
-                           aria-haspopup="listbox"
-                           aria-expanded={projectSelectorOpen}
-                           aria-controls="saved-project-selector-listbox"
-                           onClick={() => setProjectSelectorOpen((open) => !open)}
-                           onKeyDown={(event) => {
-                              if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
-                                 event.preventDefault();
-                                 openProjectSelectorAndFocusActive();
-                              }
-                           }}
-                           className="group flex w-full items-center justify-between gap-4 rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-4 text-left shadow-sm outline-none transition hover:border-[var(--color-primary)]/40 hover:shadow-md focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] focus-visible:ring-offset-2 sm:px-5"
-                        >
-                           <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                                 <span id="saved-project-selector-title" className="truncate text-base font-semibold text-[var(--color-text-primary)]">
-                                    {activeProject?.title || "Choose a project"}
-                                 </span>
-
-                                 <span className="rounded-full bg-[var(--color-surface-blue)] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-primary)]">Current</span>
-                              </div>
-
-                              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--color-text-secondary)]">
-                                 <span>
-                                    {projectLibrary.length} saved project
-                                    {projectLibrary.length === 1 ? "" : "s"}
-                                 </span>
-
-                                 {activeProject && <span>Updated {getReadableProjectDate(activeProject.updatedAt)}</span>}
-                              </div>
-
-                              {activeProject?.latestSummary && <p className="mt-3 line-clamp-2 text-sm leading-6 text-[var(--color-text-secondary)]">{getShortPreview(activeProject.latestSummary, 180)}</p>}
-                           </div>
-
-                           <ChevronDown aria-hidden="true" size={20} className={`shrink-0 text-[var(--color-primary)] transition-transform duration-200 ${projectSelectorOpen ? "rotate-180" : ""}`} />
-                        </button>
-
-                        <AnimatePresence>
-                           {projectSelectorOpen && (
-                              <motion.div
-                                 initial={{ opacity: 0, y: -8, scale: 0.99 }}
-                                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                                 exit={{ opacity: 0, y: -8, scale: 0.99 }}
-                                 transition={{ duration: 0.16 }}
-                                 className="absolute left-0 right-0 z-30 mt-2 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-white shadow-xl"
-                              >
-                                 <div className="border-b border-[var(--border-subtle)] px-4 py-3 sm:px-5">
-                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Project library</p>
-                                    <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Choose a project to open its workspace.</p>
-                                 </div>
-
-                                 <div id="saved-project-selector-listbox" role="listbox" aria-labelledby="saved-project-selector-label" className="max-h-80 overflow-y-auto p-2">
-                                    {projectLibrary.map((project, index) => {
-                                       const selected = activeProject?.id === project.id;
-
-                                       return (
-                                          <button
-                                             key={project.id}
-                                             ref={(element) => {
-                                                projectOptionRefs.current[index] = element;
-                                             }}
-                                             type="button"
-                                             role="option"
-                                             aria-selected={selected}
-                                             onClick={() => selectProjectFromLibrary(project.id)}
-                                             onKeyDown={(event) => {
-                                                if (event.key === "ArrowDown") {
-                                                   event.preventDefault();
-                                                   focusProjectOption(index + 1);
-                                                } else if (event.key === "ArrowUp") {
-                                                   event.preventDefault();
-                                                   focusProjectOption(index - 1);
-                                                } else if (event.key === "Home") {
-                                                   event.preventDefault();
-                                                   focusProjectOption(0);
-                                                } else if (event.key === "End") {
-                                                   event.preventDefault();
-                                                   focusProjectOption(projectLibrary.length - 1);
-                                                } else if (event.key === "Escape") {
-                                                   event.preventDefault();
-                                                   closeProjectSelector();
-                                                }
-                                             }}
-                                             className={`w-full rounded-xl px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${selected ? "bg-[var(--color-surface-blue)]" : "hover:bg-[var(--color-bg)]"}`}
-                                          >
-                                             <div className="flex items-start justify-between gap-4">
-                                                <div className="min-w-0 flex-1">
-                                                   <div className="flex flex-wrap items-center gap-2">
-                                                      <span className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{project.title}</span>
-                                                      {selected && <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--color-primary)]">Open</span>}
-                                                   </div>
-
-                                                   {project.latestSummary && <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--color-text-secondary)]">{getShortPreview(project.latestSummary, 130)}</p>}
-                                                </div>
-
-                                                <span className="shrink-0 pt-0.5 text-xs text-[var(--color-text-secondary)]">{getReadableProjectDate(project.updatedAt)}</span>
-                                             </div>
-                                          </button>
-                                       );
-                                    })}
-                                 </div>
-                              </motion.div>
-                           )}
-                        </AnimatePresence>
-                     </div>
-                  </div>
-
-                  <div>
                      {(() => {
                         if (!activeProject) {
                            return null;
@@ -7385,126 +7693,589 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                         const projectTracking = getProjectTracking(activeProject);
 
                         return (
-                           <div className="studio-paper min-w-0 p-4 sm:p-6 xl:p-8">
+                           <div className="min-w-0 border-t border-[var(--border-subtle)] bg-white px-5 pb-10 pt-6 sm:px-8 sm:pt-8 lg:px-10">
                               <div className="mb-5 flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-4 sm:mb-6 sm:flex-row sm:items-start sm:justify-between sm:pb-5">
                                  <div className="min-w-0 flex-1">
-                                    <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--color-text-secondary)]">
-                                       <span className="font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Current Project</span>
-
-                                       <span>Updated {getReadableProjectDate(activeProject.updatedAt)}</span>
-                                    </div>
+                                    <p className="mb-3 text-xs text-[var(--color-text-secondary)]">Updated {getReadableProjectDate(activeProject.updatedAt)}</p>
 
                                     <h3 data-editorial-title="true" className="break-words text-2xl leading-tight sm:text-4xl">
                                        {activeProject.title}
                                     </h3>
                                  </div>
 
-                                 <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[150px]">
-                                    <button onClick={() => saveWorkingNotes(activeProject)} className="studio-button-primary w-full justify-center">
-                                       Save Project
-                                    </button>
-
-                                    <button onClick={() => deleteProject(activeProject)} className="studio-button-secondary w-full justify-center text-[var(--color-text-secondary)]">
+                                 <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                                    <button
+                                       type="button"
+                                       onClick={() => deleteProject(activeProject)}
+                                       className="w-full border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-primary)]/40 hover:text-[var(--color-text-primary)] sm:w-auto"
+                                    >
                                        Delete
                                     </button>
+
+                                    <div ref={projectSelectorRef} className="relative w-full sm:w-auto">
+                                       <span id="saved-project-selector-label" className="sr-only">
+                                          Select a saved project
+                                       </span>
+
+                                       <button
+                                          type="button"
+                                          aria-labelledby="saved-project-selector-label"
+                                          aria-haspopup="listbox"
+                                          aria-expanded={projectSelectorOpen}
+                                          aria-controls="saved-project-selector-listbox"
+                                          onClick={() => setProjectSelectorOpen((open) => !open)}
+                                          onKeyDown={(event) => {
+                                             if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+                                                event.preventDefault();
+                                                openProjectSelectorAndFocusActive();
+                                             }
+                                          }}
+                                          className="flex w-full min-w-[170px] items-center justify-between gap-3 border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-left text-sm font-medium text-[var(--color-text-primary)] outline-none transition-colors hover:border-[var(--color-primary)]/40 focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] focus-visible:ring-offset-2 sm:w-auto"
+                                       >
+                                          <span>Switch project</span>
+                                          <ChevronDown aria-hidden="true" size={17} className={`shrink-0 text-[var(--color-text-secondary)] transition-transform duration-200 ${projectSelectorOpen ? "rotate-180" : ""}`} />
+                                       </button>
+
+                                       <AnimatePresence>
+                                          {projectSelectorOpen && (
+                                             <motion.div
+                                                initial={{ opacity: 0, y: -8 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                exit={{ opacity: 0, y: -8 }}
+                                                transition={{ duration: 0.16 }}
+                                                className="absolute right-0 z-30 mt-2 w-[min(24rem,calc(100vw-3rem))] overflow-hidden border border-[var(--border-subtle)] bg-white shadow-xl"
+                                             >
+                                                <div className="border-b border-[var(--border-subtle)] px-4 py-3">
+                                                   <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Choose a project</p>
+                                                   <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Open another saved project without leaving this workspace.</p>
+                                                </div>
+
+                                                <div id="saved-project-selector-listbox" role="listbox" aria-labelledby="saved-project-selector-label" className="max-h-80 overflow-y-auto p-2">
+                                                   {projectLibrary.map((project, index) => {
+                                                      const selected = activeProject.id === project.id;
+
+                                                      return (
+                                                         <button
+                                                            key={project.id}
+                                                            ref={(element) => {
+                                                               projectOptionRefs.current[index] = element;
+                                                            }}
+                                                            type="button"
+                                                            role="option"
+                                                            aria-selected={selected}
+                                                            onClick={() => selectProjectFromLibrary(project.id)}
+                                                            onKeyDown={(event) => {
+                                                               if (event.key === "ArrowDown") {
+                                                                  event.preventDefault();
+                                                                  focusProjectOption(index + 1);
+                                                               }
+                                                               if (event.key === "ArrowUp") {
+                                                                  event.preventDefault();
+                                                                  focusProjectOption(index - 1);
+                                                               }
+                                                               if (event.key === "Escape") {
+                                                                  event.preventDefault();
+                                                                  setProjectSelectorOpen(false);
+                                                               }
+                                                            }}
+                                                            className={`block w-full border-b border-[var(--border-subtle)] px-3 py-3 text-left transition-colors last:border-b-0 ${selected ? "bg-[var(--color-bg-soft)]" : "hover:bg-[var(--color-bg)]"}`}
+                                                         >
+                                                            <div className="flex items-start justify-between gap-4">
+                                                               <div className="min-w-0 flex-1">
+                                                                  <p className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{project.title}</p>
+                                                                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--color-text-secondary)]">{getProjectLibrarySummary(project, 140)}</p>
+                                                               </div>
+                                                               <span className="shrink-0 pt-0.5 text-xs text-[var(--color-text-secondary)]">{getReadableProjectDate(project.updatedAt)}</span>
+                                                            </div>
+                                                         </button>
+                                                      );
+                                                   })}
+                                                </div>
+                                             </motion.div>
+                                          )}
+                                       </AnimatePresence>
+                                    </div>
                                  </div>
                               </div>
 
-                              <section className="mb-6 border-l-2 border-[var(--color-primary)] bg-[var(--color-bg-soft)] px-5 py-4 sm:px-6">
-                                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Current Focus</p>
-
-                                 <p className="mt-2 max-w-4xl text-base leading-7 text-[var(--color-text-primary)]">{projectTracking.nextStep || "Choose the next meaningful outcome."}</p>
-                              </section>
-
-                              <section className="mb-6 border-y border-[var(--border-subtle)] py-6">
-                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <details className="group mb-7 border-y border-[var(--border-subtle)] py-5">
+                                 <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-0 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]">
                                     <div>
-                                       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Working Notes</p>
-
-                                       <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Keep updates, decisions, questions, and anything ALLEVIN should understand in one place.</p>
+                                       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN’s Guide</p>
+                                       <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
+                                          ALLEVIN’s senior-level guide for this project. It keeps the goal, key decisions, limits, and direction in one place so the work is easier to move forward.
+                                       </p>
                                     </div>
 
-                                    <button type="button" onClick={() => saveWorkingNotes(activeProject)} className="studio-button-secondary w-full justify-center sm:w-auto">
-                                       Save notes
-                                    </button>
-                                 </div>
+                                    <ChevronDown size={17} className="shrink-0 text-[var(--color-text-secondary)] transition-transform group-open:rotate-180" />
+                                 </summary>
 
-                                 <textarea
-                                    value={workingNotesDraft}
-                                    onChange={(event) => setWorkingNotesDraft(sanitizeLiveProjectBody(event.target.value))}
-                                    rows={16}
-                                    maxLength={PROJECT_SANITIZE_LIMITS.body}
-                                    placeholder="Add project notes, decisions, updates, questions, or anything ALLEVIN should understand..."
-                                    className="mt-4 min-h-[360px] w-full resize-y rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-4 text-sm leading-7 text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
-                                 />
-                              </section>
-
-                              <div className="mb-6 space-y-4">
-                                 <section className="rounded-2xl border border-[var(--border-subtle)] p-4 sm:p-5">
-                                    <div className="flex items-center justify-between gap-3">
-                                       <div>
-                                          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Progress</p>
-                                       </div>
-
-                                       <span className="text-xs font-medium text-[var(--color-text-secondary)]">
-                                          {projectTracking.milestones.filter((milestone) => milestone.status === "complete").length}/{projectTracking.milestones.length}
-                                       </span>
-                                    </div>
-
-                                    <div className="mt-3 space-y-2">
-                                       {projectTracking.milestones.map((milestone) => (
-                                          <div key={milestone.id} className="group flex items-start gap-3 rounded-xl px-2 py-2 hover:bg-[var(--color-bg)]">
-                                             <button
-                                                type="button"
-                                                onClick={() => toggleProjectMilestone(activeProject, milestone.id)}
-                                                className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-white text-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
-                                                aria-label={`${milestone.status === "complete" ? "Mark incomplete" : "Mark complete"}: ${milestone.title}`}
-                                             >
-                                                {milestone.status === "complete" ? <CheckCircle2 size={16} /> : <span className="h-2 w-2 rounded-full bg-[var(--border-subtle)]" />}
-                                             </button>
-
-                                             <p
-                                                className={`min-w-0 flex-1 break-words text-sm leading-6 ${milestone.status === "complete" ? "text-[var(--color-text-secondary)] line-through" : milestone.status === "archived" ? "text-[var(--color-text-tertiary)]" : "text-[var(--color-text-primary)]"}`}
-                                             >
-                                                {milestone.title}
-                                             </p>
-
-                                             <button
-                                                type="button"
-                                                onClick={() => removeProjectMilestone(activeProject, milestone.id)}
-                                                className="px-1 text-xs text-[var(--color-text-tertiary)] opacity-0 transition-opacity hover:text-[var(--color-text-primary)] group-hover:opacity-100 focus:opacity-100"
-                                                aria-label={`Remove ${milestone.title}`}
-                                             >
-                                                ×
-                                             </button>
-                                          </div>
-                                       ))}
-                                    </div>
-
-                                    <div className="mt-3 flex gap-2">
-                                       <input
-                                          value={newMilestoneTitle}
-                                          onChange={(event) => setNewMilestoneTitle(sanitizeLiveProjectTitle(event.target.value))}
-                                          onKeyDown={(event) => {
-                                             if (event.key === "Enter") {
-                                                event.preventDefault();
-                                                addProjectMilestone(activeProject);
-                                             }
-                                          }}
-                                          maxLength={120}
-                                          placeholder="Add a milestone"
-                                          className="min-w-0 flex-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                       />
-
-                                       <button type="button" onClick={() => addProjectMilestone(activeProject)} className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm font-medium text-[var(--color-primary)]">
-                                          Add
+                                 <div className="mx-2 mt-4 border-t border-[var(--border-subtle)] pt-4">
+                                    <div className="mb-3 flex justify-end">
+                                       <button
+                                          type="button"
+                                          onClick={() => saveAllevinGuide(activeProject)}
+                                          className="inline-flex w-full items-center justify-center border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40 sm:w-auto"
+                                       >
+                                          Save guide
                                        </button>
                                     </div>
-                                 </section>
 
-                                 <section aria-labelledby="milestone-workspaces-heading" className="space-y-5">
+                                    <textarea
+                                       value={allevinGuideDraft}
+                                       onChange={(event) => setAllevinGuideDraft(sanitizeLiveProjectBody(event.target.value))}
+                                       rows={14}
+                                       maxLength={PROJECT_SANITIZE_LIMITS.body}
+                                       placeholder="Refine ALLEVIN’s project guide, decisions, constraints, questions, or operating notes..."
+                                       className="min-h-[320px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-4 text-sm leading-7 text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
+                                    />
+                                 </div>
+                              </details>
+
+                              <section aria-label="Project tools" className="mb-8 border-t border-[var(--border-subtle)]">
+                                 <details className="group border-b border-[var(--border-subtle)] py-4">
+                                    <summary className="flex cursor-pointer list-none items-start justify-between gap-4 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]">
+                                       <div className="flex min-w-0 items-start gap-3">
+                                          <CalendarDays size={18} className="mt-0.5 shrink-0 text-[var(--color-text-secondary)]" />
+                                          <div className="min-w-0">
+                                             <p className="font-medium text-[var(--color-text-primary)]">Schedule project time</p>
+                                             {activeProjectSessionLabel ? (
+                                                <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
+                                                   Next scheduled: {activeProjectSessionLabel}
+                                                   {activeProjectScheduledTaskLabel ? ` · ${activeProjectScheduledTaskLabel}` : ""}
+                                                </p>
+                                             ) : (
+                                                <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Set aside focused time for the next piece of work.</p>
+                                             )}
+                                          </div>
+                                       </div>
+
+                                       <ChevronDown size={17} className="mt-1 shrink-0 text-[var(--color-text-secondary)] transition-transform group-open:rotate-180" />
+                                    </summary>
+
+                                    <div className="mt-4 space-y-4 border-t border-[var(--border-subtle)] pt-4">
+                                       <div>
+                                          <label htmlFor="project-session-title" className="text-sm font-medium text-[var(--color-text-primary)]">
+                                             What will you work on?
+                                          </label>
+                                          <input
+                                             id="project-session-title"
+                                             value={projectTracking.calendarTaskTitle}
+                                             onChange={(event) => updateProjectTracking(activeProject, { calendarTaskTitle: event.target.value })}
+                                             placeholder="Example: Review the first recipe inventory"
+                                             className="mt-2 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                          />
+                                       </div>
+
+                                       <div className="grid gap-3 sm:grid-cols-3">
+                                          <div>
+                                             <label htmlFor="project-session-date" className="text-sm font-medium text-[var(--color-text-primary)]">
+                                                Date
+                                             </label>
+                                             <input
+                                                id="project-session-date"
+                                                type="date"
+                                                value={projectTracking.calendarTaskDate}
+                                                onChange={(event) => updateProjectTracking(activeProject, { calendarTaskDate: event.target.value })}
+                                                className="mt-2 w-full min-w-0 rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                             />
+                                          </div>
+
+                                          <div>
+                                             <label htmlFor="project-session-time" className="text-sm font-medium text-[var(--color-text-primary)]">
+                                                Time
+                                             </label>
+                                             <input
+                                                id="project-session-time"
+                                                type="time"
+                                                value={projectTracking.calendarTaskTime}
+                                                onChange={(event) => updateProjectTracking(activeProject, { calendarTaskTime: event.target.value })}
+                                                className="mt-2 w-full min-w-0 rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                             />
+                                          </div>
+
+                                          <div>
+                                             <label htmlFor="project-session-duration" className="text-sm font-medium text-[var(--color-text-primary)]">
+                                                Length
+                                             </label>
+                                             <select
+                                                id="project-session-duration"
+                                                value={projectTracking.calendarTaskDurationMinutes}
+                                                onChange={(event) => updateProjectTracking(activeProject, { calendarTaskDurationMinutes: Number(event.target.value) })}
+                                                className="mt-2 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                             >
+                                                <option value={15}>15 minutes</option>
+                                                <option value={30}>30 minutes</option>
+                                                <option value={45}>45 minutes</option>
+                                                <option value={60}>1 hour</option>
+                                                <option value={90}>1.5 hours</option>
+                                                <option value={120}>2 hours</option>
+                                             </select>
+                                          </div>
+                                       </div>
+
+                                       <div className="flex justify-end">
+                                          <button
+                                             type="button"
+                                             onClick={() => scheduleProjectTime(activeProject)}
+                                             className="w-full bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90 sm:w-auto"
+                                          >
+                                             Add to calendar
+                                          </button>
+                                       </div>
+                                    </div>
+                                 </details>
+
+                                 <details className="group border-b border-[var(--border-subtle)] py-4">
+                                    <summary className="flex cursor-pointer list-none items-start justify-between gap-4 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]">
+                                       <div className="flex min-w-0 items-start gap-3">
+                                          <FileText size={18} className="mt-0.5 shrink-0 text-[var(--color-text-secondary)]" />
+                                          <div className="min-w-0">
+                                             <p className="font-medium text-[var(--color-text-primary)]">Project materials</p>
+                                             <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
+                                                {activeProjectMaterials.length > 0
+                                                   ? `${activeProjectMaterials.length} ${activeProjectMaterials.length === 1 ? "item" : "items"} connected to this project.`
+                                                   : "Keep files, notes, feedback, and references with the project."}
+                                             </p>
+                                          </div>
+                                       </div>
+
+                                       <ChevronDown size={17} className="mt-1 shrink-0 text-[var(--color-text-secondary)] transition-transform group-open:rotate-180" />
+                                    </summary>
+
+                                    <div className="mt-4 border-t border-[var(--border-subtle)] pt-4">
+                                       <div className="mb-4 flex justify-end">
+                                          <button
+                                             type="button"
+                                             onClick={() => setMaterialBuilderOpen((current) => !current)}
+                                             className="w-full border border-[var(--border-subtle)] bg-white px-4 py-2 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40 sm:w-auto"
+                                          >
+                                             {materialBuilderOpen ? "Close form" : "Add material"}
+                                          </button>
+                                       </div>
+
+                                       <AnimatePresence initial={false}>
+                                          {materialBuilderOpen && (
+                                             <motion.div
+                                                initial={{
+                                                   opacity: 0,
+                                                   height: 0,
+                                                }}
+                                                animate={{
+                                                   opacity: 1,
+                                                   height: "auto",
+                                                }}
+                                                exit={{
+                                                   opacity: 0,
+                                                   height: 0,
+                                                }}
+                                                transition={{
+                                                   duration: 0.2,
+                                                }}
+                                                className="overflow-hidden"
+                                             >
+                                                <div className="mt-4 rounded-md bg-[var(--color-bg)] p-4">
+                                                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                                      <input
+                                                         value={materialTitle}
+                                                         onChange={(event) => setMaterialTitle(sanitizeLiveProjectTitle(event.target.value))}
+                                                         placeholder={materialGuidance.titlePlaceholder}
+                                                         className="rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                                      />
+
+                                                      <select
+                                                         value={materialType}
+                                                         onChange={(event) => handleMaterialTypeChange(event.target.value)}
+                                                         className="rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                                      >
+                                                         <option value="Note">Note</option>
+                                                         <option value="Document">Document</option>
+                                                         <option value="Image">Image</option>
+                                                         <option value="Research">Research</option>
+                                                         <option value="Feedback">Feedback</option>
+                                                         <option value="Reference">Reference</option>
+                                                      </select>
+                                                   </div>
+
+                                                   <div className="mt-3 rounded-md border border-[var(--border-subtle)] bg-white px-3 py-3">
+                                                      <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">{materialGuidance.inputLabel}</p>
+                                                      <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">{materialGuidance.helperText}</p>
+                                                   </div>
+
+                                                   {materialType === "Image" && (
+                                                      <div className="mt-3 rounded-md border border-dashed border-[var(--border-subtle)] bg-white px-4 py-4 text-sm text-[var(--color-text-secondary)]">
+                                                         <div className="flex flex-col gap-3">
+                                                            <div>
+                                                               <p className="font-medium text-[var(--color-text-primary)]">Attach image</p>
+                                                               <p className="mt-1 leading-6">PNG, JPG, WEBP, or GIF up to about 1.2 MB. Local preview only for now — no dramatic cloud adventure.</p>
+                                                            </div>
+
+                                                            <input
+                                                               type="file"
+                                                               accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
+                                                               onChange={(event) => handleProjectMaterialImageFile(event.target.files?.[0])}
+                                                               className="w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm"
+                                                            />
+
+                                                            {materialImageDataUrl && (
+                                                               <div className="overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)]">
+                                                                  <img src={materialImageDataUrl} alt={materialImageFileName || "Project material preview"} className="max-h-64 w-full object-contain" />
+
+                                                                  <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                                                     <p className="break-words text-xs text-[var(--color-text-secondary)]">{materialImageFileName || "Image attached"}</p>
+
+                                                                     <button onClick={clearMaterialImageUpload} type="button" className="rounded-md bg-white px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-surface)]">
+                                                                        Remove image
+                                                                     </button>
+                                                                  </div>
+                                                               </div>
+                                                            )}
+                                                         </div>
+                                                      </div>
+                                                   )}
+
+                                                   {materialType === "Document" && (
+                                                      <div className="mt-3 rounded-md border border-dashed border-[var(--border-subtle)] bg-white px-4 py-4 text-sm text-[var(--color-text-secondary)]">
+                                                         <div className="flex flex-col gap-3">
+                                                            <div>
+                                                               <p className="font-medium text-[var(--color-text-primary)]">Attach document</p>
+                                                               <p className="mt-1 leading-6">
+                                                                  PDF, TXT, Markdown, DOC, or DOCX up to about 1.8 MB. PDFs, text files, Markdown, and readable DOCX files open in ALLEVIN so users can click, scroll, and read. Older DOC files still attach
+                                                                  as project files.
+                                                               </p>
+                                                            </div>
+
+                                                            <input
+                                                               type="file"
+                                                               accept="application/pdf,text/plain,text/markdown,.txt,.md,.markdown,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                                               onChange={(event) => handleProjectMaterialDocumentFile(event.target.files?.[0])}
+                                                               className="w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm"
+                                                            />
+
+                                                            {(materialDocumentFileName || materialDocumentText || materialDocumentDataUrl) && (
+                                                               <div className="overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)]">
+                                                                  <div className="px-3 py-3">
+                                                                     <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{materialDocumentFileName || "Document attached"}</p>
+                                                                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{materialDocumentMimeType || "document"}</p>
+                                                                  </div>
+
+                                                                  {materialDocumentText && (
+                                                                     <pre className="max-h-52 overflow-y-auto whitespace-pre-wrap break-words border-t border-[var(--border-subtle)] bg-white px-3 py-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+                                                                        {materialDocumentText}
+                                                                     </pre>
+                                                                  )}
+
+                                                                  <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                                                     <p className="text-xs text-[var(--color-text-secondary)]">{materialDocumentMimeType === "application/pdf" || materialDocumentText ? "Readable preview ready" : "Attached file saved"}</p>
+
+                                                                     <button onClick={clearMaterialDocumentUpload} type="button" className="rounded-md bg-white px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-surface)]">
+                                                                        Remove document
+                                                                     </button>
+                                                                  </div>
+                                                               </div>
+                                                            )}
+                                                         </div>
+                                                      </div>
+                                                   )}
+
+                                                   <input
+                                                      value={materialSource}
+                                                      onChange={(event) => setMaterialSource(sanitizeProjectPlainText(event.target.value, PROJECT_SANITIZE_LIMITS.materialSource, { preserveEdges: true }))}
+                                                      placeholder={materialGuidance.sourcePlaceholder}
+                                                      className="mt-3 w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
+                                                   />
+
+                                                   <textarea
+                                                      value={materialNotes}
+                                                      onChange={(event) => setMaterialNotes(sanitizeLiveProjectBody(event.target.value))}
+                                                      placeholder={materialGuidance.notesPlaceholder}
+                                                      className="mt-3 min-h-[110px] w-full resize-none rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                                                   />
+
+                                                   <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                      <p className="text-xs leading-5 text-[var(--color-text-secondary)]">Materials stay with this project and can be selected as references in Canvas.</p>
+
+                                                      <button
+                                                         onClick={() => createProjectMaterial(activeProject)}
+                                                         className="rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90"
+                                                      >
+                                                         Attach Material
+                                                      </button>
+                                                   </div>
+                                                </div>
+                                             </motion.div>
+                                          )}
+                                       </AnimatePresence>
+
+                                       {activeProjectMaterials.length > 0 && (
+                                          <div className="mt-4 border-y border-[var(--border-subtle)] py-4">
+                                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                                <p className="text-sm font-medium">Material view</p>
+
+                                                <select
+                                                   value={materialTypeFilter}
+                                                   onChange={(event) => setMaterialTypeFilter(event.target.value as ProjectMaterialFilter)}
+                                                   className="w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)] sm:w-[240px]"
+                                                >
+                                                   {PROJECT_MATERIAL_FILTERS.map((filter) => (
+                                                      <option key={filter} value={filter}>
+                                                         {filter} ({materialFilterCounts[filter] || 0})
+                                                      </option>
+                                                   ))}
+                                                </select>
+                                             </div>
+                                          </div>
+                                       )}
+
+                                       {activeProjectMaterials.length > 0 ? (
+                                          visibleProjectMaterials.length > 0 ? (
+                                             <div className="mt-4 grid grid-cols-1 gap-4">
+                                                {visibleProjectMaterials.map((material) => (
+                                                   <div key={material.id} className="min-w-0 overflow-hidden border-b border-[var(--border-subtle)] bg-transparent py-5">
+                                                      <div className="flex min-w-0 flex-col gap-4">
+                                                         <div className="min-w-0 flex-1">
+                                                            <div className="flex min-w-0 flex-wrap items-start gap-x-4 gap-y-1 text-xs font-medium text-[var(--color-text-secondary)]">
+                                                               <span className="uppercase tracking-[0.1em]">{material.type}</span>
+
+                                                               {selectedProjectMaterialIds.includes(material.id) && (
+                                                                  <span className="border-l-2 border-[var(--color-primary)] pl-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-primary)]">Referenced in project</span>
+                                                               )}
+
+                                                               {material.source && <span className="max-w-full break-words">{material.source}</span>}
+                                                            </div>
+
+                                                            <p className="mt-3 break-words font-medium leading-6">{material.title}</p>
+
+                                                            <p className="mt-2 break-words text-sm leading-6 text-[var(--color-text-secondary)]">{material.summary || getShortPreview(material.notes, 180)}</p>
+
+                                                            {material.interpretationSummary && (
+                                                               <div className="mt-3 rounded-md border border-[var(--border-subtle)] bg-white p-3">
+                                                                  <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN read</p>
+                                                                  <p className="mt-2 break-words text-sm leading-6 text-[var(--color-text-primary)]">{getShortPreview(material.interpretationSummary, 260)}</p>
+                                                                  {material.interpretationNextStep && <p className="mt-2 break-words text-xs leading-5 text-[var(--color-text-secondary)]">Next: {getShortPreview(material.interpretationNextStep, 180)}</p>}
+                                                               </div>
+                                                            )}
+
+                                                            {material.type === "Image" && material.imageDataUrl && (
+                                                               <button
+                                                                  type="button"
+                                                                  onClick={() => setFullscreenImageMaterial(material)}
+                                                                  className="mt-3 w-full overflow-hidden rounded-md border border-[var(--border-subtle)] bg-white text-left transition-opacity hover:opacity-90"
+                                                                  aria-label={`Open ${material.title} full screen`}
+                                                               >
+                                                                  <img src={material.imageDataUrl} alt={material.imageFileName || material.title || "Project image material"} className="max-h-48 w-full object-contain" />
+                                                               </button>
+                                                            )}
+
+                                                            {material.type === "Document" && (material.documentFileName || material.documentText || material.documentDataUrl) && (
+                                                               <button
+                                                                  type="button"
+                                                                  onClick={() => setFullscreenDocumentMaterial(material)}
+                                                                  className="mt-3 w-full rounded-md border border-[var(--border-subtle)] bg-white px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface)]"
+                                                                  aria-label={`Open ${material.title} document reader`}
+                                                               >
+                                                                  <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{material.documentFileName || material.title || "Project document"}</p>
+                                                                  <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{isReadableProjectDocument(material) ? "Click to read" : "Attached document"}</p>
+                                                               </button>
+                                                            )}
+                                                         </div>
+
+                                                         <div className="grid w-full min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
+                                                            <button
+                                                               onClick={() => toggleMaterialPreview(material.id)}
+                                                               className="min-h-10 rounded-md bg-white px-3 py-2 text-center text-xs font-medium leading-5 transition-colors hover:bg-[var(--color-surface)]"
+                                                            >
+                                                               {expandedMaterialIds.includes(material.id) ? "Hide" : "View"}
+                                                            </button>
+
+                                                            <button
+                                                               onClick={() => interpretProjectMaterial(activeProject, material)}
+                                                               disabled={activeMaterialInterpretId === material.id}
+                                                               className="min-h-10 rounded-md bg-white px-3 py-2 text-center text-xs font-medium leading-5 transition-colors hover:bg-[var(--color-surface)] disabled:cursor-not-allowed disabled:opacity-60"
+                                                            >
+                                                               {activeMaterialInterpretId === material.id ? "Reading..." : material.interpretedAt ? "Re-read" : "Interpret"}
+                                                            </button>
+
+                                                            <button
+                                                               onClick={() => toggleMaterialProjectReference(activeProject, material)}
+                                                               aria-pressed={selectedProjectMaterialIds.includes(material.id)}
+                                                               className={`min-h-10 rounded-md px-3 py-2 text-center text-xs font-medium leading-5 transition-colors ${
+                                                                  selectedProjectMaterialIds.includes(material.id) ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "bg-white hover:bg-[var(--color-surface)]"
+                                                               }`}
+                                                            >
+                                                               {selectedProjectMaterialIds.includes(material.id) ? "Referenced in Project" : "Reference in Project"}
+                                                            </button>
+                                                            <button
+                                                               onClick={() => deleteProjectMaterial(material.id)}
+                                                               className="min-h-10 rounded-md bg-white px-3 py-2 text-center text-xs font-medium leading-5 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)]"
+                                                            >
+                                                               Delete
+                                                            </button>
+                                                         </div>
+                                                      </div>
+
+                                                      {expandedMaterialIds.includes(material.id) && (
+                                                         <div className="mt-4 rounded-md bg-white p-4">
+                                                            <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Material Details</p>
+
+                                                            {material.type === "Image" && material.imageDataUrl && (
+                                                               <div className="mt-3 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)]">
+                                                                  <button type="button" onClick={() => setFullscreenImageMaterial(material)} className="block w-full transition-opacity hover:opacity-90" aria-label={`Open ${material.title} full screen`}>
+                                                                     <img src={material.imageDataUrl} alt={material.imageFileName || material.title || "Project image material"} className="max-h-[420px] w-full object-contain" />
+                                                                  </button>
+                                                                  {material.imageFileName && <p className="border-t border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">{material.imageFileName}</p>}
+                                                               </div>
+                                                            )}
+
+                                                            {material.type === "Document" && (material.documentFileName || material.documentText || material.documentDataUrl) && (
+                                                               <div className="mt-3 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)]">
+                                                                  <button
+                                                                     type="button"
+                                                                     onClick={() => setFullscreenDocumentMaterial(material)}
+                                                                     className="block w-full px-4 py-3 text-left transition-colors hover:bg-white"
+                                                                     aria-label={`Open ${material.title} document reader`}
+                                                                  >
+                                                                     <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{material.documentFileName || material.title || "Project document"}</p>
+                                                                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{isReadableProjectDocument(material) ? "Open reader" : "Attached document"}</p>
+                                                                  </button>
+                                                               </div>
+                                                            )}
+
+                                                            {material.interpretationSummary && (
+                                                               <div className="mt-3 rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
+                                                                  <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN Interpretation</p>
+                                                                  <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-primary)]">{material.interpretationSummary}</p>
+                                                                  {material.interpretationUsefulContext && <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-secondary)]">{material.interpretationUsefulContext}</p>}
+                                                                  {material.interpretationNextStep && (
+                                                                     <p className="mt-3 whitespace-pre-wrap break-words text-sm font-medium leading-6 text-[var(--color-text-primary)]">Next move: {material.interpretationNextStep}</p>
+                                                                  )}
+                                                               </div>
+                                                            )}
+
+                                                            <p className="mt-3 max-h-[320px] overflow-y-auto whitespace-pre-wrap break-words pr-2 text-sm leading-6 text-[var(--color-text-secondary)]">
+                                                               {material.notes || material.summary || "No extra details saved for this material yet."}
+                                                            </p>
+                                                         </div>
+                                                      )}
+                                                   </div>
+                                                ))}
+                                             </div>
+                                          ) : (
+                                             <div className="mt-4 rounded-md bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">No {materialTypeFilter.toLowerCase()} materials in this project yet.</div>
+                                          )
+                                       ) : (
+                                          <div className="mt-4 rounded-md bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">
+                                             No materials attached yet. Add notes, feedback, references, documents, or planning details so this project has context to work from.
+                                          </div>
+                                       )}
+                                    </div>
+                                 </details>
+                              </section>
+
+                              <div className="mb-8 border-t border-[var(--border-subtle)] pt-8">
+                                 <section aria-labelledby="milestone-workspaces-heading" className="space-y-6">
                                     {(() => {
-                                       const visibleMilestones = projectTracking.milestones.filter((milestone) => milestone.status !== "archived").sort((left, right) => left.order - right.order);
+                                       const visibleMilestones = [...projectTracking.milestones].sort((left, right) => left.order - right.order);
 
                                        const currentMilestone = visibleMilestones.find((milestone) => milestone.status === "active") || visibleMilestones.find((milestone) => milestone.status !== "complete") || visibleMilestones[0];
 
@@ -7523,48 +8294,70 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
                                        return (
                                           <>
-                                             <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-                                                <div>
-                                                   <p id="milestone-workspaces-heading" className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
-                                                      Milestone Workspace
-                                                   </p>
-                                                   <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--color-text-secondary)]">Choose a milestone to view or continue its work.</p>
+                                             <div className="mb-7 border-b border-[var(--border-subtle)] pb-6">
+                                                <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+                                                   <div>
+                                                      <p id="milestone-workspaces-heading" className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                                                         Milestones
+                                                      </p>
+                                                      <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
+                                                         {projectTracking.milestones.filter((milestone) => milestone.status === "complete").length}/{projectTracking.milestones.length} complete
+                                                      </p>
+                                                   </div>
+
+                                                   <div className="w-full md:max-w-lg">
+                                                      <label htmlFor="milestone-workspace-selector" className="sr-only">
+                                                         Choose a milestone
+                                                      </label>
+                                                      <div className="relative">
+                                                         <select
+                                                            id="milestone-workspace-selector"
+                                                            value={selectedMilestone.id}
+                                                            onChange={(event) => {
+                                                               cancelEditingMilestone(selectedMilestone.id);
+                                                               setSelectedMilestoneWorkspaceId(event.target.value);
+                                                            }}
+                                                            className="w-full appearance-none rounded-md border border-[var(--border-subtle)] bg-white px-3 py-3 pr-10 text-sm font-medium text-[var(--color-text-primary)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                                                         >
+                                                            {visibleMilestones.map((milestone, index) => (
+                                                               <option key={milestone.id} value={milestone.id}>
+                                                                  {index + 1}. {milestone.title}
+                                                                  {milestone.status === "active" ? " — Current" : milestone.status === "complete" ? " — Complete" : ""}
+                                                               </option>
+                                                            ))}
+                                                         </select>
+                                                         <ChevronDown aria-hidden="true" size={18} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]" />
+                                                      </div>
+                                                   </div>
                                                 </div>
 
-                                                <div className="w-full sm:max-w-sm">
-                                                   <label htmlFor="milestone-workspace-selector" className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
-                                                      Select milestone
-                                                   </label>
-                                                   <div className="relative mt-2">
-                                                      <select
-                                                         id="milestone-workspace-selector"
-                                                         value={selectedMilestone.id}
-                                                         onChange={(event) => {
-                                                            cancelEditingMilestone(selectedMilestone.id);
-                                                            setSelectedMilestoneWorkspaceId(event.target.value);
-                                                         }}
-                                                         className="w-full appearance-none rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-3 pr-10 text-sm font-medium text-[var(--color-text-primary)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                                                      >
-                                                         {visibleMilestones.map((milestone, index) => (
-                                                            <option key={milestone.id} value={milestone.id}>
-                                                               {index + 1}. {milestone.title}
-                                                               {milestone.status === "active" ? " — Current" : milestone.status === "complete" ? " — Complete" : ""}
-                                                            </option>
-                                                         ))}
-                                                      </select>
-                                                      <ChevronDown aria-hidden="true" size={18} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]" />
-                                                   </div>
+                                                <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                                                   <input
+                                                      value={newMilestoneTitle}
+                                                      onChange={(event) => setNewMilestoneTitle(sanitizeLiveProjectTitle(event.target.value))}
+                                                      onKeyDown={(event) => {
+                                                         if (event.key === "Enter") {
+                                                            event.preventDefault();
+                                                            addProjectMilestone(activeProject);
+                                                         }
+                                                      }}
+                                                      maxLength={120}
+                                                      placeholder="Add a new milestone"
+                                                      className="min-w-0 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--color-primary)]"
+                                                   />
+
+                                                   <button
+                                                      type="button"
+                                                      onClick={() => addProjectMilestone(activeProject)}
+                                                      className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-primary)] transition-colors hover:border-[var(--color-primary)]/40"
+                                                   >
+                                                      Add milestone
+                                                   </button>
                                                 </div>
                                              </div>
 
                                              <section aria-labelledby={`milestone-heading-${selectedMilestone.id}`} className="scroll-mt-24">
-                                                <div aria-hidden="true" className="mb-6 flex items-center gap-3">
-                                                   <div className="h-px flex-1 bg-[var(--border-subtle)]" />
-                                                   <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">Milestone {selectedIndex + 1}</span>
-                                                   <div className="h-px flex-1 bg-[var(--border-subtle)]" />
-                                                </div>
-
-                                                <div className={`rounded-2xl border p-4 sm:p-6 ${isActive ? "border-[var(--color-primary)] bg-[var(--color-bg-soft)]" : "border-[var(--border-subtle)] bg-white"}`}>
+                                                <div className={`border-y py-6 ${isActive ? "border-[var(--color-primary)]" : "border-[var(--border-subtle)]"}`}>
                                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                                       <div className="min-w-0">
                                                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">{isActive ? "Current Milestone" : isComplete ? "Complete" : "Upcoming"}</span>
@@ -7572,8 +8365,6 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                                          <h4 id={`milestone-heading-${selectedMilestone.id}`} className="mt-2 break-words text-xl font-semibold leading-7 text-[var(--color-text-primary)]">
                                                             {selectedMilestone.title}
                                                          </h4>
-
-                                                         {selectedMilestone.goal && <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{selectedMilestone.goal}</p>}
                                                       </div>
                                                    </div>
 
@@ -7585,39 +8376,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                                                <input
                                                                   value={String(draft.title || "")}
                                                                   onChange={(event) => updateMilestoneEditDraft(selectedMilestone.id, { title: sanitizeLiveProjectTitle(event.target.value) })}
-                                                                  className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                                               />
-                                                            </div>
-
-                                                            <div className="grid gap-4 lg:grid-cols-2">
-                                                               <div>
-                                                                  <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Milestone goal</label>
-                                                                  <textarea
-                                                                     value={String(draft.goal || "")}
-                                                                     onChange={(event) => updateMilestoneEditDraft(selectedMilestone.id, { goal: sanitizeLiveProjectBody(event.target.value) })}
-                                                                     rows={4}
-                                                                     className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
-                                                                  />
-                                                               </div>
-
-                                                               <div>
-                                                                  <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Why it matters</label>
-                                                                  <textarea
-                                                                     value={String(draft.whyItMatters || "")}
-                                                                     onChange={(event) => updateMilestoneEditDraft(selectedMilestone.id, { whyItMatters: sanitizeLiveProjectBody(event.target.value) })}
-                                                                     rows={4}
-                                                                     className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
-                                                                  />
-                                                               </div>
-                                                            </div>
-
-                                                            <div>
-                                                               <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Starting prompt</label>
-                                                               <textarea
-                                                                  value={String(draft.startingPrompt || "")}
-                                                                  onChange={(event) => updateMilestoneEditDraft(selectedMilestone.id, { startingPrompt: sanitizeLiveProjectBody(event.target.value) })}
-                                                                  rows={3}
-                                                                  className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                                                                  className="mt-2 w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
                                                                />
                                                             </div>
 
@@ -7625,7 +8384,6 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                                                { key: "decisions", label: "Decisions", placeholder: "One decision per line" },
                                                                { key: "openQuestions", label: "Open questions", placeholder: "One question per line" },
                                                                { key: "completionCriteria", label: "Completion criteria", placeholder: "What must be true before this milestone is complete?" },
-                                                               { key: "completionEvidence", label: "Recorded evidence", placeholder: "One verified result or supporting source per line" },
                                                             ].map((field) => (
                                                                <div key={field.key}>
                                                                   <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{field.label}</label>
@@ -7641,36 +8399,30 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                                                      }
                                                                      placeholder={field.placeholder}
                                                                      rows={4}
-                                                                     className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                                                                     className="mt-2 w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
                                                                   />
                                                                </div>
                                                             ))}
 
                                                             <div className="flex flex-wrap gap-2">
-                                                               <button type="button" onClick={() => saveMilestoneStructuralChanges(activeProject, selectedMilestone.id)} className="studio-button-primary">
+                                                               <button
+                                                                  type="button"
+                                                                  onClick={() => saveMilestoneStructuralChanges(activeProject, selectedMilestone.id)}
+                                                                  className="bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90"
+                                                               >
                                                                   Save milestone
                                                                </button>
-                                                               <button type="button" onClick={() => cancelEditingMilestone(selectedMilestone.id)} className="studio-button-secondary">
+                                                               <button
+                                                                  type="button"
+                                                                  onClick={() => cancelEditingMilestone(selectedMilestone.id)}
+                                                                  className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40"
+                                                               >
                                                                   Cancel
                                                                </button>
                                                             </div>
                                                          </div>
                                                       ) : (
                                                          <>
-                                                            {selectedMilestone.whyItMatters && (
-                                                               <div className="mb-5">
-                                                                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Why this matters</p>
-                                                                  <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{selectedMilestone.whyItMatters}</p>
-                                                               </div>
-                                                            )}
-
-                                                            {selectedMilestone.startingPrompt && (
-                                                               <div className="mb-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3">
-                                                                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Starting prompt</p>
-                                                                  <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{selectedMilestone.startingPrompt}</p>
-                                                               </div>
-                                                            )}
-
                                                             <div>
                                                                <label htmlFor={`milestone-work-${selectedMilestone.id}`} className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
                                                                   Work on this milestone
@@ -7681,44 +8433,89 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                                                   onChange={(event) => scheduleMilestoneWorkingContentSave(activeProject, selectedMilestone, event.target.value)}
                                                                   rows={10}
                                                                   maxLength={PROJECT_SANITIZE_LIMITS.body}
-                                                                  placeholder={`Add the work, notes, draft, decisions, or evidence for ${selectedMilestone.title}...`}
-                                                                  className="mt-2 min-h-[220px] w-full resize-y rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-4 text-sm leading-7 text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
+                                                                  placeholder={`Add the work, notes, draft, or decisions for ${selectedMilestone.title}...`}
+                                                                  className="mt-2 min-h-[220px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-white px-4 py-4 text-sm leading-7 text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
                                                                />
                                                             </div>
 
-                                                            {(selectedMilestone.decisions.length > 0 || selectedMilestone.openQuestions.length > 0 || selectedMilestone.completionCriteria.length > 0 || selectedMilestone.completionEvidence.length > 0) && (
+                                                            {(selectedMilestone.decisions.length > 0 || selectedMilestone.openQuestions.length > 0 || selectedMilestone.completionCriteria.length > 0) && (
                                                                <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                                                                  {[
-                                                                     { label: "Decisions", items: selectedMilestone.decisions },
-                                                                     { label: "Open questions", items: selectedMilestone.openQuestions },
-                                                                     { label: "Completion criteria", items: selectedMilestone.completionCriteria },
-                                                                     { label: "Recorded evidence", items: selectedMilestone.completionEvidence },
-                                                                  ].map((group) => (
-                                                                     <div key={group.label} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
-                                                                        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{group.label}</p>
-                                                                        {group.items.length ? (
-                                                                           <ul className="mt-3 space-y-2">
-                                                                              {group.items.map((item, itemIndex) => (
-                                                                                 <li key={`${group.label}-${itemIndex}`} className="text-sm leading-6 text-[var(--color-text-primary)]">
-                                                                                    {item}
-                                                                                 </li>
-                                                                              ))}
-                                                                           </ul>
-                                                                        ) : null}
+                                                                  {selectedMilestone.decisions.length > 0 && (
+                                                                     <div className="border-t border-[var(--border-subtle)] pt-4">
+                                                                        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Decisions</p>
+                                                                        <ul className="mt-3 space-y-2">
+                                                                           {selectedMilestone.decisions.map((item, itemIndex) => (
+                                                                              <li key={`Decisions-${itemIndex}`} className="text-sm leading-6 text-[var(--color-text-primary)]">
+                                                                                 {item}
+                                                                              </li>
+                                                                           ))}
+                                                                        </ul>
                                                                      </div>
-                                                                  ))}
+                                                                  )}
+
+                                                                  {selectedMilestone.openQuestions.length > 0 && (
+                                                                     <div className="border-t border-[var(--border-subtle)] pt-4">
+                                                                        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Open questions</p>
+                                                                        <ul className="mt-3 space-y-2">
+                                                                           {selectedMilestone.openQuestions.map((item, itemIndex) => (
+                                                                              <li key={`Open-questions-${itemIndex}`} className="text-sm leading-6 text-[var(--color-text-primary)]">
+                                                                                 {ensureProjectQuestionMark(item)}
+                                                                              </li>
+                                                                           ))}
+                                                                        </ul>
+                                                                     </div>
+                                                                  )}
+
+                                                                  {selectedMilestone.completionCriteria.length > 0 && (
+                                                                     <div className="border-t border-[var(--border-subtle)] pt-4 lg:col-span-2">
+                                                                        <div className="flex items-center justify-between gap-3">
+                                                                           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Completion criteria</p>
+                                                                           <span className="text-xs text-[var(--color-text-secondary)]">
+                                                                              {selectedMilestone.completedCriteria.length}/{selectedMilestone.completionCriteria.length}
+                                                                           </span>
+                                                                        </div>
+
+                                                                        <ul className="mt-3 space-y-2">
+                                                                           {selectedMilestone.completionCriteria.map((criterion, criterionIndex) => {
+                                                                              const checked = selectedMilestone.completedCriteria.some((completedCriterion) => normalizeProjectMatchValue(completedCriterion) === normalizeProjectMatchValue(criterion));
+
+                                                                              return (
+                                                                                 <li key={`Completion-criteria-${criterionIndex}`}>
+                                                                                    <label
+                                                                                       className={`flex items-start gap-3 border-b border-[var(--border-subtle)] px-0 py-2.5 last:border-b-0 text-sm leading-6 ${isComplete ? "cursor-default" : "cursor-pointer hover:bg-white"}`}
+                                                                                    >
+                                                                                       <input
+                                                                                          type="checkbox"
+                                                                                          checked={checked}
+                                                                                          disabled={isComplete}
+                                                                                          onChange={() => toggleMilestoneCompletionCriterion(activeProject, selectedMilestone.id, criterion)}
+                                                                                          className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-primary)]"
+                                                                                       />
+                                                                                       <span className={checked ? "text-[var(--color-text-secondary)] line-through" : "text-[var(--color-text-primary)]"}>{criterion}</span>
+                                                                                    </label>
+                                                                                 </li>
+                                                                              );
+                                                                           })}
+                                                                        </ul>
+                                                                     </div>
+                                                                  )}
                                                                </div>
                                                             )}
 
                                                             <div className="mt-5 flex flex-wrap gap-2 border-t border-[var(--border-subtle)] pt-4">
-                                                               <button type="button" onClick={() => beginEditingMilestone(selectedMilestone)} className="studio-button-secondary">
+                                                               <button
+                                                                  type="button"
+                                                                  onClick={() => beginEditingMilestone(selectedMilestone)}
+                                                                  className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40"
+                                                               >
                                                                   Edit milestone
                                                                </button>
-                                                               <button type="button" onClick={() => toggleProjectMilestone(activeProject, selectedMilestone.id)} className="studio-button-secondary">
+                                                               <button
+                                                                  type="button"
+                                                                  onClick={() => toggleProjectMilestone(activeProject, selectedMilestone.id)}
+                                                                  className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40"
+                                                               >
                                                                   {isComplete ? "Reopen milestone" : "Mark complete"}
-                                                               </button>
-                                                               <button type="button" onClick={() => removeProjectMilestone(activeProject, selectedMilestone.id)} className="studio-button-secondary text-[var(--color-text-secondary)]">
-                                                                  {milestoneHasSavedWork(selectedMilestone) ? "Archive milestone" : "Delete milestone"}
                                                                </button>
                                                             </div>
                                                          </>
@@ -7730,394 +8527,6 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                        );
                                     })()}
                                  </section>
-
-                                 <details className="border-y border-[var(--border-subtle)] px-1 py-4">
-                                    <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-2 text-left focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]">
-                                       <div className="min-w-0 sm:flex sm:items-center sm:gap-5">
-                                          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Next Session</p>
-
-                                          <p className="mt-1 text-sm font-medium text-[var(--color-text-primary)] sm:mt-0">{activeProjectSessionLabel || "Schedule time"}</p>
-
-                                          {activeProjectSessionLabel && activeProjectScheduledTaskLabel && <p className="mt-1 truncate text-xs text-[var(--color-text-secondary)] sm:mt-0">{activeProjectScheduledTaskLabel}</p>}
-                                       </div>
-
-                                       <ChevronDown size={17} className="shrink-0 text-[var(--color-text-secondary)]" />
-                                    </summary>
-
-                                    <div className="mx-2 mt-4 space-y-3 border-t border-[var(--border-subtle)] pt-4">
-                                       <input
-                                          value={projectTracking.calendarTaskTitle}
-                                          onChange={(event) => updateProjectTracking(activeProject, { calendarTaskTitle: event.target.value })}
-                                          placeholder="What should this session accomplish?"
-                                          className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                       />
-
-                                       <div className="grid grid-cols-2 gap-2">
-                                          <input
-                                             type="date"
-                                             value={projectTracking.calendarTaskDate}
-                                             onChange={(event) => updateProjectTracking(activeProject, { calendarTaskDate: event.target.value })}
-                                             className="min-w-0 rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                          />
-
-                                          <input
-                                             type="time"
-                                             value={projectTracking.calendarTaskTime}
-                                             onChange={(event) => updateProjectTracking(activeProject, { calendarTaskTime: event.target.value })}
-                                             className="min-w-0 rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                          />
-                                       </div>
-
-                                       <div className="grid grid-cols-[1fr_auto] gap-2">
-                                          <select
-                                             value={projectTracking.calendarTaskDurationMinutes}
-                                             onChange={(event) => updateProjectTracking(activeProject, { calendarTaskDurationMinutes: Number(event.target.value) })}
-                                             className="rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                          >
-                                             <option value={15}>15 minutes</option>
-                                             <option value={30}>30 minutes</option>
-                                             <option value={45}>45 minutes</option>
-                                             <option value={60}>1 hour</option>
-                                             <option value={90}>1.5 hours</option>
-                                             <option value={120}>2 hours</option>
-                                          </select>
-
-                                          <button type="button" onClick={() => scheduleProjectTime(activeProject)} className="rounded-xl bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-[var(--color-cream)]">
-                                             Add to Calendar
-                                          </button>
-                                       </div>
-                                    </div>
-                                 </details>
-                              </div>
-
-                              <div className="mb-5">
-                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                    <div>
-                                       <div className="flex items-center gap-2">
-                                          <FileText size={18} />
-
-                                          <p className="font-medium">Project Materials ({activeProjectMaterials.length})</p>
-                                       </div>
-
-                                       <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Keep references, feedback, notes, and documents connected to this project.</p>
-                                    </div>
-
-                                    <button onClick={() => setMaterialBuilderOpen((current) => !current)} className="studio-button-secondary w-full justify-center sm:w-auto">
-                                       {materialBuilderOpen ? "Close" : "Add Material"}
-                                    </button>
-                                 </div>
-
-                                 <AnimatePresence initial={false}>
-                                    {materialBuilderOpen && (
-                                       <motion.div
-                                          initial={{
-                                             opacity: 0,
-                                             height: 0,
-                                          }}
-                                          animate={{
-                                             opacity: 1,
-                                             height: "auto",
-                                          }}
-                                          exit={{
-                                             opacity: 0,
-                                             height: 0,
-                                          }}
-                                          transition={{
-                                             duration: 0.2,
-                                          }}
-                                          className="overflow-hidden"
-                                       >
-                                          <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4">
-                                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                                                <input
-                                                   value={materialTitle}
-                                                   onChange={(event) => setMaterialTitle(sanitizeLiveProjectTitle(event.target.value))}
-                                                   placeholder={materialGuidance.titlePlaceholder}
-                                                   className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                                />
-
-                                                <select
-                                                   value={materialType}
-                                                   onChange={(event) => handleMaterialTypeChange(event.target.value)}
-                                                   className="rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                                >
-                                                   <option value="Note">Note</option>
-                                                   <option value="Document">Document</option>
-                                                   <option value="Image">Image</option>
-                                                   <option value="Research">Research</option>
-                                                   <option value="Feedback">Feedback</option>
-                                                   <option value="Reference">Reference</option>
-                                                </select>
-                                             </div>
-
-                                             <div className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-3">
-                                                <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">{materialGuidance.inputLabel}</p>
-                                                <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">{materialGuidance.helperText}</p>
-                                             </div>
-
-                                             {materialType === "Image" && (
-                                                <div className="mt-3 rounded-xl border border-dashed border-[var(--border-subtle)] bg-white px-4 py-4 text-sm text-[var(--color-text-secondary)]">
-                                                   <div className="flex flex-col gap-3">
-                                                      <div>
-                                                         <p className="font-medium text-[var(--color-text-primary)]">Attach image</p>
-                                                         <p className="mt-1 leading-6">PNG, JPG, WEBP, or GIF up to about 1.2 MB. Local preview only for now — no dramatic cloud adventure.</p>
-                                                      </div>
-
-                                                      <input
-                                                         type="file"
-                                                         accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
-                                                         onChange={(event) => handleProjectMaterialImageFile(event.target.files?.[0])}
-                                                         className="w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm"
-                                                      />
-
-                                                      {materialImageDataUrl && (
-                                                         <div className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)]">
-                                                            <img src={materialImageDataUrl} alt={materialImageFileName || "Project material preview"} className="max-h-64 w-full object-contain" />
-
-                                                            <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                                                               <p className="break-words text-xs text-[var(--color-text-secondary)]">{materialImageFileName || "Image attached"}</p>
-
-                                                               <button onClick={clearMaterialImageUpload} type="button" className="rounded-xl bg-white px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-surface)]">
-                                                                  Remove image
-                                                               </button>
-                                                            </div>
-                                                         </div>
-                                                      )}
-                                                   </div>
-                                                </div>
-                                             )}
-
-                                             {materialType === "Document" && (
-                                                <div className="mt-3 rounded-xl border border-dashed border-[var(--border-subtle)] bg-white px-4 py-4 text-sm text-[var(--color-text-secondary)]">
-                                                   <div className="flex flex-col gap-3">
-                                                      <div>
-                                                         <p className="font-medium text-[var(--color-text-primary)]">Attach document</p>
-                                                         <p className="mt-1 leading-6">
-                                                            PDF, TXT, Markdown, DOC, or DOCX up to about 1.8 MB. PDFs, text files, Markdown, and readable DOCX files open in ALLEVIN so users can click, scroll, and read. Older DOC files still attach as
-                                                            project files.
-                                                         </p>
-                                                      </div>
-
-                                                      <input
-                                                         type="file"
-                                                         accept="application/pdf,text/plain,text/markdown,.txt,.md,.markdown,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                                                         onChange={(event) => handleProjectMaterialDocumentFile(event.target.files?.[0])}
-                                                         className="w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm"
-                                                      />
-
-                                                      {(materialDocumentFileName || materialDocumentText || materialDocumentDataUrl) && (
-                                                         <div className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)]">
-                                                            <div className="px-3 py-3">
-                                                               <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{materialDocumentFileName || "Document attached"}</p>
-                                                               <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{materialDocumentMimeType || "document"}</p>
-                                                            </div>
-
-                                                            {materialDocumentText && (
-                                                               <pre className="max-h-52 overflow-y-auto whitespace-pre-wrap break-words border-t border-[var(--border-subtle)] bg-white px-3 py-3 text-xs leading-5 text-[var(--color-text-secondary)]">
-                                                                  {materialDocumentText}
-                                                               </pre>
-                                                            )}
-
-                                                            <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                                                               <p className="text-xs text-[var(--color-text-secondary)]">{materialDocumentMimeType === "application/pdf" || materialDocumentText ? "Readable preview ready" : "Attached file saved"}</p>
-
-                                                               <button onClick={clearMaterialDocumentUpload} type="button" className="rounded-xl bg-white px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-surface)]">
-                                                                  Remove document
-                                                               </button>
-                                                            </div>
-                                                         </div>
-                                                      )}
-                                                   </div>
-                                                </div>
-                                             )}
-
-                                             <input
-                                                value={materialSource}
-                                                onChange={(event) => setMaterialSource(sanitizeProjectPlainText(event.target.value, PROJECT_SANITIZE_LIMITS.materialSource, { preserveEdges: true }))}
-                                                placeholder={materialGuidance.sourcePlaceholder}
-                                                className="mt-3 w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
-                                             />
-
-                                             <textarea
-                                                value={materialNotes}
-                                                onChange={(event) => setMaterialNotes(sanitizeLiveProjectBody(event.target.value))}
-                                                placeholder={materialGuidance.notesPlaceholder}
-                                                className="mt-3 min-h-[110px] w-full resize-none rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
-                                             />
-
-                                             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                                <p className="text-xs leading-5 text-[var(--color-text-secondary)]">Materials stay with this project and can be selected as references in Canvas.</p>
-
-                                                <button onClick={() => createProjectMaterial(activeProject)} className="rounded-xl bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
-                                                   Attach Material
-                                                </button>
-                                             </div>
-                                          </div>
-                                       </motion.div>
-                                    )}
-                                 </AnimatePresence>
-
-                                 {activeProjectMaterials.length > 0 && (
-                                    <div className="mt-4 border-y border-[var(--border-subtle)] py-4">
-                                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                          <p className="text-sm font-medium">Material view</p>
-
-                                          <select
-                                             value={materialTypeFilter}
-                                             onChange={(event) => setMaterialTypeFilter(event.target.value as ProjectMaterialFilter)}
-                                             className="w-full rounded-xl border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)] sm:w-[240px]"
-                                          >
-                                             {PROJECT_MATERIAL_FILTERS.map((filter) => (
-                                                <option key={filter} value={filter}>
-                                                   {filter} ({materialFilterCounts[filter] || 0})
-                                                </option>
-                                             ))}
-                                          </select>
-                                       </div>
-                                    </div>
-                                 )}
-
-                                 {activeProjectMaterials.length > 0 ? (
-                                    visibleProjectMaterials.length > 0 ? (
-                                       <div className="mt-4 grid grid-cols-1 gap-4">
-                                          {visibleProjectMaterials.map((material) => (
-                                             <div key={material.id} className="min-w-0 overflow-hidden border-b border-[var(--border-subtle)] bg-transparent py-5">
-                                                <div className="flex min-w-0 flex-col gap-4">
-                                                   <div className="min-w-0 flex-1">
-                                                      <div className="flex min-w-0 flex-wrap items-start gap-x-4 gap-y-1 text-xs font-medium text-[var(--color-text-secondary)]">
-                                                         <span className="uppercase tracking-[0.1em]">{material.type}</span>
-
-                                                         {selectedProjectMaterialIds.includes(material.id) && (
-                                                            <span className="rounded-full bg-[var(--color-primary-soft)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-primary)]">Referenced in project</span>
-                                                         )}
-
-                                                         {material.source && <span className="max-w-full break-words">{material.source}</span>}
-                                                      </div>
-
-                                                      <p className="mt-3 break-words font-medium leading-6">{material.title}</p>
-
-                                                      <p className="mt-2 break-words text-sm leading-6 text-[var(--color-text-secondary)]">{material.summary || getShortPreview(material.notes, 180)}</p>
-
-                                                      {material.interpretationSummary && (
-                                                         <div className="mt-3 rounded-2xl border border-[var(--border-subtle)] bg-white p-3">
-                                                            <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN read</p>
-                                                            <p className="mt-2 break-words text-sm leading-6 text-[var(--color-text-primary)]">{getShortPreview(material.interpretationSummary, 260)}</p>
-                                                            {material.interpretationNextStep && <p className="mt-2 break-words text-xs leading-5 text-[var(--color-text-secondary)]">Next: {getShortPreview(material.interpretationNextStep, 180)}</p>}
-                                                         </div>
-                                                      )}
-
-                                                      {material.type === "Image" && material.imageDataUrl && (
-                                                         <button
-                                                            type="button"
-                                                            onClick={() => setFullscreenImageMaterial(material)}
-                                                            className="mt-3 w-full overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-white text-left transition-opacity hover:opacity-90"
-                                                            aria-label={`Open ${material.title} full screen`}
-                                                         >
-                                                            <img src={material.imageDataUrl} alt={material.imageFileName || material.title || "Project image material"} className="max-h-48 w-full object-contain" />
-                                                         </button>
-                                                      )}
-
-                                                      {material.type === "Document" && (material.documentFileName || material.documentText || material.documentDataUrl) && (
-                                                         <button
-                                                            type="button"
-                                                            onClick={() => setFullscreenDocumentMaterial(material)}
-                                                            className="mt-3 w-full rounded-2xl border border-[var(--border-subtle)] bg-white px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface)]"
-                                                            aria-label={`Open ${material.title} document reader`}
-                                                         >
-                                                            <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{material.documentFileName || material.title || "Project document"}</p>
-                                                            <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{isReadableProjectDocument(material) ? "Click to read" : "Attached document"}</p>
-                                                         </button>
-                                                      )}
-                                                   </div>
-
-                                                   <div className="grid w-full min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
-                                                      <button
-                                                         onClick={() => toggleMaterialPreview(material.id)}
-                                                         className="min-h-10 rounded-xl bg-white px-3 py-2 text-center text-xs font-medium leading-5 transition-colors hover:bg-[var(--color-surface)]"
-                                                      >
-                                                         {expandedMaterialIds.includes(material.id) ? "Hide" : "View"}
-                                                      </button>
-
-                                                      <button
-                                                         onClick={() => interpretProjectMaterial(activeProject, material)}
-                                                         disabled={activeMaterialInterpretId === material.id}
-                                                         className="min-h-10 rounded-xl bg-white px-3 py-2 text-center text-xs font-medium leading-5 transition-colors hover:bg-[var(--color-surface)] disabled:cursor-not-allowed disabled:opacity-60"
-                                                      >
-                                                         {activeMaterialInterpretId === material.id ? "Reading..." : material.interpretedAt ? "Re-read" : "Interpret"}
-                                                      </button>
-
-                                                      <button
-                                                         onClick={() => toggleMaterialProjectReference(activeProject, material)}
-                                                         aria-pressed={selectedProjectMaterialIds.includes(material.id)}
-                                                         className={`min-h-10 rounded-xl px-3 py-2 text-center text-xs font-medium leading-5 transition-colors ${
-                                                            selectedProjectMaterialIds.includes(material.id) ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "bg-white hover:bg-[var(--color-surface)]"
-                                                         }`}
-                                                      >
-                                                         {selectedProjectMaterialIds.includes(material.id) ? "Referenced in Project" : "Reference in Project"}
-                                                      </button>
-                                                      <button
-                                                         onClick={() => deleteProjectMaterial(material.id)}
-                                                         className="min-h-10 rounded-xl bg-white px-3 py-2 text-center text-xs font-medium leading-5 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)]"
-                                                      >
-                                                         Delete
-                                                      </button>
-                                                   </div>
-                                                </div>
-
-                                                {expandedMaterialIds.includes(material.id) && (
-                                                   <div className="mt-4 rounded-2xl bg-white p-4">
-                                                      <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Material Details</p>
-
-                                                      {material.type === "Image" && material.imageDataUrl && (
-                                                         <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)]">
-                                                            <button type="button" onClick={() => setFullscreenImageMaterial(material)} className="block w-full transition-opacity hover:opacity-90" aria-label={`Open ${material.title} full screen`}>
-                                                               <img src={material.imageDataUrl} alt={material.imageFileName || material.title || "Project image material"} className="max-h-[420px] w-full object-contain" />
-                                                            </button>
-                                                            {material.imageFileName && <p className="border-t border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">{material.imageFileName}</p>}
-                                                         </div>
-                                                      )}
-
-                                                      {material.type === "Document" && (material.documentFileName || material.documentText || material.documentDataUrl) && (
-                                                         <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)]">
-                                                            <button
-                                                               type="button"
-                                                               onClick={() => setFullscreenDocumentMaterial(material)}
-                                                               className="block w-full px-4 py-3 text-left transition-colors hover:bg-white"
-                                                               aria-label={`Open ${material.title} document reader`}
-                                                            >
-                                                               <p className="break-words text-sm font-medium text-[var(--color-text-primary)]">{material.documentFileName || material.title || "Project document"}</p>
-                                                               <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{isReadableProjectDocument(material) ? "Open reader" : "Attached document"}</p>
-                                                            </button>
-                                                         </div>
-                                                      )}
-
-                                                      {material.interpretationSummary && (
-                                                         <div className="mt-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4">
-                                                            <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN Interpretation</p>
-                                                            <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-primary)]">{material.interpretationSummary}</p>
-                                                            {material.interpretationUsefulContext && <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-secondary)]">{material.interpretationUsefulContext}</p>}
-                                                            {material.interpretationNextStep && (
-                                                               <p className="mt-3 whitespace-pre-wrap break-words text-sm font-medium leading-6 text-[var(--color-text-primary)]">Next move: {material.interpretationNextStep}</p>
-                                                            )}
-                                                         </div>
-                                                      )}
-
-                                                      <p className="mt-3 max-h-[320px] overflow-y-auto whitespace-pre-wrap break-words pr-2 text-sm leading-6 text-[var(--color-text-secondary)]">
-                                                         {material.notes || material.summary || "No extra details saved for this material yet."}
-                                                      </p>
-                                                   </div>
-                                                )}
-                                             </div>
-                                          ))}
-                                       </div>
-                                    ) : (
-                                       <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">No {materialTypeFilter.toLowerCase()} materials in this project yet.</div>
-                                    )
-                                 ) : (
-                                    <div className="mt-4 rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-                                       No materials attached yet. Add notes, feedback, references, documents, or planning details so this project has context to work from.
-                                    </div>
-                                 )}
                               </div>
                            </div>
                         );
@@ -8125,7 +8534,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                   </div>
                </div>
             ) : (
-               <div className="rounded-2xl bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)] sm:p-5">No projects yet. Add a project here and keep its notes, progress, materials, and schedule together.</div>
+               <div className="border-y border-[var(--border-subtle)] py-5 text-sm leading-6 text-[var(--color-text-secondary)]">No projects yet. Add a project to keep its guide, milestones, schedule, and materials together.</div>
             )}
          </div>
 
@@ -8200,12 +8609,12 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                            <iframe
                               title={fullscreenDocumentMaterial.documentFileName || fullscreenDocumentMaterial.title || "Project document"}
                               src={fullscreenDocumentMaterial.documentDataUrl}
-                              className="h-[78vh] w-full rounded-2xl border border-[var(--border-subtle)] bg-white"
+                              className="h-[78vh] w-full rounded-md border border-[var(--border-subtle)] bg-white"
                            />
                         ) : fullscreenDocumentMaterial.documentText ? (
-                           <pre className="min-h-[70vh] whitespace-pre-wrap break-words rounded-2xl border border-[var(--border-subtle)] bg-white p-4 text-sm leading-7 text-[var(--color-text-secondary)]">{fullscreenDocumentMaterial.documentText}</pre>
+                           <pre className="min-h-[70vh] whitespace-pre-wrap break-words rounded-md border border-[var(--border-subtle)] bg-white p-4 text-sm leading-7 text-[var(--color-text-secondary)]">{fullscreenDocumentMaterial.documentText}</pre>
                         ) : (
-                           <div className="rounded-2xl border border-[var(--border-subtle)] bg-white p-5 text-sm leading-6 text-[var(--color-text-secondary)]">
+                           <div className="rounded-md border border-[var(--border-subtle)] bg-white p-5 text-sm leading-6 text-[var(--color-text-secondary)]">
                               This document is attached to the project, but this file type does not have an in-app reader yet. PDF, TXT, and Markdown are the readable options for this build.
                            </div>
                         )}

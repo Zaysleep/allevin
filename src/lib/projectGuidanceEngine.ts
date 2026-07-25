@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK VIII Project Lead Guidance Engine
+// ALLEVIN MK IX Project Lead Guidance Engine
 // Purpose:
 // Turn a Project Intelligence Packet into
 // one project-understanding-aware judgment
@@ -265,7 +265,7 @@ function uniqueStrings(values: string[], limit = 12) {
 }
 
 // ========================================
-// ALLEVIN MK VIII — Clear project readbacks
+// ALLEVIN MK IX — Clear project readbacks
 // Purpose:
 // Keep project summaries, unresolved decisions, and milestone transitions
 // natural, specific, and separate from generic task lists.
@@ -335,7 +335,7 @@ function formatUnresolvedDecisionReadbackItem(value?: string) {
       return "";
    }
 
-   // ALLEVIN MK VIII wording cleanup: turn vague order questions into a
+   // ALLEVIN MK IX wording cleanup: turn vague order questions into a
    // readable project decision without tying the language to one domain.
    if (/^what order makes sense$/i.test(clean)) {
       clean = "What order should the work follow";
@@ -751,7 +751,7 @@ function getPlanningReadinessIntentDraft(packet: ProjectIntelligencePacket, draf
    if (validation.failure) {
       return {
          ...draft,
-         assessment: "No. The work has reached validation, but the recorded evidence still shows an unmet condition.",
+         assessment: "No. The work has reached validation, but the saved validation result still shows an unmet condition.",
          recommendation: activeMilestone ? `Keep ${activeMilestone.title.replace(/[.!?]+$/, "")} open and correct the failed check before moving on` : "Correct the failed check and repeat the same validation before closing the work",
          reason: ensureSentence(validation.failure),
          watchOut: "Do not treat implementation or effort as proof that the intended outcome was achieved.",
@@ -803,7 +803,7 @@ function getProjectCoachingMode(prompt: string): ProjectCoachingMode {
       return "decision-confirmation";
    }
 
-   // ALLEVIN MK VIII next-action routing:
+   // ALLEVIN MK IX next-action routing:
    // Direct next-step questions must resolve as recommendations before broader
    // "should I" tradeoff matching. Otherwise a question such as
    // "What should I work on next?" is incorrectly treated as a proposal to skip
@@ -1073,7 +1073,7 @@ export function getProjectGuidanceIntent(prompt: string, conversation: ProjectGu
       return "general";
    }
 
-   // ALLEVIN MK VIII — conversational reference resolution.
+   // ALLEVIN MK IX — conversational reference resolution.
    // Short follow-ups inherit the subject of the previous project turn instead
    // of being reclassified as generic chat.
    if (/^(?:why|why\s+(?:that|this|it|one)|why\s+that\s+one)\??$/.test(lower)) {
@@ -1983,9 +1983,9 @@ function buildSoftwareGuidance(packet: ProjectIntelligencePacket, fallbackNextAc
 
       return {
          currentUnderstanding,
-         assessment: "The project has software context, but no reliable active build was detected",
+         assessment: "The project has software context, but no reliable active build is saved yet",
          recommendation,
-         reason: "A project lead cannot judge sequencing or readiness until the current implementation target is explicit",
+         reason: "Sequencing and readiness depend on having one explicit implementation target",
          watchOut: "Avoid starting several features simply because the roadmap has not selected one active outcome",
          evidenceUsed: uniqueStrings([packet.currentState, priority || ""]),
       };
@@ -2195,7 +2195,7 @@ function buildWritingGuidance(packet: ProjectIntelligencePacket): ProfileGuidanc
    if (!signals.currentDraft && !signals.outlineSections.length) {
       return {
          currentUnderstanding,
-         assessment: "The writing goal exists, but there is no detected structure or draft to revise",
+         assessment: "The writing goal exists, but there is no saved structure or draft to revise yet",
          recommendation: `Create a section outline for ${signals.deliverable || packet.projectTitle} around the needs of ${signals.audience}`,
          reason: "Structure should establish the argument and information order before sentence-level writing begins",
          watchOut: "Keep each section tied to one purpose instead of creating headings that repeat the topic",
@@ -2253,7 +2253,7 @@ function buildPlanningGuidance(packet: ProjectIntelligencePacket): ProfileGuidan
       ? `${packet.projectTitle} is currently in ${lowerSentenceStart(currentState)}`
       : activeMilestone
         ? `${packet.projectTitle} is currently focused on ${lowerSentenceStart(activeMilestone.title)}`
-        : `${packet.projectTitle} has ${signals.milestones.length} detected milestone${signals.milestones.length === 1 ? "" : "s"}`;
+        : `${packet.projectTitle} has ${signals.milestones.length} saved milestone${signals.milestones.length === 1 ? "" : "s"}`;
 
    if (signals.blockedItems.length) {
       return {
@@ -2316,7 +2316,7 @@ function buildPlanningGuidance(packet: ProjectIntelligencePacket): ProfileGuidan
 
       return {
          currentUnderstanding,
-         assessment: activeMilestone.whyItMatters ? ensureSentence(activeMilestone.whyItMatters) : "The active milestone is the earliest unfinished outcome the later work depends on.",
+         assessment: activeMilestone.whyItMatters ? ensureSentence(activeMilestone.whyItMatters) : "The active milestone is the first unfinished outcome the next work depends on.",
          recommendation: firstOpenQuestion
             ? `Resolve this inside the milestone: ${firstOpenQuestion}`
             : activeMilestone.startingPrompt
@@ -2333,7 +2333,7 @@ function buildPlanningGuidance(packet: ProjectIntelligencePacket): ProfileGuidan
    return {
       currentUnderstanding,
       assessment: "The plan has enough structure to move, but it needs one active outcome rather than several parallel priorities.",
-      recommendation: firstMilestone ? `Make ${firstMilestone.replace(/[.!?]+$/, "")} the single active milestone` : "Define the first unfinished outcome and its completion evidence",
+      recommendation: firstMilestone ? `Make ${firstMilestone.replace(/[.!?]+$/, "")} the single active milestone` : "Define the first unfinished outcome and its completion criteria",
       reason: "One active outcome makes progress, decisions, and blockers visible without spreading attention across the whole roadmap.",
       watchOut: getReadinessWatchOut(packet),
       evidenceUsed: uniqueStrings([firstMilestone || "", ...signals.priorities, ...packet.dependencies.slice(0, 3).map((item) => item.text)], 10),
@@ -2349,7 +2349,7 @@ function buildChecklistGuidance(packet: ProjectIntelligencePacket): ProfileGuida
    const active = items.find((item) => item.status === "in-progress");
    const next = active || items.find((item) => item.status === "not-started");
    const completedCount = items.filter((item) => item.status === "completed").length;
-   const currentUnderstanding = `${packet.projectTitle} has ${completedCount} of ${items.length} detected checklist items complete`;
+   const currentUnderstanding = `${packet.projectTitle} has ${completedCount} of ${items.length} saved checklist items complete`;
 
    if (packet.profileSignals.blockedItems.length) {
       return {
@@ -2364,7 +2364,7 @@ function buildChecklistGuidance(packet: ProjectIntelligencePacket): ProfileGuida
 
    if (!items.length) {
       return {
-         currentUnderstanding: `${packet.projectTitle} is being treated as a checklist project, but no status-bearing checklist items were detected`,
+         currentUnderstanding: `${packet.projectTitle} is being treated as a checklist project, but no status-bearing checklist items are saved`,
          assessment: "The engine cannot identify completed, active, or remaining work reliably",
          recommendation: "Add explicit checkbox states to the project's actionable items",
          reason: "A checklist only supports sequencing when each item has a visible completion state",
@@ -2376,7 +2376,7 @@ function buildChecklistGuidance(packet: ProjectIntelligencePacket): ProfileGuida
    if (!next) {
       return {
          currentUnderstanding,
-         assessment: "Every detected checklist item is complete",
+         assessment: "Every saved checklist item is complete",
          recommendation: "Run one final verification against the project's success criteria before closing it",
          reason: "Completed boxes confirm task status, but not necessarily that the intended outcome was achieved",
          watchOut: "Watch for items marked complete without evidence of the final result",
@@ -2388,7 +2388,7 @@ function buildChecklistGuidance(packet: ProjectIntelligencePacket): ProfileGuida
       currentUnderstanding,
       assessment: active ? `${active.text} is already in progress and should be finished before another item is opened` : `${next.text} is the first unfinished actionable item`,
       recommendation: `Complete ${next.text}`,
-      reason: active ? "Finishing active work keeps the checklist from accumulating partially completed items" : "It is the earliest unfinished action detected in the current workflow",
+      reason: active ? "Finishing active work keeps the checklist from accumulating partially completed items" : "It is the first unfinished action in the current workflow",
       watchOut: "Do not start lower-priority checklist items simply because they are easier to finish",
       evidenceUsed: [next.text],
    };
@@ -2619,7 +2619,7 @@ function getProfileWorkflowReason(packet: ProjectIntelligencePacket) {
    const dependency = getHighestPriorityDependency(packet);
 
    if (dependency) {
-      return dependency.state === "satisfied" ? `The detected prerequisite is satisfied: ${dependency.text}` : `The detected prerequisite must be resolved first: ${dependency.text}`;
+      return dependency.state === "satisfied" ? `The prerequisite is satisfied: ${dependency.text}` : `The prerequisite must be resolved first: ${dependency.text}`;
    }
 
    if (packet.reasoningProfile === "software") {
@@ -2627,7 +2627,7 @@ function getProfileWorkflowReason(packet: ProjectIntelligencePacket) {
          return `${getBuildLabel(packet.nextBuild)} should follow ${getBuildLabel(packet.currentBuild)} only after the active build is validated`;
       }
 
-      return packet.currentBuild ? `${getBuildLabel(packet.currentBuild)} is the last unfinished build currently detected` : "No ordered active software build was detected";
+      return packet.currentBuild ? `${getBuildLabel(packet.currentBuild)} is the last unfinished build currently detected` : "No ordered active software build is saved";
    }
 
    if (packet.reasoningProfile === "research") {
@@ -2653,7 +2653,7 @@ function getReadinessAssessment(packet: ProjectIntelligencePacket) {
    const state = packet.readiness.state;
 
    if (state === "complete") {
-      return "The detected completion conditions are satisfied";
+      return "The saved completion conditions are satisfied";
    }
 
    if (state === "blocked") {
@@ -2726,7 +2726,7 @@ function getSimplificationJudgment(packet: ProjectIntelligencePacket, draft: Pro
             return `Keep the plan to these dependency gates for now: ${gates.join(" → ")}`;
          }
 
-         return `Keep ${first.title.replace(/[.!?]+$/, "")} as the only active outcome until its completion evidence exists`;
+         return `Keep ${first.title.replace(/[.!?]+$/, "")} as the only active outcome until its completion criteria exists`;
       }
 
       return "Reduce the plan to the earliest unresolved dependency, one usable result, and one validation pass";
@@ -2857,7 +2857,7 @@ function applyIntent(intent: ProjectGuidanceIntent, packet: ProjectIntelligenceP
    if (intent === "project-understanding") {
       return {
          ...draft,
-         assessment: `${packet.reasoningProfile} project detected. ${draft.assessment}`,
+         assessment: `${packet.reasoningProfile} project context. ${draft.assessment}`,
          reason: getProfileWorkflowReason(packet),
       };
    }
@@ -3123,7 +3123,7 @@ function formatResponse(draft: ProfileGuidanceDraft, intent?: ProjectGuidanceInt
 }
 
 // ========================================
-// MK VIII — Canonical Project Understanding
+// MK IX — Canonical Project Understanding
 // Purpose:
 // Let Guidance reason from the shared project model instead of rebuilding
 // meaning from legacy evidence counts and readiness fields.
@@ -3948,7 +3948,7 @@ function getPriorityDecisionReason(packet: ProjectIntelligencePacket, statement:
 }
 
 // ========================================
-// ALLEVIN MK VIII — Authoritative continuous project conversation
+// ALLEVIN MK IX — Authoritative continuous project conversation
 // Purpose:
 // Use one typed project model and one remembered conversation subject so
 // different questions receive different project-grounded judgments.
@@ -4188,7 +4188,7 @@ function getConcreteMilestoneAction(milestone?: ProjectIntelligencePacket["proje
    }
 
    if (/\b(?:quality|standards?|handling|preservation)\b/i.test(searchable)) {
-      return "Define the minimum acceptable quality, allowed corrections, specialist-handling triggers, and the check that proves the work meets the standard";
+      return "Set the quality bar, the corrections that are allowed, when specialist handling is needed, and the check that shows the work is ready";
    }
 
    if (/\b(?:storage|labeling|recordkeeping)\b/i.test(searchable) && /\b(?:approach|structure|system|plan)\b/i.test(searchable)) {
@@ -4441,11 +4441,11 @@ function getMostRecentCompletedMilestoneWithRecordedProgress(packet: ProjectInte
       .filter((milestone) => milestone.status === "complete")
       .slice()
       .sort((left, right) => right.order - left.order)
-      .find((milestone) => milestone.decisions.length > 0 || Boolean(cleanAuthoritativeStatement(milestone.workingContent, 12000)) || milestone.completionEvidence.length > 0);
+      .find((milestone) => milestone.decisions.length > 0 || Boolean(cleanAuthoritativeStatement(milestone.workingContent, 12000)) || milestone.completedCriteria.length > 0);
 }
 
 function milestoneHasRecordedProgress(milestone?: ProjectIntelligencePacket["projectUnderstanding"]["milestones"][number]) {
-   return Boolean(milestone && (milestone.decisions.length > 0 || Boolean(cleanAuthoritativeStatement(milestone.workingContent, 12000)) || milestone.completionEvidence.length > 0));
+   return Boolean(milestone && (milestone.decisions.length > 0 || Boolean(cleanAuthoritativeStatement(milestone.workingContent, 12000)) || milestone.completedCriteria.length > 0));
 }
 
 function getMostRelevantRecordedMilestone(packet: ProjectIntelligencePacket, active?: ProjectIntelligencePacket["projectUnderstanding"]["milestones"][number]) {
@@ -4513,17 +4513,15 @@ function getRecordedMilestoneDecisionFacts(milestone?: ProjectIntelligencePacket
    if (!milestone) return [] as string[];
 
    return uniqueProjectFacts(
-      [
-         ...milestone.decisions.map((item) => cleanAuthoritativeStatement(item, 1800)),
-         ...extractMilestoneSpecificUpdateFacts(milestone.workingContent, milestone, limit),
-         ...milestone.completionEvidence.flatMap((item) => extractMilestoneSpecificUpdateFacts(item, milestone, limit)),
-      ].filter((item) => Boolean(item) && !/^(?:i\s+)?(?:completed|finished)\s+(?:the\s+)?current\s+milestone\b/i.test(item) && !/^completed\s+/i.test(item)),
+      [...milestone.decisions.map((item) => cleanAuthoritativeStatement(item, 1800)), ...extractMilestoneSpecificUpdateFacts(milestone.workingContent, milestone, limit)].filter(
+         (item) => Boolean(item) && !/^(?:i\s+)?(?:completed|finished)\s+(?:the\s+)?current\s+milestone\b/i.test(item) && !/^completed\s+/i.test(item),
+      ),
       limit,
    );
 }
 
 function getRecordedProjectResolutionCorpus(packet: ProjectIntelligencePacket, recentUpdate = "") {
-   return cleanAuthoritativeStatement([recentUpdate, ...getAuthoritativeMilestones(packet).flatMap((milestone) => [milestone.workingContent, ...milestone.decisions, ...milestone.completionEvidence])].filter(Boolean).join("\n"), 50000);
+   return cleanAuthoritativeStatement([recentUpdate, ...getAuthoritativeMilestones(packet).flatMap((milestone) => [milestone.workingContent, ...milestone.decisions])].filter(Boolean).join("\n"), 50000);
 }
 
 function projectUpdateResolvesRecordedDecision(decision: string, update: string) {
@@ -4602,15 +4600,30 @@ function getMilestoneEvidenceStatus(packet: ProjectIntelligencePacket, milestone
       return { supported: [] as string[], missing: [] as string[], materialTitles: [] as string[], evidenceFacts: [] as string[] };
    }
 
+   // MK IX completion is user-controlled. Materials and saved milestone work
+   // provide context, but they never silently check a completion criterion.
    const materials = getRelevantMaterialsForMilestone(packet, milestone);
-   const projectCorpus = cleanAuthoritativeStatement([milestone.workingContent, ...milestone.decisions, ...milestone.completionEvidence].filter(Boolean).join(" "), 12000);
    const criteria = getScopedMilestoneCompletionCriteria(milestone);
-   const supported = criteria.filter((criterion) => criterionIsSupportedByMaterial(criterion, projectCorpus) || materials.some((material) => criterionIsSupportedByMaterial(criterion, material.usefulContext)));
-   const sourceMaterials = materials.map((material) => packet.materials.find((source) => source.id === material.id)).filter(Boolean) as ProjectMaterialSignal[];
-   const evidenceFacts = uniqueProjectFacts(
-      [...milestone.completionEvidence.map((item) => cleanAuthoritativeStatement(item)), ...milestone.decisions.map((item) => cleanAuthoritativeStatement(item)), ...sourceMaterials.flatMap((material) => getMaterialEvidenceStatements(material, 8))],
-      16,
+   const completedKeys = new Set(
+      milestone.completedCriteria
+         .map((criterion) =>
+            cleanAuthoritativeStatement(criterion, 1800)
+               .toLowerCase()
+               .replace(/[^a-z0-9]+/g, " ")
+               .trim(),
+         )
+         .filter(Boolean),
    );
+   const supported = criteria.filter((criterion) =>
+      completedKeys.has(
+         cleanAuthoritativeStatement(criterion, 1800)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, " ")
+            .trim(),
+      ),
+   );
+   const sourceMaterials = materials.map((material) => packet.materials.find((source) => source.id === material.id)).filter(Boolean) as ProjectMaterialSignal[];
+   const evidenceFacts = uniqueProjectFacts([...milestone.decisions.map((item) => cleanAuthoritativeStatement(item)), ...sourceMaterials.flatMap((material) => getMaterialEvidenceStatements(material, 8))], 16);
 
    return {
       supported,
@@ -5082,7 +5095,7 @@ function getProjectEvidenceCorpus(packet: ProjectIntelligencePacket) {
       [
          ...understanding.confirmedDecisions.map((decision) => decision.statement),
          ...understanding.completedWork,
-         ...understanding.milestones.flatMap((milestone) => [milestone.workingContent, ...milestone.decisions, ...milestone.completionEvidence]),
+         ...understanding.milestones.flatMap((milestone) => [milestone.workingContent, ...milestone.decisions]),
          ...understanding.constraints.map((constraint) => constraint.statement),
       ]
          .filter(Boolean)
@@ -5467,13 +5480,7 @@ function formatProjectMoney(value?: number) {
 }
 
 function getBudgetMilestoneCorpus(packet: ProjectIntelligencePacket, milestone?: ProjectIntelligencePacket["projectUnderstanding"]["milestones"][number]) {
-   return [
-      milestone?.workingContent || "",
-      ...(milestone?.decisions || []),
-      ...(milestone?.completionEvidence || []),
-      ...packet.projectUnderstanding.confirmedDecisions.map((decision) => decision.statement),
-      ...packet.projectUnderstanding.constraints.map((constraint) => constraint.statement),
-   ]
+   return [milestone?.workingContent || "", ...(milestone?.decisions || []), ...packet.projectUnderstanding.confirmedDecisions.map((decision) => decision.statement), ...packet.projectUnderstanding.constraints.map((constraint) => constraint.statement)]
       .filter(Boolean)
       .join("\n")
       .replace(/\r/g, "\n")
@@ -5483,7 +5490,7 @@ function getBudgetMilestoneCorpus(packet: ProjectIntelligencePacket, milestone?:
 
 function getProjectBudgetSnapshot(packet: ProjectIntelligencePacket, milestone?: ProjectIntelligencePacket["projectUnderstanding"]["milestones"][number]): ProjectBudgetSnapshot {
    const corpus = getBudgetMilestoneCorpus(packet, milestone);
-   const localMilestoneCorpus = [milestone?.workingContent || "", ...(milestone?.decisions || []), ...(milestone?.completionEvidence || [])].filter(Boolean).join("\n").replace(/\r/g, "\n").slice(0, 30000).trim();
+   const localMilestoneCorpus = [milestone?.workingContent || "", ...(milestone?.decisions || [])].filter(Boolean).join("\n").replace(/\r/g, "\n").slice(0, 30000).trim();
    const lineItemCorpus = localMilestoneCorpus || corpus;
    const lineItems: ProjectBudgetLineItem[] = [];
    const lineItemPattern = /(?:^|\n)\s*[-*•]?\s*([^:\n]{2,120}):\s*\$\s*([\d,]+(?:\.\d{1,2})?)/gim;
@@ -5862,7 +5869,7 @@ function getProjectOptionDecisionCorpus(packet: ProjectIntelligencePacket, conve
       .slice()
       .reverse()
       .map((message) => message.content);
-   const candidates = [conversation.lastUserPrompt || "", ...recentUserMessages, selectionMilestone?.workingContent || "", ...(selectionMilestone?.decisions || []), ...(selectionMilestone?.completionEvidence || [])].filter(Boolean);
+   const candidates = [conversation.lastUserPrompt || "", ...recentUserMessages, selectionMilestone?.workingContent || "", ...(selectionMilestone?.decisions || [])].filter(Boolean);
 
    return (
       candidates
@@ -6182,7 +6189,7 @@ function getOrderedMilestoneActions(packet: ProjectIntelligencePacket, milestone
    const materialSynthesisAction = relevantMaterials.length ? `Turn the confirmed findings from ${relevantMaterials.map((material) => `“${material.title}”`).join(", ")} into explicit requirements for this milestone` : "";
    const closeAction = next
       ? `Save the verified requirements and remaining unknowns, then use them to begin ${next.title.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}`
-      : "Save the final result, the evidence behind it, and any work that should remain deferred";
+      : "Save the final result, the supporting materials, and any work that should remain deferred";
 
    if (getMilestoneGuidanceCategory(milestone.title) === "layout") {
       return dedupeMilestoneActions(getPhysicalLayoutMilestoneActions(packet), 3);
@@ -6515,7 +6522,7 @@ function getPersistentBudgetReadback(packet: ProjectIntelligencePacket): Persist
    const corpus = [
       packet.projectUnderstanding.situation,
       ...packet.projectUnderstanding.confirmedDecisions.map((decision) => decision.statement),
-      ...getAuthoritativeMilestones(packet).flatMap((milestone) => [milestone.workingContent, ...milestone.decisions, ...milestone.completionEvidence]),
+      ...getAuthoritativeMilestones(packet).flatMap((milestone) => [milestone.workingContent, ...milestone.decisions]),
    ]
       .filter(Boolean)
       .join("\n")
@@ -6772,7 +6779,7 @@ function getCompletedProjectReasoningCorpus(packet: ProjectIntelligencePacket) {
       ...packet.projectUnderstanding.successCriteria.map((criterion) => criterion.statement),
       ...packet.projectUnderstanding.confirmedDecisions.map((decision) => decision.statement),
       ...packet.projectUnderstanding.constraints.map((constraint) => constraint.statement),
-      ...getAuthoritativeMilestones(packet).flatMap((milestone) => [milestone.title, milestone.goal, milestone.whyItMatters, milestone.workingContent, ...milestone.decisions, ...milestone.completionCriteria, ...milestone.completionEvidence]),
+      ...getAuthoritativeMilestones(packet).flatMap((milestone) => [milestone.title, milestone.goal, milestone.whyItMatters, milestone.workingContent, ...milestone.decisions, ...milestone.completionCriteria]),
       ...packet.materials.flatMap((material) => [material.title, material.summary, material.details]),
    ]
       .filter(Boolean)
@@ -6968,7 +6975,7 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
          recommendation: "",
          reason: allComplete ? `All ${completed.length} recorded milestone${completed.length === 1 ? " is" : "s are"} complete, and no active milestone remains.` : "",
          watchOut: "",
-         evidenceUsed: completed.flatMap((milestone) => [milestone.title, ...milestone.completionEvidence.slice(0, 2)]),
+         evidenceUsed: completed.flatMap((milestone) => [milestone.title, ...milestone.completedCriteria.slice(0, 2)]),
       };
    }
 
@@ -7018,7 +7025,7 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
       });
 
       return {
-         currentUnderstanding: materials.length === 1 ? `I used ${materials[0].title} as project evidence.` : materials.length > 1 ? `I used ${materials.length} project materials as evidence.` : "No project material has been used as recorded evidence.",
+         currentUnderstanding: materials.length === 1 ? `I used ${materials[0].title} as project evidence.` : materials.length > 1 ? `I used ${materials.length} project materials as evidence.` : "No project material is currently connected to this work.",
          assessment: sections.join("\n\n"),
          recommendation: "",
          reason: "",
@@ -7233,13 +7240,13 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
    }
 
    if (intent === "milestone-completion-evidence") {
-      const asksForMissingEvidence = /\b(?:still missing|evidence is missing|evidence remains|what is missing before|what remains before|missing before)\b/i.test(prompt);
+      const asksForMissingEvidence = /\b(?:still missing|evidence is missing|evidence remains|what is missing before|what remains before|missing before|criteria remain|unchecked criteria)\b/i.test(prompt);
       const normalizedPrompt = normalizePrompt(prompt);
       const explicitlyNamedMilestone = getAuthoritativeMilestones(packet).find((candidate) => {
          const normalizedTitle = normalizePrompt(candidate.title);
          return normalizedTitle.length > 5 && normalizedPrompt.includes(normalizedTitle);
       });
-      // Completion-evidence questions that use “current”, “this”, or a follow-up
+      // Completion-readiness questions that use “current”, “this”, or a follow-up
       // pronoun should stay attached to the active milestone. Conversation memory
       // is only a fallback when the user explicitly names a different milestone.
       // When the sequence has no active milestone, a generic follow-up must not
@@ -7254,12 +7261,12 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
             currentUnderstanding: !milestone
                ? "This project does not have an active milestone selected."
                : evidenceStatus.missing.length
-                 ? `The evidence still missing for ${milestone.title.replace(/[.!?]+$/, "")} is:`
-                 : `No completion evidence is still missing for ${milestone.title.replace(/[.!?]+$/, "")}.`,
+                 ? `The unchecked completion criteria for ${milestone.title.replace(/[.!?]+$/, "")} are:`
+                 : `No completion criteria remain unchecked for ${milestone.title.replace(/[.!?]+$/, "")}.`,
             assessment: evidenceStatus.missing.length
                ? evidenceStatus.missing.map((check, index) => `${index + 1}. ${ensureSentence(check)}`).join("\n")
                : evidenceStatus.supported.length
-                 ? `The saved work supports all recorded checks:\n${evidenceStatus.supported.map((check, index) => `${index + 1}. ${ensureSentence(check)}`).join("\n")}`
+                 ? `The checked completion criteria are:\n${evidenceStatus.supported.map((check, index) => `${index + 1}. ${ensureSentence(check)}`).join("\n")}`
                  : "No explicit completion criteria are recorded.",
             recommendation: materialLine,
             reason: "",
@@ -7275,7 +7282,7 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
             : "No reliable completion criteria are recorded yet, so the milestone should remain open until a concrete output and review check are defined.",
          recommendation: materialLine,
          reason: checks.length ? "Those checks prove the milestone produced something the next work can depend on." : "",
-         watchOut: evidenceStatus.supported.length ? `${evidenceStatus.supported.length} completion check${evidenceStatus.supported.length === 1 ? " is" : "s are"} already supported by saved work or materials.` : "",
+         watchOut: evidenceStatus.supported.length ? `${evidenceStatus.supported.length} completion criterion${evidenceStatus.supported.length === 1 ? " is" : " are"} already checked.` : "",
          evidenceUsed: uniqueProjectFacts([...checks, ...evidenceStatus.materialTitles], 12),
       };
    }
@@ -7305,7 +7312,7 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
    if (intent === "decision-status") {
       const sourceMilestone = getMostRelevantRecordedMilestone(packet, active);
       const conversationUpdate = getMostRecentDetailedProjectUpdate(conversation);
-      const fallbackUpdate = sourceMilestone ? cleanAuthoritativeStatement([sourceMilestone.workingContent, ...sourceMilestone.completionEvidence].filter(Boolean).join("\n"), 20000) : "";
+      const fallbackUpdate = sourceMilestone ? cleanAuthoritativeStatement(sourceMilestone.workingContent, 20000) : "";
       const update = conversationUpdate || fallbackUpdate;
       const promptCategory = getMilestoneGuidanceCategory(prompt);
       const scopedCategory = promptCategory !== "general" ? promptCategory : getMilestoneGuidanceCategory(sourceMilestone?.title || active?.title || "");
@@ -7418,11 +7425,11 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
                ? "There is no active milestone to assess."
                : evidenceStatus.missing.length
                  ? `Yes. ${subjectMilestone.title.replace(/[.!?]+$/, "")} still needs more work.`
-                 : `No. The saved work and materials now support closing ${subjectMilestone.title.replace(/[.!?]+$/, "")}.`,
+                 : `No. All completion criteria are checked for ${subjectMilestone.title.replace(/[.!?]+$/, "")}.`,
             assessment: evidenceStatus.missing.length
-               ? `The remaining completion checks are:\n${evidenceStatus.missing.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n")}`
+               ? `The unchecked completion criteria are:\n${evidenceStatus.missing.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n")}`
                : evidenceStatus.supported.length
-                 ? `The recorded evidence supports:\n${evidenceStatus.supported.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n")}`
+                 ? `The checked completion criteria are:\n${evidenceStatus.supported.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n")}`
                  : "No explicit completion criteria are recorded.",
             recommendation:
                subjectMilestone && !evidenceStatus.missing.length
@@ -7520,11 +7527,11 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
          currentUnderstanding: active ? `I recorded that update inside ${active.title.replace(/[.!?]+$/, "")}.` : `I recorded that update for ${packet.projectTitle}.`,
          assessment: settledByUpdate.length
             ? `It settles or strengthens these points:\n${settledByUpdate.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n")}`
-            : "It adds working evidence, but it does not yet settle a clearly recorded decision.",
+            : "It adds useful milestone work, but it does not yet settle a clearly recorded decision.",
          recommendation: evidenceStatus.missing.length
-            ? `The milestone should stay open until these remaining checks are supported:\n${evidenceStatus.missing.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n")}`
+            ? `The milestone should stay open until these remaining criteria are checked:\n${evidenceStatus.missing.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n")}`
             : active
-              ? `The saved evidence now supports closing ${active.title.replace(/[.!?]+$/, "")}.`
+              ? `All completion criteria are checked, so you can close ${active.title.replace(/[.!?]+$/, "")}.`
               : "",
          reason: "",
          watchOut: evidenceStatus.materialTitles.length ? `Materials considered with the update: ${evidenceStatus.materialTitles.join(", ")}.` : "",
@@ -7535,7 +7542,7 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
    if (intent === "project-change") {
       const sourceMilestone = getMostRelevantRecordedMilestone(packet, active);
       const conversationUpdate = getMostRecentDetailedProjectUpdate(conversation);
-      const fallbackUpdate = sourceMilestone ? cleanAuthoritativeStatement([sourceMilestone.workingContent, ...sourceMilestone.completionEvidence].filter(Boolean).join("\n"), 20000) : "";
+      const fallbackUpdate = sourceMilestone ? cleanAuthoritativeStatement(sourceMilestone.workingContent, 20000) : "";
       const update = conversationUpdate || fallbackUpdate;
       const latestMilestoneFacts = getRecordedMilestoneDecisionFacts(sourceMilestone, 20);
       const newlySettled = uniqueProjectFacts([...extractMilestoneSpecificUpdateFacts(update, sourceMilestone, 22), ...latestMilestoneFacts, ...confirmed.filter((statement) => update && getProjectFactOverlapRatio(statement, update) >= 0.5)], 18);
@@ -7544,15 +7551,17 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
       const movedBeyondUpdatedMilestone = Boolean(sourceMilestone && active && active.order > sourceMilestone.order);
 
       return {
-         currentUnderstanding: newlySettled.length ? `The update changed the project in ${newlySettled.length === 1 ? "one concrete way" : "these concrete ways"}:` : "The update added evidence, but it did not change a clearly recorded decision.",
+         currentUnderstanding: newlySettled.length
+            ? `The update changed the project in ${newlySettled.length === 1 ? "one concrete way" : "these concrete ways"}:`
+            : "The update added useful milestone work, but it did not change a clearly recorded decision.",
          assessment: newlySettled.length ? newlySettled.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n") : update ? ensureSentence(update) : "",
          recommendation:
             movedBeyondUpdatedMilestone && active
                ? `Those settled requirements now act as inputs to ${active.title.replace(/[.!?]+$/, "")}.`
                : active
                  ? evidenceStatus.missing.length
-                    ? `${active.title.replace(/[.!?]+$/, "")} remains active because ${evidenceStatus.missing.length} completion check${evidenceStatus.missing.length === 1 ? " is" : "s are"} still unsupported.`
-                    : `${active.title.replace(/[.!?]+$/, "")} now has enough recorded support to close and move to ${next?.title || "the next unfinished milestone"}.`
+                    ? `${active.title.replace(/[.!?]+$/, "")} remains active because ${evidenceStatus.missing.length} completion criterion${evidenceStatus.missing.length === 1 ? " remains" : " remain"} unchecked.`
+                    : `${active.title.replace(/[.!?]+$/, "")} has all completion criteria checked and can move to ${next?.title || "the next unfinished milestone"}.`
                  : "",
          reason: movedBeyondUpdatedMilestone
             ? "The project should carry those decisions forward without reopening the milestone that produced them."
@@ -7792,7 +7801,7 @@ function buildCanonicalProjectUnderstandingDraft(intent: ProjectGuidanceIntent, 
    );
    const latestProjectUpdate = recentProjectUpdates[recentProjectUpdates.length - 1] || "";
 
-   // ALLEVIN MK VIII — distinct project-lead answers.
+   // ALLEVIN MK IX — distinct project-lead answers.
    // Each intent reads a different part of the canonical project model so a
    // facts question, priority judgment, assumption review, and action question
    // cannot collapse into the same milestone paragraph.
@@ -7934,7 +7943,7 @@ function buildCanonicalProjectUnderstandingDraft(intent: ProjectGuidanceIntent, 
 
       return {
          currentUnderstanding: explicitAssumptions.length ? "These assumptions are explicitly recorded:" : "No assumptions are explicitly labeled, but the current plan appears to rely on these:",
-         assessment: assumptions.length ? assumptions.map((item, index) => `${index + 1}. ${item.replace(/[.!?]+$/, "")}`).join("\n") : "I do not have enough saved evidence to identify a defensible assumption.",
+         assessment: assumptions.length ? assumptions.map((item, index) => `${index + 1}. ${item.replace(/[.!?]+$/, "")}`).join("\n") : "I do not have enough saved milestone work to identify a defensible assumption.",
          recommendation: assumptions[0] ? ensureSentence(`Test the first assumption before allowing later work to depend on it`) : "",
          reason: "",
          watchOut: "",
@@ -8053,7 +8062,7 @@ function buildCanonicalProjectUnderstandingDraft(intent: ProjectGuidanceIntent, 
       };
    }
 
-   // ALLEVIN MK VIII direct project readbacks:
+   // ALLEVIN MK IX direct project readbacks:
    // These answers use the canonical project title and tracked milestone.
    // They intentionally avoid personality openers, canned fallback language,
    // and unresolved-decision text masquerading as milestone state.
@@ -8253,21 +8262,21 @@ function buildCanonicalProjectUnderstandingDraft(intent: ProjectGuidanceIntent, 
       const milestone = activeMilestone || getAuthoritativeActiveMilestone(packet);
       const evidenceStatus = getMilestoneEvidenceStatus(packet, milestone);
       const savedEvidence = uniqueProjectFacts(
-         [...(milestone?.completionEvidence || []), ...(milestone?.decisions || []), ...evidenceStatus.evidenceFacts].map((item) => cleanAuthoritativeStatement(item)),
+         [...(milestone?.decisions || []), ...evidenceStatus.evidenceFacts].map((item) => cleanAuthoritativeStatement(item)),
          12,
       );
 
       return {
          currentUnderstanding: milestone
             ? savedEvidence.length
-               ? `The evidence already available for ${milestone.title.replace(/[.!?]+$/, "")} is:`
-               : `No concrete evidence is recorded yet for ${milestone.title.replace(/[.!?]+$/, "")}.`
+               ? `The project materials and saved milestone work available for ${milestone.title.replace(/[.!?]+$/, "")} are:`
+               : `No project materials or concrete milestone decisions are recorded yet for ${milestone.title.replace(/[.!?]+$/, "")}.`
             : "This project does not have an active milestone selected.",
          assessment: savedEvidence.length ? savedEvidence.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n") : "",
          recommendation: evidenceStatus.missing.length
             ? `Still missing:\n${evidenceStatus.missing.map((item, index) => `${index + 1}. ${ensureSentence(item)}`).join("\n")}`
             : milestone && evidenceStatus.supported.length
-              ? `The recorded evidence supports all completion checks for this milestone.`
+              ? `All completion criteria are checked for this milestone.`
               : "",
          reason: "",
          watchOut: "",
@@ -8321,7 +8330,7 @@ function buildCanonicalProjectUnderstandingDraft(intent: ProjectGuidanceIntent, 
       const milestone = affected?.milestone;
 
       return {
-         currentUnderstanding: material && milestone ? `${material.title} affects ${milestone.title.replace(/[.!?]+$/, "")} most.` : "I cannot connect that material to a specific milestone from the saved evidence.",
+         currentUnderstanding: material && milestone ? `${material.title} affects ${milestone.title.replace(/[.!?]+$/, "")} most.` : "I cannot connect that material to a specific milestone from the saved milestone work.",
          assessment: milestone ? ensureSentence(`Its details directly address the conditions, decisions, or completion checks inside ${milestone.title.replace(/[.!?]+$/, "")}`) : "",
          recommendation: activeMilestone && milestone && activeMilestone.id !== milestone.id ? `Keep the current milestone in place; this material becomes active evidence when the project reaches ${milestone.title.replace(/[.!?]+$/, "")}.` : "",
          reason: milestone?.whyItMatters ? ensureSentence(milestone.whyItMatters) : "",

@@ -1,12 +1,12 @@
 // ========================================
-// ALLEVIN MK VIII OpenAI Response Client
+// ALLEVIN MK IX OpenAI Response Client
 // Purpose:
 // Frontend-safe helper for requesting controlled LLM improvements
 // from the server route at /api/allevin/llm.
 //
 // Notes:
 // - The OpenAI API key stays server-side.
-// - The MK VIII Project Understanding packet can be passed through to the route.
+// - The compatible Project Understanding packet can be passed through to the route.
 // - If the route fails, ALLEVIN falls back to safe local guidance.
 // - User/project/calendar/context/material text is sanitized before request/return.
 // ========================================
@@ -14,7 +14,7 @@
 import type { AllevinContextPacket, AllevinLLMRequest, AllevinLLMResponse, AllevinStructuredSections } from "@/lib/allevinLLMTypes";
 
 // ========================================
-// MK VIII Shared Context Packet
+// MK IX Shared Context Packet
 // ========================================
 
 export type { AllevinContextPacket };
@@ -23,8 +23,12 @@ export type AllevinLLMRequestWithContext = AllevinLLMRequest & {
    contextPacket?: AllevinContextPacket;
 };
 
+function isProjectIntakeRequest(request?: Pick<AllevinLLMRequestWithContext, "mode" | "projectStage">) {
+   return request?.mode === "project-guidance" && request.projectStage === "mk-ix-project-intake";
+}
+
 // ========================================
-// MK VIII — LLM Client Sanitization
+// MK IX — LLM Client Sanitization
 // Purpose:
 // The LLM client is an AI boundary. Sanitize
 // context before sending and sanitize responses
@@ -39,6 +43,8 @@ const LLM_CLIENT_SANITIZE_LIMITS = {
    nextStep: 1600,
    smallText: 300,
    responseText: 7000,
+   projectGuideSection: 7000,
+   projectGuideNextStep: 3600,
    contextTitles: 20,
    materialSummaries: 12,
    selectedMaterialText: 100000,
@@ -271,7 +277,10 @@ function sanitizeProjectUnderstandingContext(value?: AllevinLLMRequest["projectU
               workingContent: sanitizeLLMBody(value.activeMilestone.workingContent),
               decisions: sanitizeLLMSummaryArray(value.activeMilestone.decisions, 30),
               openQuestions: sanitizeLLMSummaryArray(value.activeMilestone.openQuestions, 30),
-              completionEvidence: sanitizeLLMSummaryArray(value.activeMilestone.completionEvidence, 30),
+              completionCriteria: sanitizeLLMSummaryArray(value.activeMilestone.completionCriteria, 30),
+              completedCriteria: sanitizeLLMSummaryArray(value.activeMilestone.completedCriteria, 30),
+              dependencies: sanitizeLLMSummaryArray(value.activeMilestone.dependencies, 30),
+              whatItUnlocks: sanitizeLLMSummary(value.activeMilestone.whatItUnlocks),
               status: sanitizeLLMSmallText(value.activeMilestone.status),
            }
          : undefined,
@@ -380,6 +389,7 @@ function sanitizeLLMRequest(request: AllevinLLMRequestWithContext): AllevinLLMRe
       focus: sanitizeLLMSummary(request.focus),
       usefulContext: sanitizeLLMSummary(request.usefulContext),
       nextStep: sanitizeLLMNextStep(request.nextStep),
+      userInstruction: sanitizeLLMClientText(request.userInstruction, LLM_CLIENT_SANITIZE_LIMITS.prompt),
       source: request.source,
       projectStage: sanitizeLLMSmallText(request.projectStage),
       currentLocation: sanitizeLLMSmallText(request.currentLocation),
@@ -402,15 +412,17 @@ function sanitizeLLMRequest(request: AllevinLLMRequestWithContext): AllevinLLMRe
 }
 
 function sanitizeLLMResponse(response: AllevinLLMResponse, fallbackRequest?: AllevinLLMRequestWithContext): AllevinLLMResponse {
+   const projectIntake = isProjectIntakeRequest(fallbackRequest);
+
    return {
       ...response,
       ok: response.ok === true,
       mode: response.mode || fallbackRequest?.mode,
       source: response.source || fallbackRequest?.source || "system",
       title: sanitizeLLMTitle(response.title || fallbackRequest?.title || "ALLEVIN Project"),
-      focus: sanitizeLLMSummary(response.focus),
-      usefulContext: sanitizeLLMSummary(response.usefulContext),
-      nextStep: sanitizeLLMNextStep(response.nextStep),
+      focus: projectIntake ? sanitizeLLMClientText(response.focus, LLM_CLIENT_SANITIZE_LIMITS.projectGuideSection) : sanitizeLLMSummary(response.focus),
+      usefulContext: projectIntake ? sanitizeLLMClientText(response.usefulContext, LLM_CLIENT_SANITIZE_LIMITS.projectGuideSection) : sanitizeLLMSummary(response.usefulContext),
+      nextStep: projectIntake ? sanitizeLLMClientText(response.nextStep, LLM_CLIENT_SANITIZE_LIMITS.projectGuideNextStep) : sanitizeLLMNextStep(response.nextStep),
       summary: sanitizeLLMSummary(response.summary || response.focus),
       confidence: clampLLMConfidence(response.confidence, response.usedFallback ? 55 : 72),
       usedFallback: response.usedFallback === true,
@@ -605,6 +617,25 @@ function buildMaterialInterpretationFallback(request: AllevinLLMRequestWithConte
 
 export function buildLLMFallbackResponse(request: AllevinLLMRequestWithContext, error?: string): AllevinLLMResponse {
    const safeRequest = sanitizeLLMRequest(request);
+
+   if (isProjectIntakeRequest(safeRequest)) {
+      return sanitizeLLMResponse(
+         {
+            ok: true,
+            mode: safeRequest.mode,
+            source: safeRequest.source,
+            title: getContextTitle(safeRequest),
+            focus: "",
+            usefulContext: "",
+            nextStep: "",
+            summary: "",
+            confidence: 45,
+            usedFallback: true,
+            error: error ? "LLM request fell back safely." : undefined,
+         },
+         safeRequest,
+      );
+   }
 
    if (safeRequest.groundedResponse) {
       const grounded = sanitizeLLMClientText(safeRequest.groundedResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText);

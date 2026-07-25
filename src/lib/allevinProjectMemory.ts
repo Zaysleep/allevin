@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK VIII Project Memory Foundation
+// ALLEVIN MK IX Project Memory Foundation
 // Purpose: shared utility for clean project identity,
 // persistence, dedupe, merge behavior, and stable
 // canonical project metadata across ALLEVIN modules.
@@ -12,7 +12,7 @@ import type { AllevinDestination, AllevinPriority, AllevinProject, AllevinProjec
 export const ALLEVIN_PROJECT_MEMORY_STORAGE_KEY = "allevin-mkii-project-memory";
 
 // ========================================
-// ALLEVIN MK VIII — Project Memory Sanitization
+// ALLEVIN MK IX — Project Memory Sanitization
 // Memory is shared across modules, so this layer treats every stored field as untrusted.
 // ========================================
 
@@ -95,7 +95,7 @@ export type ProjectMemoryProjectType = "software" | "research" | "writing" | "pl
 
 export type ProjectMemoryProjectTypeSource = "explicit" | "document" | "legacy" | "unknown";
 
-export type ProjectRoadmapMemoryStatus = "not-started" | "in-progress" | "ready-for-review" | "blocked" | "completed" | "archived" | "unknown";
+export type ProjectRoadmapMemoryStatus = "not-started" | "in-progress" | "ready-for-review" | "blocked" | "completed" | "unknown";
 
 export interface ProjectRoadmapMemoryItem {
    id: string;
@@ -113,9 +113,7 @@ export interface ProjectRoadmapMemoryItem {
 
    dependencies: string[];
    completionCriteria: string[];
-
-   // Actual proof recorded when work or a material satisfies the criteria.
-   completionEvidence: string[];
+   completedCriteria: string[];
 
    createdAt: number;
    updatedAt: number;
@@ -154,7 +152,7 @@ export interface ProjectMemoryInput {
    recommendedNextAction?: string;
    latestMovement?: string;
 
-   // ALLEVIN MK VIII canonical metadata. These fields store durable project facts only.
+   // ALLEVIN MK IX canonical metadata. These fields store durable project facts only.
    // Readiness, risks, evidence quality, and recommendations remain derived.
    projectType?: ProjectMemoryProjectType | string;
    projectMetadata?: Partial<CanonicalProjectMetadata>;
@@ -624,11 +622,35 @@ function sanitizeProjectRoadmapMemoryStatus(value?: string): ProjectRoadmapMemor
 
       case "archived":
       case "archive":
-         return "archived";
+         return "not-started";
 
       default:
          return "unknown";
    }
+}
+
+function ensureProjectMemoryQuestionMark(value?: string) {
+   const clean = sanitizeProjectMemorySummary(value)
+      .replace(/[.!?]+$/, "")
+      .trim();
+   return clean ? `${clean}?` : "";
+}
+
+function normalizeProjectMemoryCriterion(value?: string) {
+   return sanitizeProjectMemorySummary(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+}
+
+function reconcileProjectMemoryCompletedCriteria(criteria: string[], completedValues: string[], status: ProjectRoadmapMemoryStatus) {
+   if (status === "completed" && !completedValues.length) {
+      return [...criteria];
+   }
+
+   const completedKeys = new Set(completedValues.map(normalizeProjectMemoryCriterion).filter(Boolean));
+   return criteria.filter((criterion) => completedKeys.has(normalizeProjectMemoryCriterion(criterion)));
 }
 
 function createProjectRoadmapMemoryItem(value: Partial<ProjectRoadmapMemoryItem> & { title?: string }, fallbackOrder: number): ProjectRoadmapMemoryItem | null {
@@ -639,25 +661,26 @@ function createProjectRoadmapMemoryItem(value: Partial<ProjectRoadmapMemoryItem>
    }
 
    const order = typeof value.order === "number" && Number.isFinite(value.order) && value.order > 0 ? Math.floor(value.order) : fallbackOrder;
-
    const id = sanitizeProjectMemoryId(value.id) || `roadmap-${order}-${normalizeProjectKey(title) || "item"}`;
-
    const now = Date.now();
+   const status = sanitizeProjectRoadmapMemoryStatus(value.status);
+   const completionCriteria = sanitizeProjectMemoryStringList(value.completionCriteria, 40);
+   const completedCriteria = reconcileProjectMemoryCompletedCriteria(completionCriteria, sanitizeProjectMemoryStringList(value.completedCriteria, 40), status);
 
    return {
       id,
       order,
       title,
-      status: sanitizeProjectRoadmapMemoryStatus(value.status),
+      status,
       goal: sanitizeProjectMemorySummary(value.goal),
       whyItMatters: sanitizeProjectMemorySummary(value.whyItMatters),
       startingPrompt: sanitizeProjectMemorySummary(value.startingPrompt),
       workingContent: sanitizeProjectMemoryBody(value.workingContent),
       decisions: sanitizeProjectMemoryStringList(value.decisions, 40),
-      openQuestions: sanitizeProjectMemoryStringList(value.openQuestions, 40),
+      openQuestions: sanitizeProjectMemoryStringList(value.openQuestions, 40).map(ensureProjectMemoryQuestionMark).filter(Boolean),
       dependencies: sanitizeProjectMemoryStringList(value.dependencies, 16),
-      completionCriteria: sanitizeProjectMemoryStringList(value.completionCriteria, 40),
-      completionEvidence: sanitizeProjectMemoryStringList(value.completionEvidence, 40),
+      completionCriteria,
+      completedCriteria,
       createdAt: isValidProjectMemoryTimestamp(value.createdAt) ? Number(value.createdAt) : now,
       updatedAt: isValidProjectMemoryTimestamp(value.updatedAt) ? Number(value.updatedAt) : now,
    };
@@ -718,7 +741,7 @@ function buildRoadmapFromParsedDocument(parsed: ParsedProjectDocument) {
          decisions: [],
          openQuestions: [],
          completionCriteria: [],
-         completionEvidence: [],
+         completedCriteria: [],
          createdAt: Date.now(),
          updatedAt: Date.now(),
       })),
@@ -750,7 +773,7 @@ function mergeProjectRoadmapMetadata(existing: ProjectRoadmapMemoryItem[] = [], 
                openQuestions: item.openQuestions.length ? item.openQuestions : previous.openQuestions,
                dependencies: item.dependencies.length ? item.dependencies : previous.dependencies,
                completionCriteria: item.completionCriteria.length ? item.completionCriteria : previous.completionCriteria,
-               completionEvidence: item.completionEvidence.length ? item.completionEvidence : previous.completionEvidence,
+               completedCriteria: item.completedCriteria.length ? item.completedCriteria : previous.completedCriteria,
                createdAt: previous.createdAt || item.createdAt,
                updatedAt: Math.max(previous.updatedAt || 0, item.updatedAt || 0, Date.now()),
             };

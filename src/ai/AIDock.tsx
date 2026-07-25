@@ -1,7 +1,7 @@
 // ========================================
 // AI Dock
 // Purpose:
-// ALLEVIN MK VIII Project Lead Dock for
+// ALLEVIN MK IX Project Lead Dock for
 // calm project-aware guidance, quick actions,
 // natural project-aware responses,
 // and source-aware workspace awareness.
@@ -28,6 +28,8 @@ import { saveMemory, getActiveThreadMemoryV2, getSourceAwareActiveProject, getAc
 import { parseProjectDocument, readProjectMemory, upsertProjectMemory } from "@/lib/allevinProjectMemory";
 
 import { requestAllevinLLM } from "@/lib/allevinLLMClient";
+
+import { buildLocalProjectDraftGuide, buildProjectDraftGuide, renderProjectDraftGuide } from "@/lib/projectDraftIntelligence";
 
 import type { AllevinContextPacket } from "@/lib/allevinLLMTypes";
 
@@ -66,10 +68,8 @@ interface ProjectMilestoneCompletionResult {
    projectTitle: string;
    completedTitle: string;
    nextTitle: string;
-   matchedCriteria: string[];
+   checkedCriteria: string[];
    missingCriteria: string[];
-   materialTitles: string[];
-   evidence: string;
 }
 
 interface ProjectProgressUpdateResult {
@@ -328,7 +328,7 @@ interface AllevinInternalContextPacket extends AllevinContextPacket {
 // ========================================
 
 // ========================================
-// ALLEVIN MK VIII — One milestone-state authority
+// ALLEVIN MK IX — One milestone-state authority
 // Purpose:
 // Projects tracking is the canonical milestone lifecycle. AIDock may record
 // evidence and request a transition, but it must never infer a different
@@ -566,106 +566,6 @@ function getActiveProjectTrackingContext() {
    }
 }
 
-function getProjectMaterialEvidenceForLifecycle(projectId: string, projectTitle: string, milestone?: any) {
-   if (typeof window === "undefined") return { text: "", titles: [] as string[] };
-
-   try {
-      const materials = JSON.parse(localStorage.getItem(PROJECT_MATERIALS_STORAGE_KEY) || "[]");
-      const titleKey = normalizeProjectStarterPrompt(projectTitle);
-      const milestoneContext = sanitizePlainText(
-         [
-            milestone?.title,
-            milestone?.goal,
-            milestone?.whyItMatters,
-            milestone?.startingPrompt,
-            ...(Array.isArray(milestone?.openQuestions) ? milestone.openQuestions : []),
-            ...(Array.isArray(milestone?.completionCriteria) ? milestone.completionCriteria : []),
-         ]
-            .filter(Boolean)
-            .join(" "),
-         12000,
-      );
-
-      const matching = (Array.isArray(materials) ? materials : [])
-         .filter((material: any) => {
-            const sameId = projectId && sanitizePlainText(material?.projectId || "", 180) === projectId;
-            const sameTitle = titleKey && normalizeProjectStarterPrompt(material?.projectTitle || "") === titleKey;
-            return sameId || sameTitle;
-         })
-         .map((material: any) => {
-            const materialText = sanitizePlainText(
-               [material?.title, material?.summary, material?.notes, material?.documentText, material?.interpretationSummary, material?.interpretationUsefulContext, material?.interpretationNextStep].filter(Boolean).join(" "),
-               20000,
-            );
-            const overlap = getMilestoneLifecycleOverlap(milestoneContext, materialText);
-            return { material, materialText, overlap };
-         })
-         .filter((candidate: any) => !milestoneContext || candidate.overlap.shared >= 2 || candidate.overlap.ratio >= 0.18)
-         .sort((left: any, right: any) => right.overlap.shared - left.overlap.shared || right.overlap.ratio - left.overlap.ratio)
-         .slice(0, 8);
-
-      return {
-         text: matching
-            .map((candidate: any) => candidate.materialText)
-            .filter(Boolean)
-            .join("\n"),
-         titles: matching
-            .map((candidate: any) => sanitizePlainText(candidate.material?.title || "", 180))
-            .filter(Boolean)
-            .slice(0, 8),
-      };
-   } catch {
-      return { text: "", titles: [] as string[] };
-   }
-}
-
-function criterionIsSupportedByEvidence(criterion: string, evidence: string) {
-   const criterionLower = criterion.toLowerCase();
-   const evidenceText = sanitizePlainText(evidence, 24000);
-
-   if (/\bmaximum budget or capacity boundary\b/i.test(criterionLower)) {
-      return /\b(?:budget|cap|limit|maximum|at or below|under|no more than)\b[^$]{0,90}\$\s*[\d,]+(?:\.\d{1,2})?\b/i.test(evidenceText) || /\$\s*[\d,]+(?:\.\d{1,2})?\b[^.]{0,80}\b(?:budget|limit|cap)\b/i.test(evidenceText);
-   }
-
-   if (/\brequired spending or resource categories are estimated\b/i.test(criterionLower)) {
-      const lineItems = evidenceText.match(/(?:^|\n|[-*•]\s*)[^:\n]{2,120}:\s*\$\s*[\d,]+(?:\.\d{1,2})?/gim) || [];
-      return lineItems.length >= 2 || (/\b(?:required|workspace|safety|categories?)\b/i.test(evidenceText) && /\b(?:total|assigned|allocated|committed)\b[^$]{0,80}\$\s*[\d,]+(?:\.\d{1,2})?\b/i.test(evidenceText));
-   }
-
-   if (/\bpriority upgrades are separated from optional upgrades\b/i.test(criterionLower)) {
-      return /\b(?:required|immediate|phase[- ]one)\b/i.test(evidenceText) && /\b(?:optional|deferred|future upgrades?|not included)\b/i.test(evidenceText);
-   }
-
-   if (/\bdefer list protects the project from premature purchases or commitments\b/i.test(criterionLower)) {
-      return /\b(?:deferred|not included|optional future upgrades?|reconsidered later|future upgrade)\b/i.test(evidenceText) && /(?:,|;|\band\b)/i.test(evidenceText);
-   }
-
-   if (/\bany purchase, approval, dependency, or installation condition is clear\b/i.test(criterionLower)) {
-      const purchasePathIsClear = /\b(?:decided not to purchase|will not purchase|purchase (?:is|remains) deferred|major[- ]tool purchase (?:is|remains) deferred|no major (?:power )?tool will be purchased|reserve will remain untouched)\b/i.test(
-         evidenceText,
-      );
-      const futureTriggerIsClear = /\b(?:if|only if|until|before|after|while)\b[^.]{0,220}\b(?:accuracy|sheet[- ]goods|crosscuts?|dust collection|setup effort|stationary machinery|first real projects?|dominant limitation|repeatable problems?)\b/i.test(
-         evidenceText,
-      );
-      const alternativesAreBounded = /\btable saw\b[^.]{0,220}\b(?:will not purchase|excluded|not included|phase one)\b/i.test(evidenceText) || /\bmiter saw\b[^.]{0,220}\b(?:reconsider|only if|conditional|dominant limitation)\b/i.test(evidenceText);
-      const safetyConditionsAreDefined = /\b(?:eye protection|hearing protection|respiratory protection)\b/i.test(evidenceText) && /\b(?:push|clamping|safe tool-specific setup|safe setup practices?)\b/i.test(evidenceText);
-
-      return purchasePathIsClear && (futureTriggerIsClear || alternativesAreBounded || safetyConditionsAreDefined);
-   }
-
-   const overlap = getMilestoneLifecycleOverlap(criterion, evidenceText);
-   if (overlap.shared >= 3 || overlap.ratio >= 0.34) return true;
-
-   const detailedEvidence = evidenceText.length >= 100;
-   const hasListShape = /[:,;]|\b(?:and|or)\b/i.test(evidenceText);
-
-   if (detailedEvidence && overlap.shared >= 1 && hasListShape && /\b(?:named|listed|recorded|documented|identified|selected|clear|shown|mapped|assessed|checked|confirmed)\b/i.test(criterionLower)) {
-      return true;
-   }
-
-   return false;
-}
-
 function looksLikeMilestoneCompletionPrompt(prompt: string, conversation: Pick<ProjectConversationMemory, "lastIntent">) {
    const lower = normalizeProjectStarterPrompt(prompt);
    const explicitCompletion = /\b(?:i\s+)?(?:finished|completed)\s+(?:the\s+)?current\s+milestone\b|\bcurrent\s+milestone\s+is\s+(?:finished|complete)\b/i.test(lower);
@@ -682,37 +582,34 @@ function completeActiveProjectMilestoneFromPrompt(prompt: string, conversation: 
    if (!context) return null;
 
    const { projectId, projectTitle, storedMap, tracking } = context;
-   const ordered = [...tracking.milestones].sort((left: any, right: any) => Number(left?.order || 0) - Number(right?.order || 0));
+   const ordered = [...tracking.milestones]
+      .sort((left: any, right: any) => Number(left?.order || 0) - Number(right?.order || 0))
+      .map((milestone: any) =>
+         milestone?.status === "archived"
+            ? {
+                 ...milestone,
+                 status: "waiting",
+                 completed: false,
+              }
+            : milestone,
+      );
+
    const activeIndex = ordered.findIndex((milestone: any) => milestone && milestone.status === "active" && milestone.completed !== true);
-   const fallbackIndex = ordered.findIndex((milestone: any) => milestone && milestone.status !== "complete" && milestone.completed !== true && milestone.status !== "archived");
+   const fallbackIndex = ordered.findIndex((milestone: any) => milestone && milestone.status !== "complete" && milestone.completed !== true);
    const completedIndex = activeIndex >= 0 ? activeIndex : fallbackIndex;
    if (completedIndex < 0) return null;
 
    const activeMilestone = ordered[completedIndex];
-   const materialEvidence = getProjectMaterialEvidenceForLifecycle(projectId, projectTitle, activeMilestone);
-   const completionNote = sanitizePlainText(prompt, 4000);
-   const evidenceCorpus = sanitizePlainText([completionNote, activeMilestone?.workingContent || "", materialEvidence.text].filter(Boolean).join("\n"), 20000);
-
-   const scopedCriteria = getScopedLifecycleCompletionCriteria(activeMilestone);
-   const scopedOpenQuestions = getScopedLifecycleOpenQuestions(activeMilestone);
-   const legacyCriteria = !scopedCriteria.length
-      ? [
-           ...scopedOpenQuestions.map((item: string) => `A supported answer is recorded for: ${item}`),
-           ...(Array.isArray(activeMilestone?.decisions) ? activeMilestone.decisions.map((item: string) => `The decision is recorded: ${item}`) : []),
-           ...(activeMilestone?.goal ? [`A concrete result exists for ${activeMilestone.goal}`] : []),
-        ]
-      : [];
-
-   const criteria = [...scopedCriteria, ...legacyCriteria]
+   const criteria = getScopedLifecycleCompletionCriteria(activeMilestone)
       .map((item: unknown) => sanitizePlainText(String(item), 1000))
       .filter(Boolean)
-      .slice(0, 12);
+      .slice(0, 20);
 
-   const matchedCriteria = criteria.filter((criterion: string) => criterionIsSupportedByEvidence(criterion, evidenceCorpus));
-   const requiredMatches = criteria.length ? Math.max(1, Math.ceil(criteria.length * 0.6)) : 1;
-   const detailedExplicitEvidence = completionNote.length >= 120 && getMilestoneLifecycleOverlap(activeMilestone?.title || "", completionNote).shared >= 1;
-   const completed = criteria.length ? matchedCriteria.length >= requiredMatches : detailedExplicitEvidence;
-   const missingCriteria = completed ? [] : criteria.filter((criterion: string) => !matchedCriteria.includes(criterion));
+   const completedCriteria = Array.isArray(activeMilestone?.completedCriteria) ? activeMilestone.completedCriteria.map((item: unknown) => sanitizePlainText(String(item), 1000)).filter(Boolean) : [];
+
+   const checkedCriteria = criteria.filter((criterion: string) => completedCriteria.some((completedCriterion: string) => normalizeProjectStarterPrompt(completedCriterion) === normalizeProjectStarterPrompt(criterion)));
+   const missingCriteria = criteria.filter((criterion: string) => !checkedCriteria.includes(criterion));
+   const completed = criteria.length ? missingCriteria.length === 0 : true;
 
    if (!completed) {
       return {
@@ -721,33 +618,29 @@ function completeActiveProjectMilestoneFromPrompt(prompt: string, conversation: 
          projectTitle,
          completedTitle: sanitizePlainText(activeMilestone?.title || "", 300),
          nextTitle: "",
-         matchedCriteria,
-         missingCriteria: missingCriteria.length ? missingCriteria : ["Add concrete evidence that matches the milestone’s completion criteria"],
-         materialTitles: materialEvidence.titles,
-         evidence: completionNote,
+         checkedCriteria,
+         missingCriteria,
       };
    }
 
    const now = Date.now();
-   const nextOpenIndex = ordered.findIndex((milestone: any, index: number) => index > completedIndex && milestone && milestone.status !== "complete" && milestone.completed !== true && milestone.status !== "archived");
+   const nextOpenIndex = ordered.findIndex((milestone: any, index: number) => index > completedIndex && milestone && milestone.status !== "complete" && milestone.completed !== true);
 
    const milestones = ordered.map((milestone: any, index: number) => {
       if (!milestone || typeof milestone !== "object") return milestone;
 
       if (index === completedIndex) {
-         const existingEvidence = Array.isArray(milestone.completionEvidence) ? milestone.completionEvidence.map((item: unknown) => sanitizePlainText(String(item), 1200)).filter(Boolean) : [];
-
          return {
             ...milestone,
             status: "complete",
             completed: true,
             completedAt: now,
-            completionEvidence: completionNote && !existingEvidence.includes(completionNote) ? [...existingEvidence, completionNote].slice(0, 40) : existingEvidence,
+            completedCriteria: criteria.length ? criteria : completedCriteria,
             updatedAt: now,
          };
       }
 
-      if (milestone.status === "complete" || milestone.completed === true || milestone.status === "archived") {
+      if (milestone.status === "complete" || milestone.completed === true) {
          return milestone;
       }
 
@@ -779,10 +672,8 @@ function completeActiveProjectMilestoneFromPrompt(prompt: string, conversation: 
       projectTitle,
       completedTitle: sanitizePlainText(activeMilestone?.title || "", 300),
       nextTitle,
-      matchedCriteria,
+      checkedCriteria,
       missingCriteria: [],
-      materialTitles: materialEvidence.titles,
-      evidence: completionNote,
    };
 }
 
@@ -860,7 +751,7 @@ function recordProjectProgressUpdateFromPrompt(prompt: string): ProjectProgressU
    const { projectId, projectTitle, storedMap, tracking } = context;
    const ordered = [...tracking.milestones].sort((left: any, right: any) => Number(left?.order || 0) - Number(right?.order || 0));
    const activeIndex = ordered.findIndex((milestone: any) => milestone && milestone.status === "active" && milestone.completed !== true);
-   const fallbackIndex = ordered.findIndex((milestone: any) => milestone && milestone.status !== "complete" && milestone.completed !== true && milestone.status !== "archived");
+   const fallbackIndex = ordered.findIndex((milestone: any) => milestone && milestone.status !== "complete" && milestone.completed !== true);
    const targetIndex = activeIndex >= 0 ? activeIndex : fallbackIndex;
    if (targetIndex < 0) return null;
 
@@ -895,7 +786,12 @@ function recordProjectProgressUpdateFromPrompt(prompt: string): ProjectProgressU
          .filter((item: string, index: number, all: string[]) => all.findIndex((candidate) => normalizeProjectStarterPrompt(candidate) === normalizeProjectStarterPrompt(item)) === index)
          .slice(0, 40),
       openQuestions: [...remainingQuestions, ...unresolvedStatements]
-         .map((item: string) => sanitizePlainText(item, 1400))
+         .map((item: string) => {
+            const clean = sanitizePlainText(item, 1400)
+               .replace(/[.!?]+$/, "")
+               .trim();
+            return clean ? `${clean}?` : "";
+         })
          .filter((item: string) => milestoneLifecycleQuestionMatchesTitle(target.title || "", item))
          .filter((item: string, index: number, all: string[]) => all.findIndex((candidate) => normalizeProjectStarterPrompt(candidate) === normalizeProjectStarterPrompt(item)) === index)
          .slice(0, 40),
@@ -956,8 +852,8 @@ const COGNITION_ACTIVE_MODE_STORAGE_KEY = "allevin-cognition-active-response-mod
 const DIRECT_CALENDAR_APPROVAL_GUARD_KEY = "allevin-direct-calendar-approval-guard";
 
 // ========================================
-// MK VIII — Sanitization Parameters
-// Working Notes and project conversations should feel open, but stored/rendered data still needs guardrails.
+// MK IX — Sanitization Parameters
+// ALLEVIN’s Guide and project conversations should feel open, but stored/rendered data still needs guardrails.
 // ========================================
 
 const SANITIZE_LIMITS = {
@@ -1280,7 +1176,7 @@ function detectProjectStarterType(prompt: string): ProjectStarterType {
       }
    }
 
-   // ALLEVIN MK VIII — deliverable-first profile detection.
+   // ALLEVIN MK IX — deliverable-first profile detection.
    // A project is classified by what it is trying to produce, not by a single
    // activity word. Saying “I have not researched the requirements” must not
    // turn an operational launch into a research project.
@@ -1692,7 +1588,7 @@ function extractProjectStarterSuccessCriteria(brief: string) {
       return uniqueProjectStarterStatements(splitProjectStarterBrief(clean).filter(isProjectStarterSuccess), 5);
    }
 
-   const tail = clean.slice(match.index + match[0].length).split(/\n{2,}|\b(?:current situation|confirmed decisions|open questions|constraints|working notes|milestones|immediate next step)\s*:/i)[0];
+   const tail = clean.slice(match.index + match[0].length).split(/\n{2,}|\b(?:current situation|confirmed decisions|open questions|constraints|working notes|allevin['’]s guide|milestones|immediate next step)\s*:/i)[0];
 
    return uniqueProjectStarterStatements(
       tail
@@ -2213,7 +2109,18 @@ function getProjectStarterComparisonCriteria(brief: string) {
 }
 
 function buildProjectStarterMilestones(projectType: ProjectStarterType, brief: string, intake: ProjectStarterIntake) {
+   // ALLEVIN MK IX shared-authority path:
+   // AIDock uses the same dependency planner as Projects. The older local
+   // category families remain below only as a compatibility fallback.
    const cleanBrief = sanitizeLongText(brief, 12000);
+   const sharedMilestones = buildLocalProjectDraftGuide({
+      title: buildProjectStarterTitle(cleanBrief, projectType),
+      description: cleanBrief,
+   }).milestones;
+
+   if (sharedMilestones.length >= 5) {
+      return sharedMilestones;
+   }
    const source = [cleanBrief, intake.goal, ...intake.successCriteria, ...intake.currentSituation, ...intake.confirmedDecisions, ...intake.openQuestions, ...intake.constraints, ...intake.workingNotes].join("\n");
    const result: string[] = [];
 
@@ -2256,7 +2163,7 @@ function buildProjectStarterMilestones(projectType: ProjectStarterType, brief: s
       add("Finalize the movie, seating, communication, and cleanup plan", eventPlanNeed || workflowNeed);
       add("Run the event and review what to change", validationNeed || true);
    } else if (physicalWorkspace) {
-      add("Choose the first projects the workspace must support", firstUseNeed || scopeNeed);
+      add("Define what the first workspace must support", firstUseNeed || scopeNeed);
 
       const safetyLabels: string[] = [];
       if (has(/\b(?:electrical|power|outlets?)\b/i)) safetyLabels.push("power");
@@ -2335,7 +2242,7 @@ function buildProjectStarterBody(title: string, projectType: ProjectStarterType,
          "Constraints:",
          renderProjectStarterItems(intake.constraints, "None confirmed yet."),
          "",
-         "Working Notes:",
+         "ALLEVIN's Guide:",
          renderProjectStarterItems(intake.workingNotes, "- Add useful details as the project develops"),
          "",
          "Initial Milestones:",
@@ -2393,25 +2300,42 @@ function getProjectStarterMilestoneReason(firstMilestone: string) {
    return "It resolves the earliest dependency that the later work needs in order to be reliable.";
 }
 
-function buildProjectStarterDraft(prompt: string): ProjectStarterDraft {
+async function buildProjectStarterDraft(prompt: string): Promise<ProjectStarterDraft> {
    const brief = sanitizeLongText(prompt, 12000);
-   const projectType = detectProjectStarterType(brief);
-   const title = buildProjectStarterTitle(brief, projectType);
-   const intake = buildProjectStarterIntake(brief);
-   const intakeMilestones = buildProjectStarterMilestones(projectType, brief, intake);
-   const firstMilestone = intakeMilestones[0] || getProjectStarterImmediateAction(projectType, brief);
-   const reason = getProjectStarterMilestoneReason(firstMilestone);
-   const immediateNextAction = `Start with ${firstMilestone.replace(/[.]+$/, "")}. ${reason}`;
+   const detectedProjectType = detectProjectStarterType(brief);
+   const title = buildProjectStarterTitle(brief, detectedProjectType);
 
-   return {
-      title,
-      projectType,
-      brief,
-      summary: intake.summary || intake.goal,
-      body: buildProjectStarterBody(title, projectType, brief, immediateNextAction),
-      immediateNextAction,
-      createdAt: Date.now(),
-   };
+   try {
+      const guide = await buildProjectDraftGuide({
+         title,
+         description: brief,
+      });
+
+      return {
+         title,
+         projectType: guide.projectType,
+         brief,
+         summary: [guide.goal, ...guide.confirmedDecisions.slice(0, 2), ...guide.successCriteria.slice(0, 1)].filter(Boolean).join(" "),
+         body: renderProjectDraftGuide(guide) || buildProjectStarterBody(title, guide.projectType, brief, guide.recommendedStartingPoint),
+         immediateNextAction: guide.recommendedStartingPoint,
+         createdAt: Date.now(),
+      };
+   } catch {
+      const guide = buildLocalProjectDraftGuide({
+         title,
+         description: brief,
+      });
+
+      return {
+         title,
+         projectType: guide.projectType,
+         brief,
+         summary: [guide.goal, ...guide.confirmedDecisions.slice(0, 2), ...guide.successCriteria.slice(0, 1)].filter(Boolean).join(" "),
+         body: renderProjectDraftGuide(guide) || buildProjectStarterBody(title, guide.projectType, brief, guide.recommendedStartingPoint),
+         immediateNextAction: guide.recommendedStartingPoint,
+         createdAt: Date.now(),
+      };
+   }
 }
 
 function looksLikeProjectStarterApproval(prompt: string) {
@@ -5313,7 +5237,7 @@ function getInternalIntegrationIntent(prompt: string): InternalIntegrationIntent
          source: "canvas",
          target: "projects",
          label: "Canvas → Projects",
-         summary: `${project.title} can be saved as a project thread using the latest Working Notes.`,
+         summary: `${project.title} can be saved as a project thread using the latest ALLEVIN’s Guide.`,
          suggestedAction: "Save the latest Canvas work to Projects with the clearest summary and next move.",
       };
    }
@@ -6454,7 +6378,7 @@ function buildWeatherToolSummary(prompt: string, weather: OpenMeteoCurrentWeathe
 }
 
 async function fetchOpenMeteoWeather() {
-   // ALLEVIN MK VIII — Legacy compatibility path:
+   // ALLEVIN MK IX — Legacy compatibility path:
    // Default test location uses the user's known San Diego County context.
    // Later builds can replace this with browser geolocation or a saved city preference.
    const latitude = 32.6781;
@@ -6636,7 +6560,7 @@ function looksLikePersonalRecommendationQuestion(prompt: string) {
 function looksLikeGeneralKnowledgeQuestion(prompt: string) {
    const lower = normalizeUserIntentPrompt(prompt);
 
-   // ALLEVIN MK VIII project-authority guard:
+   // ALLEVIN MK IX project-authority guard:
    // Project identity, milestone, and next-action questions are never general
    // knowledge. They must use the active project selected in Projects.
    if (
@@ -7294,7 +7218,7 @@ function getEmptyWorkspaceResponse() {
       "Your project is ready for a new idea, and Projects has saved work when you need it.",
       "Open Projects to continue saved work, or start fresh in the project.",
       "No ghost projects on my watch. Start in the project or choose something from Projects.",
-      "Projects and Working Notes are ready when you are.",
+      "Projects and ALLEVIN’s Guide are ready when you are.",
    ];
 
    return `${openings[Math.floor(Math.random() * openings.length)]} ${tails[Math.floor(Math.random() * tails.length)]}`;
@@ -7554,7 +7478,7 @@ export default function ALLEVIN() {
 
    useEffect(() => {
       function handleAllevinChatNotice(_event: Event) {
-         // MK VIII polish:
+         // MK IX polish:
          // Routine page confirmations are intentionally quiet now.
          // Ask ALLEVIN should only open when the user asks for help,
          // not when Canvas, Projects, or Calendar finish a normal action.
@@ -7601,8 +7525,8 @@ export default function ALLEVIN() {
 
    const sourceAwareProject = getSourceAwareActiveProject();
 
-   // ALLEVIN MK VIII — Legacy compatibility path:
-   // Source-aware ranking lets Projects and Working Notes beat stale timeline noise.
+   // ALLEVIN MK IX — Legacy compatibility path:
+   // Source-aware ranking lets Projects and ALLEVIN’s Guide beat stale timeline noise.
 
    // MK V Memory Foundation:
    // Read the shared project memory layer as a cleaner fallback.
@@ -9587,7 +9511,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
       // If MemoryEngine still reports a project after the user deleted/reset it,
       // do not let timeline/thread/System memory count as current work by itself.
-      // MK V source of truth: active Working Notes or an existing Projects item.
+      // MK V source of truth: the active ALLEVIN’s Guide or an existing Projects item.
       if (sourceAwareProject.source !== "canvas") {
          return hasLiveProjectMatch({
             title: sourceAwareProject.title,
@@ -10827,7 +10751,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
       }
 
       if (lower.includes("mk iii") || lower.includes("personality") || lower.includes("source-aware") || lower.includes("next-step") || lower.includes("test build")) {
-         return "testing and improving ALLEVIN MK VIII";
+         return "testing and improving ALLEVIN MK IX";
       }
 
       return "the current project";
@@ -12810,7 +12734,7 @@ I could not turn this recommendation into a clean action yet.
          return false;
       }
 
-      // ALLEVIN MK VIII authoritative chat boundary: once the guidance engine
+      // ALLEVIN MK IX authoritative chat boundary: once the guidance engine
       // resolves a project intent, no general-knowledge or legacy response path
       // may reinterpret the same prompt.
       if (hasActiveProjectForMandatoryGuidance() && resolvedGuidance.intent !== "general") {
@@ -13565,14 +13489,16 @@ I could not turn this recommendation into a clean action yet.
                        decisions: activeMilestoneObject.decisions,
                        openQuestions: activeMilestoneObject.openQuestions,
                        completionCriteria: activeMilestoneObject.completionCriteria,
-                       completionEvidence: activeMilestoneObject.completionEvidence,
+                       completedCriteria: activeMilestoneObject.completedCriteria,
+                       dependencies: activeMilestoneObject.dependencies,
+                       whatItUnlocks: understanding.whatItUnlocks,
                        status: activeMilestoneObject.status,
                     }
                   : undefined,
             },
             contextPacket: packet,
             userInstruction: `
-You are the conversational delivery layer for ALLEVIN MK VIII.
+You are the conversational delivery layer for ALLEVIN MK IX.
 
 The grounded project-lead response below is authoritative. Do not replace its judgment, recommendation, rationale, risk, milestone, or evidence. Your job is to make it sound like a thoughtful senior project lead speaking naturally to the user.
 
@@ -13587,7 +13513,7 @@ Requirements:
 - Treat the recent conversation as continuous: resolve words such as "that", "it", "this one", and "after that" from the previous project turn.
 - Do not restate the project goal, full roadmap, or current milestone unless it directly helps answer this question.
 - Use only the grounded fields that answer this intent. Do not append a general roadmap, risk, next step, or project summary merely because it exists in context.
-- Facts, priorities, assumptions, risks, decisions, completion evidence, and next actions must sound meaningfully different because they answer different questions.
+- Facts, priorities, assumptions, risks, decisions, completion readiness, and next actions must sound meaningfully different because they answer different questions.
 - For a one-line follow-up such as "Why?", "What does it unlock?", or "What happens after that?", answer the remembered subject directly instead of restarting the project analysis.
 - Preserve every project-specific decision and recommendation.
 - Preserve named products, milestones, materials, tradeoffs, dependencies, and risks.
@@ -13720,7 +13646,7 @@ ${getCognitionPromptInstruction()}
             userInstruction: `
 User question: ${prompt}
 
-Use ALLEVIN MK VIII style, but treat this as a general knowledge answer, not project guidance.
+Use ALLEVIN MK IX style, but treat this as a general knowledge answer, not project guidance.
 
 Rules:
 - Answer the question directly.
@@ -13797,7 +13723,7 @@ Rules:
          nextStep: context.nextStep,
          rawContent: buildCleanContinuationBody(),
          contextPacket: buildAllevinInternalContextPacket(prompt),
-         userInstruction: `${prompt}\n\nUse ALLEVIN MK VIII natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, clear, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, including project materials when relevant, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. Because beta feedback showed the AI can feel unnecessary when it sounds generic, prioritize concrete guidance tied to the active project, Canvas text, calendar, and project materials. For event-planning projects, reason from the saved objective, attendees, timing, resources, dependencies, responsibilities, and execution flow. Do not invent event details that are not in the project. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Use natural ChatGPT-style depth. Keep simple answers brief, but allow several paragraphs when the user asks for explanation, analysis, writing, comparison, project strategy, or material interpretation.`,
+         userInstruction: `${prompt}\n\nUse ALLEVIN MK IX natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, clear, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, including project materials when relevant, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. Because beta feedback showed the AI can feel unnecessary when it sounds generic, prioritize concrete guidance tied to the active project, Canvas text, calendar, and project materials. For event-planning projects, reason from the saved objective, attendees, timing, resources, dependencies, responsibilities, and execution flow. Do not invent event details that are not in the project. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Use natural ChatGPT-style depth. Keep simple answers brief, but allow several paragraphs when the user asks for explanation, analysis, writing, comparison, project strategy, or material interpretation.`,
          projectStage: context.stageLabel,
          currentLocation: context.locationLabel,
          priority: focusMode === "deep" ? "high" : "medium",
@@ -14160,7 +14086,7 @@ Rules:
    }
 
    function maybeTypoLine(prompt: string) {
-      // ALLEVIN MK VIII — Legacy compatibility path:
+      // ALLEVIN MK IX — Legacy compatibility path:
       // Typos should be understood silently.
       // ALLEVIN should answer the intent, not comment on the user's spelling.
       void prompt;
@@ -14169,7 +14095,7 @@ Rules:
    }
 
    function withTypoAwareResponse(prompt: string, response: string) {
-      // ALLEVIN MK VIII — Legacy compatibility path:
+      // ALLEVIN MK IX — Legacy compatibility path:
       // Keep typo tolerance invisible unless a future debug mode asks for it.
       void prompt;
 
@@ -15221,7 +15147,7 @@ Try one of these:
          return withTypoAwareResponse(prompt, buildCognitionReadbackResponse());
       }
 
-      // ALLEVIN MK VIII — Legacy compatibility path:
+      // ALLEVIN MK IX — Legacy compatibility path:
       // Integration requests should win before plain calendar readbacks, but not cognition readbacks.
       if (looksLikeInternalIntegrationQuestion(prompt)) {
          const intent = getInternalIntegrationIntent(prompt);
@@ -15231,7 +15157,7 @@ Try one of these:
          return withTypoAwareResponse(prompt, buildInternalIntegrationPreviewResponse(intent));
       }
 
-      // ALLEVIN MK VIII — Legacy compatibility path:
+      // ALLEVIN MK IX — Legacy compatibility path:
       // Calendar intelligence must win before project guidance.
       if (looksLikeCalendarNotesQuestion(prompt) || looksLikeCalendarScheduleQuestion(prompt)) {
          return withTypoAwareResponse(prompt, buildCalendarAwarenessResponse(prompt));
@@ -15273,7 +15199,7 @@ Try one of these:
 
          const confidenceLabel = understanding.confidence >= 80 ? "High" : understanding.confidence >= 55 ? "Moderate" : understanding.confidence > 0 ? "Developing" : "Unknown";
 
-         return `MK VIII Project Understanding is online.
+         return `MK IX Project Understanding is online.
 
 Project: ${packet.currentProject.title || "None"}
 Location: ${packet.currentProject.location}
@@ -15549,7 +15475,17 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
       return `${draft.title} is ready in the project. I gave it a structured starting point rather than a blank page. Start with this: ${draft.immediateNextAction}`;
    }
 
-   function revisePendingProjectStarter(prompt: string, current: ProjectStarterDraft) {
+   async function buildProjectStarterDraftWithBusy(prompt: string) {
+      setLlmBusy(true);
+
+      try {
+         return await buildProjectStarterDraft(prompt);
+      } finally {
+         setLlmBusy(false);
+      }
+   }
+
+   async function revisePendingProjectStarter(prompt: string, current: ProjectStarterDraft) {
       const requestedTitle = extractRequestedProjectStarterTitle(prompt);
 
       if (requestedTitle && requestedTitle !== "Untitled") {
@@ -15570,7 +15506,7 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
       }
 
       const revisedBrief = sanitizeLongText(`${current.brief}\n\nRequested adjustment:\n${prompt}`, 6000);
-      const revised = buildProjectStarterDraft(revisedBrief);
+      const revised = await buildProjectStarterDraftWithBusy(revisedBrief);
 
       setPendingProjectStarter({
          stage: "review",
@@ -15600,7 +15536,7 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
          return;
       }
 
-      // ALLEVIN MK VIII — Legacy compatibility path:
+      // ALLEVIN MK IX — Legacy compatibility path:
       // Cognition is now an AI response mode only.
       // Do not infer focus from chat prompts or change the workspace state here.
       void inferFocusMode;
@@ -15623,7 +15559,7 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
          workspace: activeView,
       });
 
-      // ALLEVIN MK VIII — Legacy compatibility path:
+      // ALLEVIN MK IX — Legacy compatibility path:
       // Chat should not shift the visible environment.
       // Cognition only changes ALLEVIN's response style.
       void refreshEnvironment;
@@ -15654,7 +15590,7 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
             return;
          }
 
-         const draft = buildProjectStarterDraft(currentInput);
+         const draft = await buildProjectStarterDraftWithBusy(currentInput);
 
          setPendingProjectStarter({
             stage: "review",
@@ -15702,7 +15638,7 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
             return;
          }
 
-         const response = revisePendingProjectStarter(currentInput, pendingProjectStarter.draft);
+         const response = await revisePendingProjectStarter(currentInput, pendingProjectStarter.draft);
 
          setMessages((prev) => [
             ...prev,
@@ -15733,7 +15669,7 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
             return;
          }
 
-         const draft = buildProjectStarterDraft(currentInput);
+         const draft = await buildProjectStarterDraftWithBusy(currentInput);
 
          setPendingProjectStarter({
             stage: "review",
@@ -15755,17 +15691,15 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
       const milestoneCompletion = completeActiveProjectMilestoneFromPrompt(currentInput, projectConversationRef.current);
 
       if (milestoneCompletion) {
-         const materialLine = milestoneCompletion.materialTitles.length ? ` I also considered the attached project materials: ${milestoneCompletion.materialTitles.join(", ")}.` : "";
-
          const responseContent = milestoneCompletion.completed
             ? cleanFinalAIDockResponse(
                  milestoneCompletion.nextTitle
-                    ? `That completes ${milestoneCompletion.completedTitle}. The evidence now supports closing that milestone, and the active milestone is ${milestoneCompletion.nextTitle}.${materialLine}`
-                    : `That completes ${milestoneCompletion.completedTitle}. The recorded milestone sequence is now complete.${materialLine}`,
+                    ? `That completes ${milestoneCompletion.completedTitle}. Every completion criterion is checked, and the active milestone is ${milestoneCompletion.nextTitle}.`
+                    : `That completes ${milestoneCompletion.completedTitle}. Every milestone in the recorded sequence is now complete.`,
               )
             : cleanFinalAIDockResponse(
-                 `I would keep ${milestoneCompletion.completedTitle} open for now. The update supports ${milestoneCompletion.matchedCriteria.length ? milestoneCompletion.matchedCriteria.join("; ") : "part of the milestone"}, but these checks are still missing:
-${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. ${criterion}`).join("\n")}${materialLine}`,
+                 `I would keep ${milestoneCompletion.completedTitle} open for now. Check these remaining completion criteria in Projects before closing it:
+${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. ${criterion}`).join("\n")}`,
               );
 
          projectConversationRef.current = {
@@ -15778,7 +15712,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
             lastSubject: {
                kind: "milestone",
                title: milestoneCompletion.completed && milestoneCompletion.nextTitle ? milestoneCompletion.nextTitle : milestoneCompletion.completedTitle,
-               detail: milestoneCompletion.completed ? "active after completion" : "still needs evidence",
+               detail: milestoneCompletion.completed ? "active after completion" : "still has unchecked completion criteria",
             },
             updatedAt: Date.now(),
          };
@@ -16018,7 +15952,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
          return;
       }
 
-      // MK VIII Project Awareness:
+      // MK IX Project Awareness:
       // Material-backed focus questions use the unified project + selected-material path.
       if (looksLikeProjectFocusQuestion(currentInput) && getActiveProjectMaterialsForAIDock().length > 0 && !looksLikeDirectCalendarScheduleRequest(currentInput)) {
          setLlmBusy(true);
@@ -16090,7 +16024,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
          return;
       }
 
-      // MK VIII Build 4.4 — Calendar project-lead routing lock:
+      // MK IX — Calendar project-lead routing lock:
       // Guidance decides what project action matters; Calendar decides when it fits.
       // Return the grounded calendar response directly so legacy smart-command or
       // conversational variation routes cannot remove the action or time window.
@@ -16180,7 +16114,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
          return;
       }
 
-      // MK VIII — Senior Project Lead API boundary:
+      // MK IX — Senior Project Lead API boundary:
       // Project-work questions must be resolved before the broad general-knowledge
       // detector, which intentionally treats most question-mark prompts as factual.
       // Without this guard, prompts such as “What should I work on next?” can be
@@ -16696,7 +16630,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                   </div>
 
                   <div className="text-left">
-                     <p className="text-sm font-semibold">ALLEVIN MK VIII</p>
+                     <p className="text-sm font-semibold">ALLEVIN MK IX</p>
 
                      <p className="max-w-[180px] truncate text-sm text-[var(--color-text-secondary)] sm:max-w-[220px]">{visibleActiveProjectTitle}</p>
                   </div>
@@ -16792,7 +16726,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                            </div>
 
                            <div className="min-w-0">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN MK VIII</p>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN MK IX</p>
 
                               <h2 data-editorial-title="true" className="mt-1 truncate text-xl leading-tight">
                                  {visibleActiveProjectTitle}

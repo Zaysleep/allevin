@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK VIII LLM Types
+// ALLEVIN MK IX LLM Types
 // Shared contract for AIDock, client, and server.
 // Project Guidance remains authoritative.
 // ========================================
@@ -75,7 +75,7 @@ export interface AllevinActiveMilestoneContext {
    decisions?: string[];
    openQuestions?: string[];
    completionCriteria?: string[];
-   completionEvidence?: string[];
+   completedCriteria?: string[];
    dependencies?: string[];
    whatItUnlocks?: string;
    status?: string;
