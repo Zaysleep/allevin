@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK IX OpenAI Response Client
+// ALLEVIN MK X OpenAI Response Client
 // Purpose:
 // Frontend-safe helper for requesting controlled LLM improvements
 // from the server route at /api/allevin/llm.
@@ -14,7 +14,7 @@
 import type { AllevinContextPacket, AllevinLLMRequest, AllevinLLMResponse, AllevinStructuredSections } from "@/lib/allevinLLMTypes";
 
 // ========================================
-// MK IX Shared Context Packet
+// MK X Shared Context Packet
 // ========================================
 
 export type { AllevinContextPacket };
@@ -28,7 +28,7 @@ function isProjectIntakeRequest(request?: Pick<AllevinLLMRequestWithContext, "mo
 }
 
 // ========================================
-// MK IX — LLM Client Sanitization
+// MK X — LLM Client Sanitization
 // Purpose:
 // The LLM client is an AI boundary. Sanitize
 // context before sending and sanitize responses
@@ -136,6 +136,89 @@ function sanitizeLLMTimestamp(value?: number) {
 
 function sanitizeLLMPriority(value?: AllevinLLMRequest["priority"]) {
    return value === "low" || value === "medium" || value === "high" ? value : undefined;
+}
+
+function sanitizeAIDockResponseMode(value?: AllevinLLMRequest["responseMode"]) {
+   return value === "balanced" || value === "focused" || value === "creative" ? value : undefined;
+}
+
+function sanitizeLLMContinuityIntent(value?: AllevinLLMRequest["conversation"] extends infer T ? (T extends { continuityIntent?: infer U } ? U : never) : never) {
+   return value === "continue" ||
+      value === "shorten" ||
+      value === "expand" ||
+      value === "simplify" ||
+      value === "rewrite" ||
+      value === "alternate-method" ||
+      value === "accept" ||
+      value === "reject" ||
+      value === "correct" ||
+      value === "option-reference" ||
+      value === "none"
+      ? value
+      : undefined;
+}
+
+function sanitizeLLMConversationMessages(values?: AllevinLLMRequest["conversation"] extends infer T ? (T extends { recentMessages?: infer U } ? U : never) : never) {
+   return Array.isArray(values)
+      ? values
+           .map((message) => ({
+              role: message?.role === "user" ? ("user" as const) : ("assistant" as const),
+              content: sanitizeLLMClientText(message?.content, LLM_CLIENT_SANITIZE_LIMITS.responseText),
+           }))
+           .filter((message) => message.content)
+           .slice(-10)
+      : [];
+}
+
+function sanitizeLLMConversationOptionSet(value?: AllevinLLMRequest["conversation"] extends infer T ? (T extends { optionSet?: infer U } ? U : never) : never) {
+   if (!value) return undefined;
+
+   const options = Array.isArray(value.options)
+      ? value.options
+           .map((option, index) => ({
+              id: sanitizeLLMSmallText(option?.id) || `option-${index + 1}`,
+              title: sanitizeLLMTitle(option?.title),
+              detail: sanitizeLLMSummary(option?.detail),
+           }))
+           .filter((option) => option.title || option.detail)
+           .slice(0, 8)
+      : [];
+
+   if (options.length < 2) return undefined;
+
+   const selectedOptionId = sanitizeLLMSmallText(value.selectedOptionId);
+   return {
+      id: sanitizeLLMSmallText(value.id),
+      topic: sanitizeLLMSummary(value.topic),
+      options,
+      selectedOptionId: options.some((option) => option.id === selectedOptionId) ? selectedOptionId : "",
+   };
+}
+
+function sanitizeLLMConversationContext(value?: AllevinLLMRequest["conversation"]) {
+   if (!value) return undefined;
+
+   return {
+      projectKey: sanitizeLLMSmallText(value.projectKey),
+      projectTitle: sanitizeLLMTitle(value.projectTitle),
+      lastUserPrompt: sanitizeLLMClientText(value.lastUserPrompt, LLM_CLIENT_SANITIZE_LIMITS.prompt),
+      lastAssistantResponse: sanitizeLLMClientText(value.lastAssistantResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
+      lastRecommendation: sanitizeLLMNextStep(value.lastRecommendation),
+      canonicalRecommendation: sanitizeLLMNextStep(value.canonicalRecommendation),
+      currentMethod: sanitizeLLMNextStep(value.currentMethod),
+      acceptedMethod: sanitizeLLMNextStep(value.acceptedMethod),
+      rejectedMethods: sanitizeLLMSummaryArray(value.rejectedMethods, 12),
+      currentTopic: sanitizeLLMSummary(value.currentTopic),
+      requestedTransformation: sanitizeLLMSmallText(value.requestedTransformation),
+      continuityIntent: sanitizeLLMContinuityIntent(value.continuityIntent),
+      activeReference: sanitizeLLMSummary(value.activeReference),
+      referencedOption: sanitizeLLMSummary(value.referencedOption),
+      optionSet: sanitizeLLMConversationOptionSet(value.optionSet),
+      acceptedRecommendations: sanitizeLLMSummaryArray(value.acceptedRecommendations, 12),
+      rejectedRecommendations: sanitizeLLMSummaryArray(value.rejectedRecommendations, 12),
+      corrections: sanitizeLLMSummaryArray(value.corrections, 12),
+      recentMessages: sanitizeLLMConversationMessages(value.recentMessages),
+   };
 }
 
 function sanitizeLLMDataUrl(value?: string, allowedPattern: RegExp = /^data:/i) {
@@ -287,6 +370,188 @@ function sanitizeProjectUnderstandingContext(value?: AllevinLLMRequest["projectU
    };
 }
 
+function sanitizeAIDockMaterialGrounding(value?: AllevinLLMRequest["materialGrounding"]) {
+   if (!value) return undefined;
+
+   const selectedMaterials = Array.isArray(value.selectedMaterials)
+      ? value.selectedMaterials
+           .map((item) => ({
+              id: sanitizeLLMSmallText(item?.id),
+              title: sanitizeLLMTitle(item?.title),
+              type: sanitizeLLMSmallText(item?.type),
+              relevanceScore: clampLLMConfidence(item?.relevanceScore, 0),
+              relevanceReasons: sanitizeLLMSummaryArray(item?.relevanceReasons, 6),
+              fact: sanitizeLLMSummary(item?.fact),
+              interpretation: sanitizeLLMSummary(item?.interpretation),
+              nextStep: sanitizeLLMNextStep(item?.nextStep),
+           }))
+           .filter((item) => item.title)
+           .slice(0, 4)
+      : [];
+
+   const facts = Array.isArray(value.facts)
+      ? value.facts
+           .map((item) => ({
+              sourceId: sanitizeLLMSmallText(item?.sourceId),
+              sourceTitle: sanitizeLLMTitle(item?.sourceTitle),
+              kind: item?.kind === "interpretation" ? ("interpretation" as const) : ("material-fact" as const),
+              statement: sanitizeLLMSummary(item?.statement),
+              confidence: clampLLMConfidence(item?.confidence, 60),
+           }))
+           .filter((item) => item.sourceTitle && item.statement)
+           .slice(0, 8)
+      : [];
+
+   const contradictions = Array.isArray(value.contradictions)
+      ? value.contradictions
+           .map((item) => ({
+              topic: sanitizeLLMSummary(item?.topic),
+              firstSourceTitle: sanitizeLLMTitle(item?.firstSourceTitle),
+              firstStatement: sanitizeLLMSummary(item?.firstStatement),
+              secondSourceTitle: sanitizeLLMTitle(item?.secondSourceTitle),
+              secondStatement: sanitizeLLMSummary(item?.secondStatement),
+              guidance: sanitizeLLMNextStep(item?.guidance),
+           }))
+           .filter((item) => item.firstSourceTitle && item.secondSourceTitle && item.firstStatement && item.secondStatement)
+           .slice(0, 4)
+      : [];
+
+   const usedTitles = sanitizeLLMStringArray(value.usedTitles, 4);
+
+   return {
+      version: "MK X" as const,
+      projectTitle: sanitizeLLMTitle(value.projectTitle),
+      query: sanitizeLLMClientText(value.query, LLM_CLIENT_SANITIZE_LIMITS.prompt),
+      activeMilestoneTitle: sanitizeLLMTitle(value.activeMilestoneTitle),
+      hasRelevantMaterials: value.hasRelevantMaterials === true && usedTitles.length > 0,
+      selectedMaterials,
+      facts,
+      contradictions,
+      uncertainty: sanitizeLLMSummaryArray(value.uncertainty, 8),
+      usedTitles,
+      usedLine: usedTitles.length ? `Used: ${usedTitles.join(" · ")}` : "",
+      confidence: clampLLMConfidence(value.confidence, 0),
+   };
+}
+
+function sanitizeAIDockCalendarEvent(value?: NonNullable<AllevinLLMRequest["calendarIntelligence"]>["todayEvents"][number]) {
+   if (!value) return undefined;
+
+   const startTime = sanitizeLLMTimestamp(value.startTime);
+   const endTime = sanitizeLLMTimestamp(value.endTime);
+
+   if (!startTime || !endTime || endTime <= startTime) {
+      return undefined;
+   }
+
+   return {
+      id: sanitizeLLMSmallText(value.id),
+      title: sanitizeLLMTitle(value.title),
+      startTime,
+      endTime,
+      allDay: value.allDay === true,
+      timeLabel: sanitizeLLMSummary(value.timeLabel),
+      durationMinutes: typeof value.durationMinutes === "number" && Number.isFinite(value.durationMinutes) ? Math.max(0, Math.min(24 * 60, Math.round(value.durationMinutes))) : 0,
+      projectTitle: sanitizeLLMTitle(value.projectTitle),
+      milestoneTitle: sanitizeLLMTitle(value.milestoneTitle),
+      sessionGoal: sanitizeLLMNextStep(value.sessionGoal),
+      expectedResult: sanitizeLLMSummary(value.expectedResult),
+      isProjectSession: value.isProjectSession === true,
+      hasPassed: value.hasPassed === true,
+   };
+}
+
+function sanitizeAIDockCalendarSessionPlan(value?: NonNullable<AllevinLLMRequest["calendarIntelligence"]>["sessionPlan"]) {
+   if (!value) return undefined;
+
+   return {
+      projectTitle: sanitizeLLMTitle(value.projectTitle),
+      milestoneTitle: sanitizeLLMTitle(value.milestoneTitle),
+      sessionGoal: sanitizeLLMNextStep(value.sessionGoal),
+      expectedResult: sanitizeLLMSummary(value.expectedResult),
+      durationMinutes: typeof value.durationMinutes === "number" && Number.isFinite(value.durationMinutes) ? Math.max(15, Math.min(180, Math.round(value.durationMinutes))) : 45,
+      recommendedDurationMinutes: typeof value.recommendedDurationMinutes === "number" && Number.isFinite(value.recommendedDurationMinutes) ? Math.max(15, Math.min(180, Math.round(value.recommendedDurationMinutes))) : 45,
+      needsMultipleSessions: value.needsMultipleSessions === true,
+      reason: sanitizeLLMSummary(value.reason),
+      completionCriteria: sanitizeLLMSummaryArray(value.completionCriteria, 8),
+   };
+}
+
+function sanitizeAIDockCalendarIntelligence(value?: AllevinLLMRequest["calendarIntelligence"]) {
+   if (!value) return undefined;
+
+   const sanitizeEvents = (events?: NonNullable<AllevinLLMRequest["calendarIntelligence"]>["todayEvents"]) =>
+      Array.isArray(events)
+         ? events
+              .map((event) => sanitizeAIDockCalendarEvent(event))
+              .filter((event): event is NonNullable<ReturnType<typeof sanitizeAIDockCalendarEvent>> => Boolean(event))
+              .slice(0, 20)
+         : [];
+
+   const nextEvent = sanitizeAIDockCalendarEvent(value.nextEvent);
+   const nextProjectSession = sanitizeAIDockCalendarEvent(value.nextProjectSession);
+   const generatedAt = sanitizeLLMTimestamp(value.generatedAt) || Date.now();
+
+   return {
+      version: "MK X" as const,
+      projectTitle: sanitizeLLMTitle(value.projectTitle),
+      projectId: sanitizeLLMSmallText(value.projectId),
+      activeMilestoneTitle: sanitizeLLMTitle(value.activeMilestoneTitle),
+      recommendation: sanitizeLLMNextStep(value.recommendation),
+      hasCalendarData: value.hasCalendarData === true,
+      hasUpcomingEvents: value.hasUpcomingEvents === true,
+      todayEvents: sanitizeEvents(value.todayEvents),
+      todayProjectSessions: sanitizeEvents(value.todayProjectSessions),
+      projectSessions: sanitizeEvents(value.projectSessions),
+      passedProjectSessionsThisWeek: sanitizeEvents(value.passedProjectSessionsThisWeek),
+      nextEvent,
+      nextProjectSession,
+      todaySummary: sanitizeLLMSummary(value.todaySummary),
+      nextEventSummary: sanitizeLLMSummary(value.nextEventSummary),
+      nextProjectSessionSummary: sanitizeLLMSummary(value.nextProjectSessionSummary),
+      availabilityNote: sanitizeLLMSummary(value.availabilityNote),
+      sessionPlan: sanitizeAIDockCalendarSessionPlan(value.sessionPlan)!,
+      generatedAt,
+   };
+}
+
+function sanitizeAIDockResponseJudgment(value?: AllevinLLMRequest["responseJudgment"]) {
+   if (!value) {
+      return undefined;
+   }
+
+   return {
+      version: "MK X" as const,
+      authority: "shared-project-judgment" as const,
+      intent: sanitizeLLMSmallText(value.intent),
+      subject: value.subject
+         ? {
+              kind: sanitizeLLMSmallText(value.subject.kind),
+              title: sanitizeLLMTitle(value.subject.title),
+              detail: sanitizeLLMSummary(value.subject.detail),
+              id: sanitizeLLMSmallText(value.subject.id),
+           }
+         : undefined,
+      authoritativeResponse: sanitizeLLMClientText(value.authoritativeResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
+      directAnswer: sanitizeLLMSummary(value.directAnswer),
+      currentUnderstanding: sanitizeLLMSummary(value.currentUnderstanding),
+      assessment: sanitizeLLMSummary(value.assessment),
+      recommendation: sanitizeLLMNextStep(value.recommendation),
+      reason: sanitizeLLMSummary(value.reason),
+      nextAction: sanitizeLLMNextStep(value.nextAction),
+      whatItUnlocks: sanitizeLLMSummary(value.whatItUnlocks),
+      caution: sanitizeLLMSummary(value.caution),
+      relevantFacts: sanitizeLLMSummaryArray(value.relevantFacts, 16),
+      materialsUsed: sanitizeLLMStringArray(value.materialsUsed, 12),
+      materialGrounding: sanitizeAIDockMaterialGrounding(value.materialGrounding),
+      calendarIntelligence: sanitizeAIDockCalendarIntelligence(value.calendarIntelligence),
+      calendarContext: sanitizeLLMSummary(value.calendarContext),
+      uncertainty: sanitizeLLMSummaryArray(value.uncertainty, 12),
+      confidence: clampLLMConfidence(value.confidence, 60),
+      truthSignature: sanitizeLLMSmallText(value.truthSignature),
+   };
+}
+
 function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinContextPacket | undefined {
    if (!contextPacket) {
       return undefined;
@@ -350,6 +615,7 @@ function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinCon
          hasUpcomingEvents: contextPacket.calendar?.hasUpcomingEvents === true,
          nextEventSummary: sanitizeLLMSummary(contextPacket.calendar?.nextEventSummary),
          todaySummary: sanitizeLLMSummary(contextPacket.calendar?.todaySummary),
+         intelligence: sanitizeAIDockCalendarIntelligence(contextPacket.calendar?.intelligence),
       },
 
       cognition: {
@@ -363,13 +629,7 @@ function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinCon
 
       projectUnderstanding: sanitizeProjectUnderstandingContext(contextPacket.projectUnderstanding),
 
-      conversation: {
-         lastUserPrompt: sanitizeLLMClientText(contextPacket.conversation?.lastUserPrompt, LLM_CLIENT_SANITIZE_LIMITS.prompt),
-         lastAssistantResponse: sanitizeLLMClientText(contextPacket.conversation?.lastAssistantResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
-         lastRecommendation: sanitizeLLMNextStep(contextPacket.conversation?.lastRecommendation),
-         currentTopic: sanitizeLLMSummary(contextPacket.conversation?.currentTopic),
-         requestedTransformation: sanitizeLLMSmallText(contextPacket.conversation?.requestedTransformation),
-      },
+      conversation: sanitizeLLMConversationContext(contextPacket.conversation),
 
       responseRules: {
          tone: sanitizeLLMSmallText(contextPacket.responseRules?.tone),
@@ -378,6 +638,11 @@ function sanitizeContextPacket(contextPacket?: AllevinContextPacket): AllevinCon
          depth: sanitizeLLMSmallText(contextPacket.responseRules?.depth),
          groundedResponse: sanitizeLLMClientText(contextPacket.responseRules?.groundedResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
       },
+
+      responseMode: sanitizeAIDockResponseMode(contextPacket.responseMode),
+      responseJudgment: sanitizeAIDockResponseJudgment(contextPacket.responseJudgment),
+      materialGrounding: sanitizeAIDockMaterialGrounding(contextPacket.materialGrounding),
+      calendarIntelligence: sanitizeAIDockCalendarIntelligence(contextPacket.calendarIntelligence || contextPacket.calendar?.intelligence),
    };
 }
 
@@ -395,16 +660,12 @@ function sanitizeLLMRequest(request: AllevinLLMRequestWithContext): AllevinLLMRe
       currentLocation: sanitizeLLMSmallText(request.currentLocation),
       priority: sanitizeLLMPriority(request.priority),
       responseStyle: request.responseStyle === "direct" || request.responseStyle === "conversational" || request.responseStyle === "editorial" || request.responseStyle === "detailed" ? request.responseStyle : undefined,
+      responseMode: sanitizeAIDockResponseMode(request.responseMode),
       groundedResponse: sanitizeLLMClientText(request.groundedResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
-      conversation: request.conversation
-         ? {
-              lastUserPrompt: sanitizeLLMClientText(request.conversation.lastUserPrompt, LLM_CLIENT_SANITIZE_LIMITS.prompt),
-              lastAssistantResponse: sanitizeLLMClientText(request.conversation.lastAssistantResponse, LLM_CLIENT_SANITIZE_LIMITS.responseText),
-              lastRecommendation: sanitizeLLMNextStep(request.conversation.lastRecommendation),
-              currentTopic: sanitizeLLMSummary(request.conversation.currentTopic),
-              requestedTransformation: sanitizeLLMSmallText(request.conversation.requestedTransformation),
-           }
-         : undefined,
+      responseJudgment: sanitizeAIDockResponseJudgment(request.responseJudgment),
+      materialGrounding: sanitizeAIDockMaterialGrounding(request.materialGrounding),
+      calendarIntelligence: sanitizeAIDockCalendarIntelligence(request.calendarIntelligence || request.contextPacket?.calendar?.intelligence),
+      conversation: sanitizeLLMConversationContext(request.conversation),
       projectUnderstanding: sanitizeProjectUnderstandingContext(request.projectUnderstanding),
       contextPacket: sanitizeContextPacket(request.contextPacket),
       selectedMaterial: sanitizeSelectedMaterialContext(request.selectedMaterial),

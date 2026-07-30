@@ -1,8 +1,8 @@
 // ========================================
 // AI Dock
 // Purpose:
-// ALLEVIN MK IX Project Lead Dock for
-// calm project-aware guidance, quick actions,
+// ALLEVIN MK X Project Lead Dock for
+// calm project-aware guidance, natural actions,
 // natural project-aware responses,
 // and source-aware workspace awareness.
 // ========================================
@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { motion, AnimatePresence } from "framer-motion";
 
-import { Send, ChevronUp, Activity, NotebookPen, FolderKanban, Brain, Sparkles, Crosshair, MessageSquare, ChevronDown, GitBranch, Target, SlidersHorizontal, CheckCircle2, XCircle, ExternalLink, CalendarDays } from "lucide-react";
+import { Send, ChevronUp, Activity, Brain, Sparkles, Crosshair, MessageSquare, ChevronDown, GitBranch, Target, SlidersHorizontal, CheckCircle2, XCircle, ExternalLink } from "lucide-react";
 
 import { useWorkspace } from "@/components/WorkspaceContext";
 
@@ -29,9 +29,38 @@ import { parseProjectDocument, readProjectMemory, upsertProjectMemory } from "@/
 
 import { requestAllevinLLM } from "@/lib/allevinLLMClient";
 
+import { buildAIDockResponseJudgment, getAIDockResponseModeProfile, normalizeAIDockResponseMode, renderAIDockResponseJudgment } from "@/lib/aidockResponseAuthority";
+
+import { appendAIDockMaterialGroundingLine, buildAIDockMaterialGrounding, buildAIDockMaterialQuestionGroundedResponse } from "@/lib/aidockMaterialGrounding";
+
+import {
+   buildAIDockCalendarIntelligence,
+   buildAIDockCalendarPreview,
+   buildAIDockCalendarReadback,
+   buildAIDockCalendarSessionDescription,
+   buildAIDockCalendarSessionPlan,
+   findAIDockCalendarSession,
+   getRequestedCalendarMinutes,
+   type AIDockCalendarEventInput,
+} from "@/lib/aidockCalendarIntelligence";
+
+import {
+   buildAIDockLLMConversationContext,
+   createEmptyAIDockConversationThread,
+   deleteAIDockConversationThread,
+   getAIDockContinuityIntent,
+   isAIDockConversationThreadForProject,
+   readAIDockConversationThread,
+   recordAIDockConversationGuidance,
+   recordAIDockConversationUserPrompt,
+   setAIDockConversationMessages,
+   writeAIDockConversationThread,
+   type AIDockConversationThread,
+} from "@/lib/aidockConversationContinuity";
+
 import { buildLocalProjectDraftGuide, buildProjectDraftGuide, renderProjectDraftGuide } from "@/lib/projectDraftIntelligence";
 
-import type { AllevinContextPacket } from "@/lib/allevinLLMTypes";
+import type { AllevinAIDockCalendarIntelligencePacket, AllevinAIDockCalendarSessionPlan, AllevinAIDockMaterialGroundingPacket, AllevinAIDockResponseMode, AllevinContextPacket } from "@/lib/allevinLLMTypes";
 
 import { getAllevinDisplayName } from "@/lib/allevinUserProfile";
 
@@ -51,16 +80,7 @@ interface Message {
    content: string;
 }
 
-interface ProjectConversationMemory {
-   projectTitle: string;
-   lastIntent?: ProjectGuidanceResult["intent"];
-   lastUserPrompt: string;
-   lastAssistantResponse: string;
-   lastRecommendation: string;
-   lastMilestoneTitle: string;
-   lastSubject: ProjectGuidanceSubject;
-   updatedAt: number;
-}
+type ProjectConversationMemory = AIDockConversationThread;
 
 interface ProjectMilestoneCompletionResult {
    completed: boolean;
@@ -303,6 +323,7 @@ interface AllevinInternalContextPacket extends AllevinContextPacket {
       hasUpcomingEvents: boolean;
       nextEventSummary: string;
       todaySummary: string;
+      intelligence: AllevinAIDockCalendarIntelligencePacket;
    };
 
    cognition: {
@@ -315,6 +336,8 @@ interface AllevinInternalContextPacket extends AllevinContextPacket {
    };
 
    projectIntelligence: ProjectIntelligencePacket;
+
+   materialGrounding: AllevinAIDockMaterialGroundingPacket;
 
    responseRules: {
       tone: string;
@@ -851,6 +874,8 @@ const COGNITION_ACTIVE_MODE_STORAGE_KEY = "allevin-cognition-active-response-mod
 
 const DIRECT_CALENDAR_APPROVAL_GUARD_KEY = "allevin-direct-calendar-approval-guard";
 
+const PENDING_CALENDAR_ACTION_STORAGE_KEY = "allevin-aidock-pending-calendar-action-mkx";
+
 // ========================================
 // MK IX — Sanitization Parameters
 // ALLEVIN’s Guide and project conversations should feel open, but stored/rendered data still needs guardrails.
@@ -1234,7 +1259,7 @@ function toProjectStarterTitleCase(value: string) {
 
          return `${lower.charAt(0).toUpperCase()}${lower.slice(1)}`;
       })
-      .join(" ");
+      .join("\n");
 }
 
 function buildProjectStarterTitle(prompt: string, projectType: ProjectStarterType) {
@@ -3248,6 +3273,25 @@ function getCalendarSafeProjectProfile() {
       return {
          title: fallbackTitle,
          nextAction: fallbackNextAction,
+         projectId: "",
+         milestoneTitle: "",
+      };
+   }
+
+   const selectedProject = resolveSelectedProjectLibraryItemForAIDock().project;
+   const trackingContext = getActiveProjectTrackingContext();
+
+   if (selectedProject?.title) {
+      const selectedBody = sanitizeLongText(selectedProject?.notes?.[0]?.body || selectedProject?.notes?.[0]?.summary || selectedProject?.latestSummary || "", SANITIZE_LIMITS.projectBody);
+      const parsedProject = parseProjectDocument(selectedBody);
+      const activeMilestone = trackingContext?.tracking?.milestones?.find((milestone: any) => milestone?.status === "active" && milestone?.completed !== true);
+      const nextAction = compactText(activeMilestone?.startingPrompt) || compactText(activeMilestone?.title) || compactText(parsedProject.immediateNextStep) || compactText(parsedProject.buildOrder?.[0]) || fallbackNextAction;
+
+      return {
+         title: sanitizeTitle(selectedProject.title),
+         nextAction: sanitizePlainText(nextAction, 1000),
+         projectId: sanitizePlainText(selectedProject.id || trackingContext?.projectId || "", 220),
+         milestoneTitle: sanitizePlainText(activeMilestone?.title || "", 180),
       };
    }
 
@@ -3257,22 +3301,27 @@ function getCalendarSafeProjectProfile() {
       return {
          title: fallbackTitle,
          nextAction: fallbackNextAction,
+         projectId: "",
+         milestoneTitle: "",
       };
    }
 
    const parsedProject = awareness.projectDocument;
-
    const projectGuidance = buildProjectGuidance({
       prompt: "What should I do next on this project?",
       packet: awareness.projectIntelligence,
       fallbackNextAction: awareness.recommendedNextAction,
    });
-
+   const activeMilestone =
+      awareness.projectIntelligence.projectUnderstanding.milestones.find((milestone) => milestone.id === awareness.projectIntelligence.projectUnderstanding.activeMilestoneId) ||
+      awareness.projectIntelligence.projectUnderstanding.milestones.find((milestone) => milestone.status === "active");
    const nextAction = compactText(projectGuidance.nextAction) || compactText(parsedProject?.immediateNextStep) || compactText(parsedProject?.buildOrder?.[0]) || compactText(awareness.recommendedNextAction) || fallbackNextAction;
 
    return {
       title: sanitizeTitle(awareness.title),
       nextAction: sanitizePlainText(nextAction, 1000) || fallbackNextAction,
+      projectId: "",
+      milestoneTitle: sanitizePlainText(activeMilestone?.title || "", 180),
    };
 }
 
@@ -3330,7 +3379,7 @@ type InternalIntegrationIntent = {
    suggestedAction: string;
 };
 
-type PendingDirectCalendarEvent = {
+type PendingDirectCalendarEvent = AIDockCalendarEventInput & {
    id: string;
    title: string;
    startTime: number;
@@ -3344,7 +3393,100 @@ type PendingDirectCalendarEvent = {
    sourceContent?: string;
    workingSummary?: string;
    recommendedNextAction?: string;
+   projectStage?: string;
+   workflowId?: string;
+   originProjectsItemId?: string;
+   sessionPlan: AllevinAIDockCalendarSessionPlan;
 };
+
+type PendingCalendarAction =
+   | {
+        id: string;
+        action: "create";
+        event: PendingDirectCalendarEvent;
+        previousEvent?: undefined;
+     }
+   | {
+        id: string;
+        action: "reschedule";
+        event: PendingDirectCalendarEvent;
+        previousEvent: PendingDirectCalendarEvent;
+     }
+   | {
+        id: string;
+        action: "delete";
+        event: PendingDirectCalendarEvent;
+        previousEvent: PendingDirectCalendarEvent;
+     };
+
+function isStoredPendingCalendarEvent(value: unknown): value is PendingDirectCalendarEvent {
+   const event = value as Partial<PendingDirectCalendarEvent> | null;
+
+   return Boolean(
+      event &&
+      typeof event.id === "string" &&
+      typeof event.title === "string" &&
+      isValidTimestamp(event.startTime) &&
+      isValidTimestamp(event.endTime) &&
+      Number(event.endTime) > Number(event.startTime) &&
+      event.sessionPlan &&
+      typeof event.sessionPlan.sessionGoal === "string" &&
+      typeof event.sessionPlan.expectedResult === "string",
+   );
+}
+
+function readPendingCalendarActionFromSession(): PendingCalendarAction | null {
+   if (typeof window === "undefined") {
+      return null;
+   }
+
+   try {
+      const stored = sessionStorage.getItem(PENDING_CALENDAR_ACTION_STORAGE_KEY);
+      const parsed = stored ? JSON.parse(stored) : null;
+
+      if (!parsed || typeof parsed.id !== "string" || !["create", "reschedule", "delete"].includes(parsed.action) || !isStoredPendingCalendarEvent(parsed.event)) {
+         return null;
+      }
+
+      if (parsed.action === "create") {
+         return {
+            id: parsed.id,
+            action: "create",
+            event: parsed.event,
+         };
+      }
+
+      if (!isStoredPendingCalendarEvent(parsed.previousEvent)) {
+         return null;
+      }
+
+      return {
+         id: parsed.id,
+         action: parsed.action,
+         event: parsed.event,
+         previousEvent: parsed.previousEvent,
+      } as PendingCalendarAction;
+   } catch {
+      return null;
+   }
+}
+
+function persistPendingCalendarActionToSession(action: PendingCalendarAction | null) {
+   if (typeof window === "undefined") {
+      return;
+   }
+
+   try {
+      if (!action) {
+         sessionStorage.removeItem(PENDING_CALENDAR_ACTION_STORAGE_KEY);
+         return;
+      }
+
+      sessionStorage.setItem(PENDING_CALENDAR_ACTION_STORAGE_KEY, JSON.stringify(action));
+   } catch {
+      // Pending approval must remain safe even if session storage is unavailable.
+   }
+}
 
 function looksLikeDirectCalendarScheduleRequest(prompt: string) {
    const lower = normalizeUserIntentPrompt(prompt);
@@ -3583,33 +3725,56 @@ function getDirectScheduleTitleFromPrompt(cleanPrompt: string, dateLabel?: strin
    return sanitizeCalendarTitle(candidate);
 }
 
-function parseDirectCalendarScheduleRequest(prompt: string): PendingDirectCalendarEvent | null {
+function getAIDockCalendarSessionEventTitle(prompt: string, candidate: string, plan: AllevinAIDockCalendarSessionPlan) {
+   const quotedTitle = sanitizePlainText(prompt, SANITIZE_LIMITS.aidockMessage).match(/[“"]([^”"]+)[”"]/)?.[1];
+   const cleanCandidate = sanitizeCalendarTitle(quotedTitle || candidate);
+   const genericCandidate =
+      !cleanCandidate || (!quotedTitle && (/\b(?:session|work block|next step|current milestone|project work)\b/i.test(cleanCandidate) || /^(?:(?:a|an|the)\s+)?(?:\d+\s*[- ]?\s*minute\s+)?(?:project\s+|work\s+)?session\b/i.test(cleanCandidate)));
+
+   if (!genericCandidate) {
+      return cleanCandidate;
+   }
+
+   const projectTitle = sanitizeCalendarTitle(plan.projectTitle);
+   const goal = sanitizeCalendarTitle(plan.sessionGoal);
+
+   if (projectTitle && goal) {
+      return sanitizeCalendarTitle(`${projectTitle} — ${goal}`);
+   }
+
+   return projectTitle || goal || "Project work session";
+}
+
+function parseDirectCalendarScheduleRequest(prompt: string, calendarIntelligence?: AllevinAIDockCalendarIntelligencePacket): PendingDirectCalendarEvent | null {
    const clean = sanitizePlainText(prompt, SANITIZE_LIMITS.aidockMessage);
-
    const scheduleDate = getDirectScheduleDateFromPrompt(clean);
-
    const date = scheduleDate?.date || null;
-
-   const title = getDirectScheduleTitleFromPrompt(clean, scheduleDate?.label);
+   const parsedTitle = getDirectScheduleTitleFromPrompt(clean, scheduleDate?.label);
 
    const timeRangeMatch = clean.match(/\bfrom\s+([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)\s+(?:to|-|until)\s+([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)/i);
-
    const singleTimeMatch = clean.match(/\bat\s+([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)/i);
 
-   if (!title || !date) {
+   if (!date) {
       return null;
    }
 
    const startClock = parseClockTimeForDirectSchedule(timeRangeMatch?.[1] || singleTimeMatch?.[1]);
-
    const endClock = parseClockTimeForDirectSchedule(timeRangeMatch?.[2]);
 
    if (!startClock) {
       return null;
    }
 
-   const start = new Date(date);
+   const fallbackProfile = getCalendarSafeProjectProfile();
+   const sessionPlan = buildAIDockCalendarSessionPlan({
+      prompt: clean,
+      projectTitle: calendarIntelligence?.projectTitle || fallbackProfile.title,
+      activeMilestoneTitle: calendarIntelligence?.activeMilestoneTitle,
+      recommendation: calendarIntelligence?.recommendation || fallbackProfile.nextAction,
+      completionCriteria: calendarIntelligence?.sessionPlan?.completionCriteria,
+   });
 
+   const start = new Date(date);
    start.setHours(startClock.hours, startClock.minutes, 0, 0);
 
    const end = new Date(date);
@@ -3617,7 +3782,7 @@ function parseDirectCalendarScheduleRequest(prompt: string): PendingDirectCalend
    if (endClock) {
       end.setHours(endClock.hours, endClock.minutes, 0, 0);
    } else {
-      end.setTime(start.getTime() + 45 * 60000);
+      end.setTime(start.getTime() + sessionPlan.durationMinutes * 60000);
    }
 
    if (end.getTime() <= start.getTime()) {
@@ -3630,28 +3795,37 @@ function parseDirectCalendarScheduleRequest(prompt: string): PendingDirectCalend
       return null;
    }
 
-   const project = getCalendarSafeProjectProfile();
+   const resolvedPlan: AllevinAIDockCalendarSessionPlan = {
+      ...sessionPlan,
+      durationMinutes,
+   };
+   const title = getAIDockCalendarSessionEventTitle(clean, parsedTitle, resolvedPlan);
+   const projectId = sanitizePlainText(calendarIntelligence?.projectId || "", 220);
+   const projectKey = getNormalizedTitleKey(resolvedPlan.projectTitle || title) || crypto.randomUUID();
 
    return {
       id: crypto.randomUUID(),
-      title: sanitizeCalendarTitle(title),
+      title,
       startTime: start.getTime(),
       endTime: end.getTime(),
-      description: sanitizeCalendarDescription(`Created from AIDock.${project.title !== "the active project" ? ` Linked project: ${project.title}.` : ""}`),
+      description: sanitizeCalendarDescription(buildAIDockCalendarSessionDescription(resolvedPlan)),
       allDay: false,
       repeat: "none",
       createdAt: Date.now(),
       source: "aidock-direct-schedule",
-      sourceTitle: project.title !== "the active project" ? sanitizeTitle(project.title) : undefined,
-      sourceContent: project.title !== "the active project" ? sanitizeLongText(project.title, SANITIZE_LIMITS.projectBody) : undefined,
-      workingSummary: project.title !== "the active project" ? sanitizeCanvasSummary(project.title) : undefined,
-      recommendedNextAction: sanitizePlainText(project.nextAction, 1000),
+      sourceTitle: resolvedPlan.projectTitle ? sanitizeTitle(resolvedPlan.projectTitle) : undefined,
+      sourceContent: sanitizeLongText([resolvedPlan.projectTitle ? `Project: ${resolvedPlan.projectTitle}` : "", resolvedPlan.milestoneTitle ? `Milestone: ${resolvedPlan.milestoneTitle}` : ""].filter(Boolean).join("\n"), SANITIZE_LIMITS.projectBody),
+      workingSummary: sanitizeCanvasSummary(resolvedPlan.sessionGoal),
+      recommendedNextAction: sanitizePlainText(resolvedPlan.expectedResult, 1000),
+      projectStage: sanitizePlainText(resolvedPlan.milestoneTitle, 180),
+      workflowId: `aidock-calendar-${projectKey}-${start.getTime()}`,
+      originProjectsItemId: projectId || undefined,
+      sessionPlan: resolvedPlan,
    };
 }
 
 function getDirectCalendarEventPreview(event: PendingDirectCalendarEvent) {
    const startLabel = getCalendarTimeLabel(event.startTime);
-
    const endLabel = getCalendarTimeLabel(event.endTime);
 
    return `${sanitizeCalendarTitle(event.title)} — ${startLabel} to ${endLabel}`;
@@ -3660,7 +3834,11 @@ function getDirectCalendarEventPreview(event: PendingDirectCalendarEvent) {
 function buildDirectCalendarScheduleApprovalResponse(event: PendingDirectCalendarEvent) {
    const durationWarning = getLongCalendarBlockWarning(event);
 
-   return `I can add this to your calendar:\n\n${getDirectCalendarEventPreview(event)}${durationWarning}\n\nApprove this move? Reply yes or no.`;
+   return `${buildAIDockCalendarPreview({
+      action: "create",
+      event,
+      plan: event.sessionPlan,
+   })}${durationWarning}`;
 }
 
 function buildCalmApprovalReminder(actionLabel: string) {
@@ -3764,6 +3942,9 @@ function saveDirectCalendarEvent(event: PendingDirectCalendarEvent) {
          sourceContent: sanitizeLongText(safeEvent.sourceContent || "", SANITIZE_LIMITS.projectBody),
          workingSummary: sanitizeCanvasSummary(safeEvent.workingSummary || ""),
          recommendedNextAction: sanitizePlainText(safeEvent.recommendedNextAction || "", 1000),
+         projectStage: sanitizePlainText(safeEvent.projectStage || "", 180),
+         workflowId: sanitizePlainText(safeEvent.workflowId || "", 220) || undefined,
+         originProjectsItemId: sanitizePlainText(safeEvent.originProjectsItemId || "", 220) || undefined,
          createdAt: safeEvent.createdAt,
       },
    ];
@@ -3824,6 +4005,271 @@ function saveDirectCalendarEvent(event: PendingDirectCalendarEvent) {
    }, 0);
 
    return true;
+}
+
+function toPendingDirectCalendarEvent(event: AIDockCalendarEventInput, calendarIntelligence?: AllevinAIDockCalendarIntelligencePacket): PendingDirectCalendarEvent | null {
+   const title = sanitizeCalendarTitle(event.title);
+   const startTime = Number(event.startTime);
+   const endTime = Number(event.endTime);
+
+   if (!title || !isValidTimestamp(startTime) || !isValidTimestamp(endTime) || endTime <= startTime) {
+      return null;
+   }
+
+   const sessionPlan = buildAIDockCalendarSessionPlan({
+      projectTitle: sanitizeTitle(event.sourceTitle || calendarIntelligence?.projectTitle || ""),
+      activeMilestoneTitle: sanitizePlainText(event.projectStage || calendarIntelligence?.activeMilestoneTitle || "", 180),
+      recommendation: sanitizePlainText(event.workingSummary || event.recommendedNextAction || calendarIntelligence?.recommendation || title, 1000),
+      completionCriteria: calendarIntelligence?.sessionPlan?.completionCriteria,
+   });
+   const durationMinutes = getDurationMinutes(startTime, endTime);
+   const resolvedPlan: AllevinAIDockCalendarSessionPlan = {
+      ...sessionPlan,
+      durationMinutes,
+   };
+
+   return {
+      id: sanitizePlainText(event.id || crypto.randomUUID(), 220),
+      title,
+      startTime,
+      endTime,
+      description: sanitizeCalendarDescription(event.description || buildAIDockCalendarSessionDescription(resolvedPlan)),
+      allDay: event.allDay === true,
+      repeat: event.repeat === "daily" || event.repeat === "weekly" || event.repeat === "monthly" || event.repeat === "yearly" ? event.repeat : "none",
+      createdAt: Number(event.createdAt || Date.now()),
+      source: "aidock-direct-schedule",
+      sourceTitle: sanitizeTitle(event.sourceTitle || resolvedPlan.projectTitle || ""),
+      sourceContent: sanitizeLongText(event.sourceContent || "", SANITIZE_LIMITS.projectBody),
+      workingSummary: sanitizeCanvasSummary(event.workingSummary || resolvedPlan.sessionGoal),
+      recommendedNextAction: sanitizePlainText(event.recommendedNextAction || resolvedPlan.expectedResult, 1000),
+      projectStage: sanitizePlainText(event.projectStage || resolvedPlan.milestoneTitle, 180),
+      workflowId: sanitizePlainText(event.workflowId || "", 220) || undefined,
+      originProjectsItemId: sanitizePlainText(event.originProjectsItemId || "", 220) || undefined,
+      sessionPlan: resolvedPlan,
+   };
+}
+
+function dispatchAIDockCalendarMutationNotice(type: "calendar-event-created" | "calendar-event-updated" | "calendar-event-deleted", event: PendingDirectCalendarEvent) {
+   if (typeof window === "undefined") return;
+
+   window.setTimeout(() => {
+      window.dispatchEvent(
+         new CustomEvent("allevin-calendar-events-updated", {
+            detail: {
+               source: "aidock-calendar-intelligence",
+               type,
+               event,
+            },
+         }),
+      );
+
+      window.dispatchEvent(
+         new CustomEvent("allevin-chat-notice", {
+            detail: {
+               type,
+               title: event.title,
+               message: type === "calendar-event-created" ? `Calendar event created for ${event.title}.` : type === "calendar-event-updated" ? `Calendar event updated for ${event.title}.` : `Calendar event removed for ${event.title}.`,
+            },
+         }),
+      );
+
+      window.dispatchEvent(new Event("storage"));
+   }, 0);
+}
+
+function updateDirectCalendarEvent(previousEvent: PendingDirectCalendarEvent, nextEvent: PendingDirectCalendarEvent) {
+   if (typeof window === "undefined") {
+      return false;
+   }
+
+   const currentEvents = readCalendarEventsFromStorage();
+   const targetIndex = currentEvents.findIndex((event) => {
+      const sameId = event?.id && previousEvent.id && event.id === previousEvent.id;
+      const sameWorkflow = event?.workflowId && previousEvent.workflowId && event.workflowId === previousEvent.workflowId;
+      return Boolean(sameId || sameWorkflow);
+   });
+
+   if (targetIndex < 0) {
+      return false;
+   }
+
+   const safeEvent = {
+      ...currentEvents[targetIndex],
+      ...nextEvent,
+      id: currentEvents[targetIndex].id || nextEvent.id,
+      title: sanitizeCalendarTitle(nextEvent.title),
+      description: sanitizeCalendarDescription(nextEvent.description),
+      sourceTitle: sanitizeTitle(nextEvent.sourceTitle || ""),
+      sourceContent: sanitizeLongText(nextEvent.sourceContent || "", SANITIZE_LIMITS.projectBody),
+      workingSummary: sanitizeCanvasSummary(nextEvent.workingSummary || ""),
+      recommendedNextAction: sanitizePlainText(nextEvent.recommendedNextAction || "", 1000),
+      projectStage: sanitizePlainText(nextEvent.projectStage || "", 180),
+      workflowId: sanitizePlainText(nextEvent.workflowId || currentEvents[targetIndex].workflowId || "", 220) || undefined,
+      originProjectsItemId: sanitizePlainText(nextEvent.originProjectsItemId || currentEvents[targetIndex].originProjectsItemId || "", 220) || undefined,
+   };
+
+   if (!isValidTimestamp(safeEvent.startTime) || !isValidTimestamp(safeEvent.endTime) || Number(safeEvent.endTime) <= Number(safeEvent.startTime)) {
+      return false;
+   }
+
+   const nextEvents = currentEvents.map((event, index) => (index === targetIndex ? safeEvent : event)).sort((a, b) => Number(a.startTime || 0) - Number(b.startTime || 0));
+
+   localStorage.setItem(CALENDAR_EVENTS_STORAGE_KEY, JSON.stringify(nextEvents));
+   dispatchAIDockCalendarMutationNotice("calendar-event-updated", nextEvent);
+   return true;
+}
+
+function deleteDirectCalendarEvent(event: PendingDirectCalendarEvent) {
+   if (typeof window === "undefined") {
+      return false;
+   }
+
+   const currentEvents = readCalendarEventsFromStorage();
+   const nextEvents = currentEvents.filter((candidate) => {
+      const sameId = candidate?.id && event.id && candidate.id === event.id;
+      const sameWorkflow = candidate?.workflowId && event.workflowId && candidate.workflowId === event.workflowId;
+      return !(sameId || sameWorkflow);
+   });
+
+   if (nextEvents.length === currentEvents.length) {
+      return false;
+   }
+
+   localStorage.setItem(CALENDAR_EVENTS_STORAGE_KEY, JSON.stringify(nextEvents));
+
+   // Use event-scoped deletion keys. A project ID or project title may be
+   // shared by several sessions, so tombstoning those broader identifiers would
+   // hide unrelated Calendar blocks for the same project.
+   const deletedIds = [...readStringArrayStorage(DELETED_CALENDAR_EVENTS_STORAGE_KEY), event.id, event.workflowId || ""].filter(Boolean);
+   const deletedKeys = [...readStringArrayStorage(DELETED_CALENDAR_EVENT_KEYS_STORAGE_KEY), event.id ? `event:${event.id}` : "", event.workflowId ? `workflow:${event.workflowId}` : ""].filter(Boolean);
+
+   saveStringArrayStorage(DELETED_CALENDAR_EVENTS_STORAGE_KEY, deletedIds);
+   saveStringArrayStorage(DELETED_CALENDAR_EVENT_KEYS_STORAGE_KEY, deletedKeys);
+   dispatchAIDockCalendarMutationNotice("calendar-event-deleted", event);
+   return true;
+}
+
+function looksLikeCalendarRescheduleRequest(prompt: string) {
+   const lower = normalizeUserIntentPrompt(prompt);
+   return /\b(?:move|reschedule|shift|change)\b/.test(lower) && /\b(?:session|event|calendar|work block|it|that)\b/.test(lower);
+}
+
+function looksLikeCalendarDeleteRequest(prompt: string) {
+   const lower = normalizeUserIntentPrompt(prompt);
+   return /\b(?:delete|remove|cancel)\b/.test(lower) && /\b(?:session|event|calendar|work block|calendar block)\b/.test(lower) && !/\b(?:change|preview|proposal)\b/.test(lower);
+}
+
+function looksLikeCancelPendingCalendarChange(prompt: string) {
+   const lower = normalizeProjectStarterPrompt(prompt);
+   return (
+      lower === "cancel that change" || lower === "cancel this change" || lower === "never mind" || lower === "nevermind" || lower === "do not change it" || lower === "don't change it" || lower === "keep the original" || lower === "keep it where it is"
+   );
+}
+
+function getCalendarMutationClock(prompt: string, fallbackTimestamp: number) {
+   const clean = sanitizePlainText(prompt, SANITIZE_LIMITS.aidockMessage);
+   const atMatch = clean.match(/\bat\s+([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)/i);
+   const fromMatch = clean.match(/\bfrom\s+([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)/i);
+   const parsed = parseClockTimeForDirectSchedule(atMatch?.[1] || fromMatch?.[1]);
+
+   if (parsed) {
+      return parsed;
+   }
+
+   const fallback = new Date(fallbackTimestamp);
+   return {
+      hours: fallback.getHours(),
+      minutes: fallback.getMinutes(),
+   };
+}
+
+function reviseCalendarEventTime(event: PendingDirectCalendarEvent, prompt: string, calendarIntelligence?: AllevinAIDockCalendarIntelligencePacket) {
+   const dateResult = getDirectScheduleDateFromPrompt(prompt);
+   const baseDate = dateResult?.date || new Date(event.startTime);
+   const clock = getCalendarMutationClock(prompt, event.startTime);
+   const explicitMinutes = getRequestedCalendarMinutes(prompt);
+   const currentDuration = getDurationMinutes(event.startTime, event.endTime);
+   const durationMinutes = explicitMinutes || currentDuration || event.sessionPlan.durationMinutes || 45;
+
+   const start = new Date(baseDate);
+   start.setHours(clock.hours, clock.minutes, 0, 0);
+   const end = new Date(start.getTime() + durationMinutes * 60000);
+
+   const sessionPlan = buildAIDockCalendarSessionPlan({
+      prompt,
+      projectTitle: event.sourceTitle || calendarIntelligence?.projectTitle,
+      activeMilestoneTitle: event.projectStage || calendarIntelligence?.activeMilestoneTitle,
+      recommendation: event.workingSummary || calendarIntelligence?.recommendation,
+      completionCriteria: calendarIntelligence?.sessionPlan?.completionCriteria,
+   });
+   const resolvedPlan: AllevinAIDockCalendarSessionPlan = {
+      ...sessionPlan,
+      durationMinutes,
+   };
+
+   return {
+      ...event,
+      startTime: start.getTime(),
+      endTime: end.getTime(),
+      description: sanitizeCalendarDescription(buildAIDockCalendarSessionDescription(resolvedPlan)),
+      workingSummary: sanitizeCanvasSummary(resolvedPlan.sessionGoal),
+      recommendedNextAction: sanitizePlainText(resolvedPlan.expectedResult, 1000),
+      sessionPlan: resolvedPlan,
+   };
+}
+
+function prepareExistingCalendarAction(action: "reschedule" | "delete", prompt: string, calendarIntelligence: AllevinAIDockCalendarIntelligencePacket): PendingCalendarAction | null {
+   const editableEvents = readCalendarEventsFromStorage().filter((event) => event?.source !== "google-calendar");
+   const found = findAIDockCalendarSession(editableEvents, {
+      projectTitle: calendarIntelligence.projectTitle,
+      projectId: calendarIntelligence.projectId,
+      reference: prompt,
+   });
+   const previousEvent = found ? toPendingDirectCalendarEvent(found, calendarIntelligence) : null;
+
+   if (!previousEvent) {
+      return null;
+   }
+
+   if (action === "delete") {
+      return {
+         id: crypto.randomUUID(),
+         action: "delete",
+         event: previousEvent,
+         previousEvent,
+      };
+   }
+
+   const event = reviseCalendarEventTime(previousEvent, prompt, calendarIntelligence);
+
+   return {
+      id: crypto.randomUUID(),
+      action: "reschedule",
+      event,
+      previousEvent,
+   };
+}
+
+function revisePendingCalendarAction(pending: PendingCalendarAction, prompt: string, calendarIntelligence: AllevinAIDockCalendarIntelligencePacket): PendingCalendarAction | null {
+   if (pending.action === "delete") {
+      return pending;
+   }
+
+   const revisedEvent = reviseCalendarEventTime(pending.event, prompt, calendarIntelligence);
+
+   return {
+      ...pending,
+      event: revisedEvent,
+   };
+}
+
+function buildPendingCalendarActionPreview(action: PendingCalendarAction) {
+   return buildAIDockCalendarPreview({
+      action: action.action,
+      event: action.event,
+      previousEvent: action.previousEvent,
+      plan: action.event.sessionPlan,
+   });
 }
 
 function readCurrentCanvasSnapshotForIntegration() {
@@ -4223,17 +4669,119 @@ function readProjectMaterialsFromStorage() {
    }
 }
 
+interface AIDockActiveProjectSelectionRecord {
+   projectId: string;
+   title: string;
+   updatedAt: number;
+}
+
+function readProjectLibraryItemsForAIDockSelection() {
+   if (typeof window === "undefined") {
+      return [] as any[];
+   }
+
+   try {
+      const stored = localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
+      const parsed = stored ? JSON.parse(stored) : [];
+      return (Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : []).filter((project: any) => project && typeof project.title === "string");
+   } catch {
+      return [] as any[];
+   }
+}
+
+function readActiveProjectSelectionRecordForAIDock(): AIDockActiveProjectSelectionRecord | null {
+   if (typeof window === "undefined") {
+      return null;
+   }
+
+   const stored = localStorage.getItem(ACTIVE_PROJECT_SELECTION_STORAGE_KEY);
+
+   if (!stored) {
+      return null;
+   }
+
+   try {
+      const parsed = JSON.parse(stored);
+      const projectId = compactText(typeof parsed === "string" ? parsed : parsed?.projectId || parsed?.id);
+      const title = compactText(typeof parsed === "string" ? parsed : parsed?.title || parsed?.projectTitle);
+      const updatedAt = typeof parsed?.updatedAt === "number" && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : 0;
+
+      return projectId || title
+         ? {
+              projectId,
+              title,
+              updatedAt,
+           }
+         : null;
+   } catch {
+      const raw = compactText(stored);
+      return raw
+         ? {
+              projectId: raw,
+              title: raw,
+              updatedAt: 0,
+           }
+         : null;
+   }
+}
+
+function resolveSelectedProjectLibraryItemForAIDock() {
+   const selection = readActiveProjectSelectionRecordForAIDock();
+   const projects = readProjectLibraryItemsForAIDockSelection();
+
+   if (!selection || !projects.length) {
+      return {
+         project: null as any,
+         selectionChanged: false,
+      };
+   }
+
+   const selectedTitleKey = getNormalizedTitleKey(selection.title);
+   const selected = projects.find((project: any) => selection.projectId && compactText(project?.id) === selection.projectId) || projects.find((project: any) => selectedTitleKey && getNormalizedTitleKey(project?.title) === selectedTitleKey) || null;
+
+   if (!selected) {
+      return {
+         project: null as any,
+         selectionChanged: false,
+      };
+   }
+
+   const canonicalProjectId = compactText(selected.id || selection.projectId);
+   const canonicalTitle = compactText(selected.title || selection.title);
+   const selectionChanged = canonicalProjectId !== selection.projectId || canonicalTitle !== selection.title || !selection.updatedAt;
+
+   if (selectionChanged && canonicalProjectId && canonicalTitle) {
+      localStorage.setItem(
+         ACTIVE_PROJECT_SELECTION_STORAGE_KEY,
+         JSON.stringify({
+            projectId: canonicalProjectId,
+            title: canonicalTitle,
+            updatedAt: Date.now(),
+         }),
+      );
+   }
+
+   return {
+      project: selected,
+      selectionChanged,
+   };
+}
+
 function getActiveProjectLibraryMatchForAIDock() {
    if (typeof window === "undefined") {
       return null as any;
    }
 
    try {
-      const stored = localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
+      // The Projects selection is authoritative. Canvas recency and latest-item
+      // fallbacks are only used when no explicit library selection exists.
+      const selectedProject = resolveSelectedProjectLibraryItemForAIDock().project;
 
-      const parsed = stored ? JSON.parse(stored) : [];
+      if (selectedProject) {
+         return selectedProject;
+      }
 
-      const projects = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : [];
+      const projects = readProjectLibraryItemsForAIDockSelection();
 
       if (!projects.length) {
          return null;
@@ -4254,14 +4802,13 @@ function getActiveProjectLibraryMatchForAIDock() {
       }
 
       const canvasKey = getNormalizedTitleKey(canvasTitle);
-
       const titleMatch = canvasKey ? projects.find((project: any) => getNormalizedTitleKey(project?.title) === canvasKey) : null;
 
       if (titleMatch) {
          return titleMatch;
       }
 
-      return projects.filter((project: any) => project && typeof project.title === "string").sort((a: any, b: any) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0))[0] || null;
+      return projects.sort((a: any, b: any) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0))[0] || null;
    } catch {
       return null;
    }
@@ -4996,6 +5543,26 @@ function buildUnifiedProjectMaterialsAwareness() {
    };
 }
 
+function buildCurrentAIDockMaterialGrounding(prompt: string, packet: AllevinInternalContextPacket, recommendation?: string) {
+   const materials = getActiveProjectMaterialsForAIDock();
+   const selectedMaterials = getSelectedProjectMaterialsForAIDock(materials);
+   const understanding = packet.projectIntelligence.projectUnderstanding;
+   const activeMilestone = understanding.milestones.find((milestone) => milestone.id === understanding.activeMilestoneId) || understanding.milestones.find((milestone) => milestone.status === "active");
+
+   return buildAIDockMaterialGrounding({
+      prompt,
+      projectTitle: packet.currentProject.title,
+      currentTopic: packet.conversation?.currentTopic || understanding.conversation.currentTopic,
+      activeMilestoneTitle: activeMilestone?.title,
+      activeMilestoneGoal: activeMilestone?.goal || activeMilestone?.purpose,
+      recommendation: recommendation || packet.currentProject.recommendedNextAction || understanding.recommendedMove,
+      materials,
+      selectedMaterialIds: selectedMaterials.map((material) => material.id),
+      selectedMaterialTitles: selectedMaterials.map((material) => material.title),
+      limit: 3,
+   });
+}
+
 async function buildProjectMaterialsHelperResponse(prompt: string, packet: AllevinInternalContextPacket) {
    const localResponse = buildProjectMaterialsReadbackResponse(prompt);
 
@@ -5023,14 +5590,43 @@ async function buildProjectMaterialsHelperResponse(prompt: string, packet: Allev
       fallbackNextAction: packet.currentProject.recommendedNextAction,
    });
 
+   const materialGrounding = buildCurrentAIDockMaterialGrounding(prompt, packet, projectGuidance.nextAction);
+   const responseJudgment = buildAIDockResponseJudgment({
+      prompt,
+      guidance: projectGuidance,
+      packet: packet.projectIntelligence,
+      materialGrounding,
+      calendarIntelligence: packet.calendar.intelligence,
+      calendarContext: [packet.calendar.todaySummary, packet.calendar.nextEventSummary].filter(Boolean).join(" "),
+   });
+   const responseMode = getActiveAIDockResponseModeForIntegration();
+   const responseModeProfile = getAIDockResponseModeProfile(responseMode);
+   const modeGroundedResponse = renderAIDockResponseJudgment(responseJudgment, responseMode);
+   const activeMilestone =
+      packet.projectIntelligence.projectUnderstanding.milestones.find((milestone) => milestone.id === packet.projectIntelligence.projectUnderstanding.activeMilestoneId) ||
+      packet.projectIntelligence.projectUnderstanding.milestones.find((milestone) => milestone.status === "active");
+   const materialGroundedResponse = buildAIDockMaterialQuestionGroundedResponse({
+      prompt,
+      grounding: materialGrounding,
+      activeMilestoneTitle: activeMilestone?.title,
+      recommendation: projectGuidance.nextAction || packet.currentProject.recommendedNextAction,
+      mode: responseMode,
+   });
+
    try {
-      const contextMaterials = selectedMaterials.length ? selectedMaterials : materials.slice(0, 6);
+      const groundedMaterialIds = new Set(materialGrounding.selectedMaterials.map((material) => material.id));
+      const contextMaterials = materials.filter((material) => groundedMaterialIds.has(material.id));
 
       const response = await requestAllevinLLM({
          mode: "project-guidance",
          source: "materials",
          title: sanitizeTitle(awareness.title || "Active project"),
          focus: prompt,
+         groundedResponse: materialGroundedResponse || modeGroundedResponse,
+         responseMode,
+         responseStyle: responseModeProfile.responseStyle,
+         responseJudgment,
+         materialGrounding,
          usefulContext: [
             `Active project: ${sanitizeTitle(awareness.title || "Active project")}`,
             packet.currentProject.currentState ? `Current state: ${packet.currentProject.currentState}` : "",
@@ -5039,7 +5635,9 @@ async function buildProjectMaterialsHelperResponse(prompt: string, packet: Allev
             projectGuidance.assessment ? `Project lead assessment: ${projectGuidance.assessment}` : "",
             projectGuidance.nextAction ? `Project lead recommendation: ${projectGuidance.nextAction}` : "",
             projectGuidance.reason ? `Recommendation reason: ${projectGuidance.reason}` : "",
-            selectedMaterials.length ? `Selected references: ${selectedMaterials.map((material) => getMaterialPreviewLine(material, 260)).join("; ")}` : "",
+            materialGrounding.usedTitles.length ? `Relevant references: ${materialGrounding.usedTitles.join("; ")}` : "",
+            materialGrounding.facts.length ? `Grounded material facts: ${materialGrounding.facts.map((fact) => `${fact.sourceTitle}: ${fact.statement}`).join(" | ")}` : "",
+            materialGrounding.contradictions.length ? `Material conflicts: ${materialGrounding.contradictions.map((conflict) => `${conflict.firstSourceTitle} vs ${conflict.secondSourceTitle}: ${conflict.guidance}`).join(" | ")}` : "",
             `Project materials:\n${contextMaterials
                .map(
                   (material, index) =>
@@ -5055,39 +5653,42 @@ async function buildProjectMaterialsHelperResponse(prompt: string, packet: Allev
          rawContent: contextMaterials
             .map(
                (material) =>
-                  `${material.title}\n${material.type}\n${material.source}\n${material.interpretationSummary || ""}\n${material.interpretationUsefulContext || ""}\n${material.interpretationNextStep || ""}\n${material.notes || material.summary}`,
+                  `${material.title}\n${material.type}\n${material.source}\n${material.interpretationSummary || ""}\n${material.interpretationUsefulContext || ""}\n${material.interpretationNextStep || ""}\n${material.documentText || material.notes || material.summary}`,
             )
             .join("\n\n---\n\n"),
-         contextPacket: packet,
+         contextPacket: {
+            ...packet,
+            materialGrounding,
+            responseJudgment,
+         },
          projectStage: "material-aware-guidance",
          currentLocation: "AIDock",
          priority: "medium",
-         maxWords: 150,
+         maxWords: responseModeProfile.maxWords,
          projectMaterials: {
             count: materials.length,
-            selectedTitles: materialAwareness.packet.selectedTitles,
+            selectedTitles: materialGrounding.usedTitles,
             titles: materialAwareness.packet.titles,
             summaries: materialAwareness.packet.summaries,
             usefulSignals: materialAwareness.packet.usefulSignals,
          },
-         userInstruction:
-            "Answer like ALLEVIN: calm, natural, clear, and useful. Treat the supplied Project Guidance Engine assessment and recommendation as the decision layer. Use the selected material to explain or support that reasoning, but do not replace the recommendation with generic advice. Mention at least one specific material title or one specific detail from the materials. Do not sound like an analytics report. Do not invent a project domain, character, object, feature, or task that is not in the supplied context. Avoid motivational filler, repeated conclusions, and visible reasoning labels. Keep the answer conversational and short.",
+         userInstruction: `Answer like ALLEVIN MK X in ${responseModeProfile.label} mode. ${responseModeProfile.deliveryRule} Answer the user's exact material question before restating any project guidance. For comparisons, clearly explain agreement, differences, and what the current milestone should use. Treat materialGrounding.selectedMaterials and the material-specific grounded answer as authoritative for source claims. Use only those selected materials as evidence. Distinguish direct material facts from ALLEVIN interpretation. If the grounding packet contains a contradiction, name the disagreement and say what needs confirmation instead of choosing a side. Do not add a visible Used line; AIDock appends it after the answer. Keep the project recommendation only as the practical implication of the evidence; do not let it replace the material answer. Do not sound like an analytics report. Do not invent a project domain, character, object, feature, task, material, or calendar fact that is not in the supplied context. Avoid motivational filler, repeated conclusions, and visible reasoning labels.`,
       });
 
       const candidate = cleanConversationalMaterialResponse(response.summary || response.focus || response.nextStep || "");
 
       if (!candidate || isTooGenericMaterialHelperResponse(candidate, contextMaterials)) {
-         return localResponse;
+         return materialGroundedResponse || modeGroundedResponse || localResponse;
       }
 
-      return candidate;
+      return appendAIDockMaterialGroundingLine(candidate, materialGrounding, responseMode);
    } catch {
-      return localResponse;
+      return materialGroundedResponse || modeGroundedResponse || localResponse;
    }
 }
 
 function normalizeIntegrationPrompt(prompt: string) {
-   return normalizeUserIntentPrompt(prompt);
+   return normalizeProjectStarterPrompt(prompt);
 }
 
 function looksLikeCanvasToProjectsIntegration(prompt: string) {
@@ -5180,6 +5781,10 @@ function getActiveCognitionResponseModeForIntegration(): AllevinCognitionModeFor
    } catch {
       return "balanced";
    }
+}
+
+function getActiveAIDockResponseModeForIntegration(): AllevinAIDockResponseMode {
+   return normalizeAIDockResponseMode(getActiveCognitionResponseModeForIntegration());
 }
 
 function getCognitionModeProfileForIntegration(mode: AllevinCognitionModeForIntegration) {
@@ -7343,8 +7948,6 @@ export default function ALLEVIN() {
 
    const { currentEnvironment, adaptationStage, adaptationIntensity, refreshEnvironment } = useEnvironment();
 
-   const [input, setInput] = useState("");
-
    const [llmBusy, setLlmBusy] = useState(false);
 
    const [expanded, setExpanded] = useState(false);
@@ -7358,8 +7961,6 @@ export default function ALLEVIN() {
    const [pendingWorkflowActions, setPendingWorkflowActions] = useState<PendingWorkflowAction[]>([]);
 
    const [workflowActionsOpen, setWorkflowActionsOpen] = useState(false);
-
-   const [quickAccessOpen, setQuickAccessOpen] = useState(false);
 
    const [responseStyleOpen, setResponseStyleOpen] = useState(false);
 
@@ -7391,7 +7992,15 @@ export default function ALLEVIN() {
 
    const [pendingInternalIntegration, setPendingInternalIntegration] = useState<InternalIntegrationIntent | null>(null);
 
-   const [pendingDirectCalendarEvent, setPendingDirectCalendarEvent] = useState<PendingDirectCalendarEvent | null>(null);
+   const [pendingCalendarAction, setPendingCalendarAction] = useState<PendingCalendarAction | null>(() => readPendingCalendarActionFromSession());
+
+   const pendingCalendarActionRef = useRef<PendingCalendarAction | null>(pendingCalendarAction);
+
+   function updatePendingCalendarActionState(action: PendingCalendarAction | null) {
+      pendingCalendarActionRef.current = action;
+      setPendingCalendarAction(action);
+      persistPendingCalendarActionToSession(action);
+   }
 
    const [pendingProjectStarter, setPendingProjectStarter] = useState<PendingProjectStarter | null>(null);
 
@@ -7403,16 +8012,13 @@ export default function ALLEVIN() {
       },
    ]);
 
-   const projectConversationRef = useRef<ProjectConversationMemory>({
-      projectTitle: "",
-      lastIntent: undefined,
-      lastUserPrompt: "",
-      lastAssistantResponse: "",
-      lastRecommendation: "",
-      lastMilestoneTitle: "",
-      lastSubject: { kind: "none", title: "", detail: "" },
-      updatedAt: 0,
-   });
+   const messagesRef = useRef<Message[]>(messages);
+
+   const projectConversationRef = useRef<ProjectConversationMemory>(createEmptyAIDockConversationThread(""));
+
+   const activeConversationProjectRef = useRef("");
+
+   const conversationHydratingRef = useRef(false);
 
    const [, setProjectContextRevision] = useState(0);
 
@@ -7424,6 +8030,64 @@ export default function ALLEVIN() {
       // Conversational rewrites now flow through Project Guidance so they can
       // use the previous answer and active project without project-name checks.
       return "";
+   }
+
+   function getActiveConversationProjectTitle() {
+      try {
+         const packet = buildAllevinInternalContextPacket("");
+         return compactText(packet.currentProject.title) || "General workspace";
+      } catch {
+         return compactText(projectConversationRef.current.projectTitle) || "General workspace";
+      }
+   }
+
+   function persistActiveConversation(nextMessages: Message[] = messagesRef.current) {
+      if (conversationHydratingRef.current) return;
+
+      const projectTitle = compactText(activeConversationProjectRef.current || projectConversationRef.current.projectTitle || getActiveConversationProjectTitle()) || "General workspace";
+      const base = isAIDockConversationThreadForProject(projectConversationRef.current, projectTitle) ? projectConversationRef.current : readAIDockConversationThread(projectTitle);
+      const withMessages = setAIDockConversationMessages(base, nextMessages);
+      const saved = writeAIDockConversationThread(withMessages);
+      projectConversationRef.current = saved;
+      activeConversationProjectRef.current = saved.projectTitle;
+   }
+
+   function hydrateConversationForProject(projectTitle?: string) {
+      const cleanTitle = compactText(projectTitle) || "General workspace";
+      const currentTitle = compactText(activeConversationProjectRef.current);
+
+      if (currentTitle && normalizeUserIntentPrompt(currentTitle) === normalizeUserIntentPrompt(cleanTitle)) {
+         return;
+      }
+
+      if (currentTitle) {
+         persistActiveConversation(messagesRef.current);
+      }
+
+      const thread = readAIDockConversationThread(cleanTitle);
+      const restoredMessages = thread.messages.map((message) => ({ role: message.role, content: message.content }) as Message);
+
+      conversationHydratingRef.current = true;
+      activeConversationProjectRef.current = cleanTitle;
+      projectConversationRef.current = thread;
+      const nextMessages: Message[] = restoredMessages.length
+         ? restoredMessages
+         : [
+              {
+                 role: "assistant",
+                 content: getGeneratedWelcomeGreeting(),
+              },
+           ];
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+
+      window.setTimeout(() => {
+         conversationHydratingRef.current = false;
+      }, 0);
+   }
+
+   function syncConversationToActiveProject() {
+      window.setTimeout(() => hydrateConversationForProject(getActiveConversationProjectTitle()), 0);
    }
 
    useEffect(() => {
@@ -7477,6 +8141,32 @@ export default function ALLEVIN() {
    }, []);
 
    useEffect(() => {
+      const resolvedSelection = resolveSelectedProjectLibraryItemForAIDock();
+
+      if (resolvedSelection.selectionChanged && resolvedSelection.project) {
+         const detail = {
+            projectId: compactText(resolvedSelection.project.id),
+            projectTitle: compactText(resolvedSelection.project.title),
+            source: "active-project-selection-repair",
+         };
+
+         // Home and MemoryEngine listen to these existing workspace events.
+         // Dispatching after the one-time storage migration makes every surface
+         // recompute from the same selected Projects record.
+         window.dispatchEvent(new CustomEvent("allevin-project-memory-update", { detail }));
+         window.dispatchEvent(new CustomEvent("allevin-project-library-update", { detail }));
+      }
+
+      syncConversationToActiveProject();
+   }, []);
+
+   useEffect(() => {
+      messagesRef.current = messages;
+      if (!activeConversationProjectRef.current || conversationHydratingRef.current) return;
+      persistActiveConversation(messages);
+   }, [messages]);
+
+   useEffect(() => {
       function handleAllevinChatNotice(_event: Event) {
          // MK IX polish:
          // Routine page confirmations are intentionally quiet now.
@@ -7488,14 +8178,33 @@ export default function ALLEVIN() {
       function handleProjectLibraryUpdate() {
          setProjectContextRevision((revision) => revision + 1);
          refreshThreadSoon();
+         syncConversationToActiveProject();
       }
 
       function handleActiveProjectSelectionChange() {
+         // Normalize older selection records that stored only a project id.
+         // MemoryEngine can then resolve the same selected title used by the
+         // Dock badge, Home summary, materials, and project-guidance packet.
+         const resolvedSelection = resolveSelectedProjectLibraryItemForAIDock();
+
+         if (resolvedSelection.selectionChanged && resolvedSelection.project) {
+            window.dispatchEvent(
+               new CustomEvent("allevin-project-memory-update", {
+                  detail: {
+                     projectId: compactText(resolvedSelection.project.id),
+                     projectTitle: compactText(resolvedSelection.project.title),
+                     source: "active-project-selection-repair",
+                  },
+               }),
+            );
+         }
+
          // The selected Projects record is authoritative for all project-aware
          // Dock reads. Trigger a render immediately so the Dock title, context,
-         // materials, and subsequent answers switch together.
+         // materials, conversation memory, and subsequent answers switch together.
          setProjectContextRevision((revision) => revision + 1);
          refreshThreadSoon();
+         syncConversationToActiveProject();
       }
 
       window.addEventListener("allevin-chat-notice", handleAllevinChatNotice);
@@ -7520,6 +8229,12 @@ export default function ALLEVIN() {
    const activeView = workspace?.activeView ?? "home";
 
    const messagesEndRef = useRef<HTMLDivElement>(null);
+
+   // Keep the composer uncontrolled so typing does not rerender the entire
+   // AIDock component on every keystroke. The Dock contains substantial
+   // project, continuity, and material logic, so native textarea state is the
+   // correct performance boundary here.
+   const inputRef = useRef<HTMLTextAreaElement>(null);
 
    const threadMemory: ThreadMemoryState = getActiveThreadMemoryV2();
 
@@ -7779,50 +8494,17 @@ export default function ALLEVIN() {
    }
 
    function readActiveProjectSelectionForAIDock() {
-      if (typeof window === "undefined") {
-         return null;
-      }
-
-      try {
-         const stored = localStorage.getItem(ACTIVE_PROJECT_SELECTION_STORAGE_KEY);
-         const parsed = stored ? JSON.parse(stored) : null;
-
-         if (!parsed || typeof parsed !== "object") {
-            return null;
-         }
-
-         const projectId = compactText(parsed.projectId || parsed.id);
-         const title = compactText(parsed.title || parsed.projectTitle);
-
-         if (!projectId && !title) {
-            return null;
-         }
-
-         return {
-            projectId,
-            title,
-         };
-      } catch {
-         return null;
-      }
+      return readActiveProjectSelectionRecordForAIDock();
    }
 
    function getSelectedLiveProjectLibraryItem() {
-      const selection = readActiveProjectSelectionForAIDock();
+      const resolved = resolveSelectedProjectLibraryItemForAIDock().project;
 
-      if (!selection) {
+      if (!resolved || !isUsableLiveProjectLibraryItem(resolved)) {
          return undefined;
       }
 
-      const selectedTitleKey = getNormalizedTitleKey(selection.title);
-
-      return readCurrentProjectLibraryItems()
-         .filter(isUsableLiveProjectLibraryItem)
-         .find((project) => {
-            const projectTitleKey = getNormalizedTitleKey(project.title);
-
-            return Boolean((selection.projectId && project.id === selection.projectId) || (selectedTitleKey && projectTitleKey === selectedTitleKey));
-         });
+      return resolved;
    }
 
    function getLatestLiveProjectLibraryItem() {
@@ -8530,53 +9212,125 @@ export default function ALLEVIN() {
 
       const projects = getAllLiveProjectLibraryItems();
 
-      const latestProject = getLatestLiveProjectLibraryItem();
+      const selectedProject = getSelectedLiveProjectLibraryItem();
+
+      const latestProject = selectedProject || getLatestLiveProjectLibraryItem();
 
       const materialAwareness = buildUnifiedProjectMaterialsAwareness();
 
       const selectedMaterialNextSteps = materialAwareness.packet.selectedMaterialNextSteps;
 
-      const projectTitle = awareness.hasActiveProject ? compactText(awareness.title) : compactText(memoryProfile.title);
+      const selectedProjectTitle = compactText(selectedProject?.title);
+      const awarenessTitle = compactText(awareness.title);
+      const awarenessMatchesSelection = Boolean(awareness.hasActiveProject && (!selectedProjectTitle || (awarenessTitle && getNormalizedTitleKey(awarenessTitle) === getNormalizedTitleKey(selectedProjectTitle))));
 
-      const fallbackProjectBody = sanitizeLongText(latestProject?.notes?.[0]?.body || latestProject?.notes?.[0]?.summary || latestProject?.latestSummary || memoryProfile.summary || "", SANITIZE_LIMITS.projectBody);
+      // An explicit Projects selection outranks recency-based Canvas, timeline,
+      // material, and thread signals. This keeps Home, the Dock, the response
+      // packet, and material lookup on one project authority.
+      const projectTitle = selectedProjectTitle || (awareness.hasActiveProject ? awarenessTitle : compactText(memoryProfile.title));
 
+      const selectedProjectBody = sanitizeLongText(selectedProject?.notes?.[0]?.body || selectedProject?.notes?.[0]?.summary || selectedProject?.latestSummary || "", SANITIZE_LIMITS.projectBody);
+      const fallbackProjectBody = sanitizeLongText(selectedProjectBody || latestProject?.notes?.[0]?.body || latestProject?.notes?.[0]?.summary || latestProject?.latestSummary || memoryProfile.summary || "", SANITIZE_LIMITS.projectBody);
       const fallbackParsedProject = parseProjectDocument(fallbackProjectBody);
+      const selectedCanvasContent = selectedProject && !isCurrentCanvasAlignedWithSelectedProject() ? "" : sanitizeLongText(memoryProfile.canvasContent || getCurrentCanvasContent(), SANITIZE_LIMITS.projectBody);
+      const selectedTrackingContext = getActiveProjectTrackingContext();
+      const selectedTrackingMatches = Boolean(selectedProject && selectedTrackingContext?.projectId && compactText(selectedProject.id) === compactText(selectedTrackingContext.projectId));
+      const selectedMilestoneWorkspaces = selectedTrackingMatches
+         ? (selectedTrackingContext?.tracking?.milestones || []).map((milestone: any) => ({
+              id: compactText(milestone?.id),
+              title: compactText(milestone?.title),
+              status: compactText(milestone?.status),
+              goal: compactText(milestone?.goal),
+              whyItMatters: compactText(milestone?.whyItMatters),
+              startingPrompt: compactText(milestone?.startingPrompt),
+              workingContent: sanitizeLongText(milestone?.workingContent || "", SANITIZE_LIMITS.projectBody),
+              decisions: Array.isArray(milestone?.decisions) ? milestone.decisions : [],
+              openQuestions: Array.isArray(milestone?.openQuestions) ? milestone.openQuestions : [],
+              completionCriteria: Array.isArray(milestone?.completionCriteria) ? milestone.completionCriteria : [],
+              completedCriteria: Array.isArray(milestone?.completedCriteria) ? milestone.completedCriteria : [],
+              dependencies: Array.isArray(milestone?.dependencies) ? milestone.dependencies : [],
+              order: Number(milestone?.order || 0),
+           }))
+         : undefined;
 
       const fallbackProjectIntelligence = projectTitle
          ? buildProjectIntelligencePacket({
               title: projectTitle,
               projectDocument: fallbackParsedProject,
               projectBody: fallbackProjectBody,
-              canvasContent: sanitizeLongText(memoryProfile.canvasContent || getCurrentCanvasContent(), SANITIZE_LIMITS.projectBody),
+              canvasContent: selectedCanvasContent,
               materials: materialAwareness.materials,
+              milestoneWorkspaces: selectedMilestoneWorkspaces,
            })
          : getEmptyProjectIntelligencePacket();
 
-      // The unified MemoryEngine is authoritative when it resolves a project.
-      // During a temporary source-selection miss, rebuild the same intelligence
-      // packet from the visible Projects record instead of pairing a real title
-      // with an empty/general intelligence packet.
-      const parsedProject = awareness.hasActiveProject ? awareness.projectDocument : fallbackParsedProject;
-
-      const projectIntelligence = awareness.hasActiveProject ? awareness.projectIntelligence : fallbackProjectIntelligence;
-
-      const recommendedNextAction = awareness.hasActiveProject ? getUnifiedProjectNextAction(awareness, selectedMaterialNextSteps) : memoryProfile.nextAction || getSafeRecommendedNextAction();
+      const parsedProject = awarenessMatchesSelection ? awareness.projectDocument : fallbackParsedProject;
+      const projectIntelligence = awarenessMatchesSelection ? awareness.projectIntelligence : fallbackProjectIntelligence;
+      const selectedTrackingNextAction = selectedTrackingMatches
+         ? compactText(selectedTrackingContext?.tracking?.milestones?.find((milestone: any) => milestone?.status === "active" && milestone?.completed !== true)?.title || selectedTrackingContext?.tracking?.nextStep)
+         : "";
+      const recommendedNextAction = awarenessMatchesSelection
+         ? getUnifiedProjectNextAction(awareness, selectedMaterialNextSteps)
+         : selectedTrackingNextAction || compactText(projectIntelligence.projectUnderstanding.recommendedMove) || compactText(parsedProject.immediateNextStep) || selectedMaterialNextSteps[0] || "Choose the first unfinished action in the active project.";
 
       const projectType = compactText(projectIntelligence.reasoningProfile || projectIntelligence.projectType || parsedProject.projectType || memoryProfile.type || "general");
 
-      const projectLocation = awareness.hasActiveProject
-         ? awareness.lastKnownLocation === "canvas"
-            ? "Canvas"
-            : awareness.lastKnownLocation === "integrations" || awareness.source === "projects"
-              ? "Projects"
-              : memoryProfile.location || getCurrentProjectLocationLabel()
-         : memoryProfile.location || "None";
+      const projectLocation = selectedProjectTitle
+         ? "Projects"
+         : awarenessMatchesSelection
+           ? awareness.lastKnownLocation === "canvas"
+              ? "Canvas"
+              : awareness.lastKnownLocation === "integrations" || awareness.source === "projects"
+                ? "Projects"
+                : memoryProfile.location || getCurrentProjectLocationLabel()
+           : memoryProfile.location || "None";
 
-      const projectStatus = awareness.hasActiveProject ? compactText(awareness.status || awareness.currentStage) : compactText(memoryProfile.status || "none");
+      const projectStatus = awarenessMatchesSelection ? compactText(awareness.status || awareness.currentStage) : projectTitle ? "active" : compactText(memoryProfile.status || "none");
+      const projectBody = awarenessMatchesSelection ? sanitizeLongText(awareness.projectBody || "", SANITIZE_LIMITS.projectBody) : fallbackProjectBody;
+      const canvasContent = awarenessMatchesSelection ? sanitizeLongText(awareness.canvasContent || "", SANITIZE_LIMITS.projectBody) : selectedCanvasContent;
 
-      const projectBody = awareness.hasActiveProject ? sanitizeLongText(awareness.projectBody || "", SANITIZE_LIMITS.projectBody) : sanitizeLongText(memoryProfile.summary || "", SANITIZE_LIMITS.projectBody);
-
-      const canvasContent = awareness.hasActiveProject ? sanitizeLongText(awareness.canvasContent || "", SANITIZE_LIMITS.projectBody) : sanitizeLongText(memoryProfile.canvasContent || getCurrentCanvasContent(), SANITIZE_LIMITS.projectBody);
+      const conversationTitle = projectTitle || "General workspace";
+      const storedConversation = isAIDockConversationThreadForProject(projectConversationRef.current, conversationTitle) ? projectConversationRef.current : readAIDockConversationThread(conversationTitle);
+      const promptAwareConversation = prompt ? recordAIDockConversationUserPrompt(storedConversation, prompt) : storedConversation;
+      const conversation = buildAIDockLLMConversationContext(promptAwareConversation, prompt);
+      const activeMilestoneForGrounding =
+         projectIntelligence.projectUnderstanding.milestones.find((milestone) => milestone.id === projectIntelligence.projectUnderstanding.activeMilestoneId) ||
+         projectIntelligence.projectUnderstanding.milestones.find((milestone) => milestone.status === "active");
+      const materialGrounding = buildAIDockMaterialGrounding({
+         prompt,
+         projectTitle,
+         currentTopic: conversation.currentTopic || projectIntelligence.projectUnderstanding.conversation.currentTopic,
+         activeMilestoneTitle: activeMilestoneForGrounding?.title,
+         activeMilestoneGoal: activeMilestoneForGrounding?.goal || activeMilestoneForGrounding?.purpose,
+         recommendation: recommendedNextAction || projectIntelligence.projectUnderstanding.recommendedMove,
+         materials: materialAwareness.materials,
+         selectedMaterialIds: materialAwareness.selectedMaterials.map((material) => material.id),
+         selectedMaterialTitles: materialAwareness.selectedMaterials.map((material) => material.title),
+         limit: 3,
+      });
+      const conversationMilestoneTitle = compactText(promptAwareConversation.lastMilestoneTitle);
+      const activeCalendarMilestoneTitle = compactText(activeMilestoneForGrounding?.title);
+      const conversationMilestoneOverlap = getMilestoneLifecycleOverlap(conversationMilestoneTitle, activeCalendarMilestoneTitle);
+      const conversationRecommendationMatchesMilestone =
+         !conversationMilestoneTitle ||
+         !activeCalendarMilestoneTitle ||
+         getNormalizedTitleKey(conversationMilestoneTitle) === getNormalizedTitleKey(activeCalendarMilestoneTitle) ||
+         conversationMilestoneOverlap.shared >= 2 ||
+         conversationMilestoneOverlap.ratio >= 0.5;
+      const calendarRecommendation =
+         (conversationRecommendationMatchesMilestone ? compactText(conversation.canonicalRecommendation) || compactText(conversation.lastRecommendation) : "") ||
+         recommendedNextAction ||
+         compactText(projectIntelligence.projectUnderstanding.recommendedMove);
+      const calendarIntelligence = buildAIDockCalendarIntelligence({
+         prompt,
+         projectId: compactText(selectedProject?.id || selectedTrackingContext?.projectId || ""),
+         projectTitle,
+         activeMilestoneTitle: activeMilestoneForGrounding?.title,
+         recommendation: calendarRecommendation,
+         completionCriteria: activeMilestoneForGrounding?.completionCriteria,
+         events: readCalendarEventsFromStorage(),
+         now: Date.now(),
+      });
 
       return {
          version: "MK VIII",
@@ -8606,10 +9360,10 @@ export default function ALLEVIN() {
             implementationPreferences: projectTitle ? (parsedProject.implementationPreferences || []).slice(0, 20) : [],
 
             canvasContent: projectTitle ? canvasContent : "",
-            canvasUpdatedAt: awareness.canvasUpdatedAt || 0,
-            projectUpdatedAt: awareness.projectUpdatedAt || 0,
+            canvasUpdatedAt: awarenessMatchesSelection ? awareness.canvasUpdatedAt || 0 : 0,
+            projectUpdatedAt: awarenessMatchesSelection ? awareness.projectUpdatedAt || 0 : Number(selectedProject?.updatedAt || selectedProject?.createdAt || 0),
 
-            latestProjectNote: projectTitle ? memoryProfile.latestNote || "" : "",
+            latestProjectNote: projectTitle ? compactText(selectedProject?.notes?.[0]?.summary || selectedProject?.latestSummary || memoryProfile.latestNote || "") : "",
             recommendedNextAction,
 
             materials: {
@@ -8631,9 +9385,10 @@ export default function ALLEVIN() {
          },
 
          calendar: {
-            hasUpcomingEvents: Boolean(getNextCalendarEvent()),
-            nextEventSummary: getNextCalendarSummaryForContext(),
-            todaySummary: getCalendarTodaySummaryForContext(),
+            hasUpcomingEvents: calendarIntelligence.hasUpcomingEvents,
+            nextEventSummary: calendarIntelligence.nextEventSummary || getNextCalendarSummaryForContext(),
+            todaySummary: calendarIntelligence.todaySummary || getCalendarTodaySummaryForContext(),
+            intelligence: calendarIntelligence,
          },
 
          cognition: {
@@ -8647,6 +9402,12 @@ export default function ALLEVIN() {
 
          projectIntelligence,
 
+         materialGrounding,
+
+         conversation,
+
+         responseMode: normalizeAIDockResponseMode(cognition?.state || cognition?.label || "balanced"),
+
          responseRules: {
             tone: `ALLEVIN: calm, clear, useful, concise, project-aware, and adapted to ${cognition?.label || "Balanced"} cognition.`,
             format: "Ground the answer first, then apply response style. Keep facts and project priorities stable across styles.",
@@ -8655,8 +9416,9 @@ export default function ALLEVIN() {
                "Do not say to open Canvas if the project is already in the project.",
                "Do not say to move work to Projects if it is already in Projects.",
                "Do not mention Tasks or Board as user-facing destinations.",
-               "Use selected Project Materials as high-priority supporting context.",
-               "Do not let project type or response style override explicit project state, Canvas progress, roadmap, or selected material evidence.",
+               "Use only materialGrounding.selectedMaterials when materials affect the answer.",
+               "Keep direct material facts separate from ALLEVIN interpretation and surface contradictions instead of silently choosing a source.",
+               "Do not let project type or response style override explicit project state, Canvas progress, roadmap, or relevant material evidence.",
                "Do not invent domain-specific objects, people, features, scenes, relationships, shelves, or tasks that are not supported by context.",
                "Do not paste full project materials into responses unless the user explicitly asks for full content.",
                "Do not over-explain unless the user asks for detail.",
@@ -10854,13 +11616,21 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
 
    function looksLikeCalendarScheduleQuestion(prompt: string) {
       const lower = normalizeUserIntentPrompt(prompt);
+      const hasTimeFitQuestion = getRequestedCalendarMinutes(prompt) !== undefined && (lower.includes("only have") || lower.includes("what part") || lower.includes("what fits") || lower.includes("time for") || lower.includes("what should i do"));
 
       return (
+         lower.includes("what am i working on today") ||
+         lower.includes("what should i work on today") ||
          lower.includes("what do i have today") ||
          lower.includes("what's on my calendar") ||
          lower.includes("what is on my calendar") ||
          lower.includes("what is my next event") ||
          lower.includes("what's my next event") ||
+         /\b(?:what|when)\s+(?:is\s+)?my\s+next\b.*\b(?:session|work block)\b/.test(lower) ||
+         lower.includes("next project session") ||
+         lower.includes("next session") ||
+         lower.includes("what did i miss this week") ||
+         lower.includes("missed this week") ||
          lower.includes("next calendar") ||
          lower.includes("next event") ||
          lower.includes("calendar today") ||
@@ -10872,6 +11642,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          lower.includes("calendar thing") ||
          lower.includes("on my calendar") ||
          lower.includes("go on my calendar") ||
+         hasTimeFitQuestion ||
          looksLikeTomorrowCalendarQuestion(prompt) ||
          looksLikeRecurringCalendarQuestion(prompt) ||
          looksLikeCalendarAvailabilityQuestion(prompt) ||
@@ -10892,15 +11663,28 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
          return buildRecurringCalendarReadback();
       }
 
+      const packet = buildAllevinInternalContextPacket(prompt).calendar.intelligence;
+
       if (looksLikeCalendarAvailabilityQuestion(prompt)) {
-         return buildCalendarAvailabilityResponse();
+         if (!packet.hasCalendarData) {
+            return packet.availabilityNote;
+         }
+
+         return `${buildCalendarAvailabilityResponse()}
+
+${packet.availabilityNote}`;
       }
 
       if (looksLikeCalendarScheduleNextQuestion(prompt)) {
-         return buildCalendarScheduleNextResponse();
+         const plan = packet.sessionPlan;
+         return `The next useful session is ${plan.durationMinutes} minutes for this: ${plan.sessionGoal}.
+
+Expected result: ${plan.expectedResult}.
+
+Tell me the day and start time, and I’ll prepare the Calendar preview before changing anything.`;
       }
 
-      return buildCalendarScheduleReadback();
+      return buildAIDockCalendarReadback(prompt, packet);
    }
 
    function getLatestProjectNotesPreview() {
@@ -12218,6 +13002,10 @@ I could not turn this recommendation into a clean action yet.
       return `Cognition state: ${profile.label}. ${profile.guidanceRule}`;
    }
 
+   function getCurrentAIDockResponseModeProfile() {
+      return getAIDockResponseModeProfile(normalizeAIDockResponseMode(getActiveCognitionResponseMode()));
+   }
+
    function isGenericProjectNextAction(value?: string) {
       const lower = normalizeUserIntentPrompt(value);
 
@@ -12374,42 +13162,60 @@ I could not turn this recommendation into a clean action yet.
 
    function getProjectConversationContext(prompt = ""): ProjectGuidanceConversationContext {
       const packet = buildAllevinInternalContextPacket(prompt);
-      const activeTitle = compactText(packet.currentProject.title);
-      const remembered = projectConversationRef.current;
-      const sameProject = Boolean(activeTitle && remembered.projectTitle && normalizeUserIntentPrompt(activeTitle) === normalizeUserIntentPrompt(remembered.projectTitle));
-      const recentMessages = messages.slice(-8).map((message) => ({ role: message.role, content: sanitizeAssistantOutput(message.content) }));
+      const activeTitle = compactText(packet.currentProject.title) || "General workspace";
+      const stored = isAIDockConversationThreadForProject(projectConversationRef.current, activeTitle) ? projectConversationRef.current : readAIDockConversationThread(activeTitle);
+      const promptAware = prompt ? recordAIDockConversationUserPrompt(stored, prompt) : stored;
+      const continuity = buildAIDockLLMConversationContext(promptAware, prompt);
+      const recentMessages = [...(continuity.recentMessages || [])];
+
+      if (prompt && recentMessages[recentMessages.length - 1]?.role !== "user") {
+         recentMessages.push({ role: "user", content: sanitizeLongText(prompt, 8000) });
+      }
 
       return {
-         previousIntent: sameProject ? remembered.lastIntent : undefined,
-         lastUserPrompt: sameProject ? remembered.lastUserPrompt : recentMessages.filter((message) => message.role === "user").slice(-1)[0]?.content || "",
-         lastAssistantResponse: sameProject ? remembered.lastAssistantResponse : getLastAssistantMessage(),
-         lastRecommendation: sameProject ? remembered.lastRecommendation : "",
-         lastMilestoneTitle: sameProject ? remembered.lastMilestoneTitle : "",
-         lastSubject: sameProject ? remembered.lastSubject : undefined,
-         recentMessages,
+         previousIntent: stored.lastIntent,
+         // Keep the previous user prompt available for "what changed" and
+         // update comparisons. continuityIntent separately describes the new prompt.
+         lastUserPrompt: stored.lastUserPrompt,
+         lastAssistantResponse: stored.lastAssistantResponse || getLastAssistantMessage(),
+         lastRecommendation: stored.canonicalRecommendation || stored.lastRecommendation,
+         canonicalRecommendation: stored.canonicalRecommendation || stored.lastRecommendation,
+         currentMethod: stored.currentMethod,
+         acceptedMethod: stored.acceptedMethod,
+         rejectedMethods: stored.rejectedMethods,
+         lastMilestoneTitle: stored.lastMilestoneTitle,
+         lastSubject: stored.lastSubject,
+         currentTopic: continuity.currentTopic,
+         activeReference: continuity.activeReference,
+         referencedOption: continuity.referencedOption,
+         optionSet: continuity.optionSet,
+         requestedTransformation: continuity.requestedTransformation,
+         continuityIntent: continuity.continuityIntent,
+         acceptedRecommendations: continuity.acceptedRecommendations,
+         rejectedRecommendations: continuity.rejectedRecommendations,
+         corrections: continuity.corrections,
+         recentMessages: recentMessages.slice(-10) as Array<{ role: "user" | "assistant"; content: string }>,
       };
    }
 
    function rememberProjectGuidanceTurn(prompt: string, guidance: ProjectGuidanceResult, response: string) {
       const packet = buildAllevinInternalContextPacket(prompt);
       const understanding = packet.projectIntelligence.projectUnderstanding;
+      const projectTitle = compactText(packet.currentProject.title) || "General workspace";
       const activeMilestone = understanding.milestones.find((milestone) => milestone.id === understanding.activeMilestoneId)?.title || understanding.recommendedMove || "";
+      const stored = isAIDockConversationThreadForProject(projectConversationRef.current, projectTitle) ? projectConversationRef.current : readAIDockConversationThread(projectTitle);
+      const promptAware = recordAIDockConversationUserPrompt(stored, prompt);
+      const updated = recordAIDockConversationGuidance(promptAware, {
+         prompt,
+         guidance,
+         response,
+         projectTitle,
+         activeMilestoneTitle: activeMilestone,
+         responseMode: normalizeAIDockResponseMode(getActiveCognitionResponseMode()),
+      });
 
-      const previous = projectConversationRef.current;
-      const sameProject = Boolean(previous.projectTitle && normalizeUserIntentPrompt(previous.projectTitle) === normalizeUserIntentPrompt(packet.currentProject.title));
-
-      projectConversationRef.current = {
-         projectTitle: compactText(packet.currentProject.title),
-         lastIntent: guidance.intent,
-         lastUserPrompt: sanitizeLongText(prompt, 8000),
-         lastAssistantResponse: sanitizeAssistantOutput(response),
-         // A facts, rationale, or risk follow-up should not erase the last
-         // actionable recommendation that later pronouns may refer to.
-         lastRecommendation: compactText(guidance.nextAction) || (sameProject ? previous.lastRecommendation : ""),
-         lastMilestoneTitle: guidance.subject.kind === "milestone" ? compactText(guidance.subject.title) : compactText(activeMilestone) || (sameProject ? previous.lastMilestoneTitle : ""),
-         lastSubject: guidance.subject.kind !== "none" ? guidance.subject : sameProject ? previous.lastSubject : { kind: "none", title: "", detail: "" },
-         updatedAt: Date.now(),
-      };
+      projectConversationRef.current = writeAIDockConversationThread(updated);
+      activeConversationProjectRef.current = projectTitle;
    }
 
    function buildProjectLeadGuidanceResponse(prompt = "") {
@@ -12791,6 +13597,8 @@ I could not turn this recommendation into a clean action yet.
          resolvedGuidance.intent === "project-change" ||
          resolvedGuidance.intent === "project-update" ||
          resolvedGuidance.intent === "conversation-transform" ||
+         resolvedGuidance.intent === "conversation-options" ||
+         resolvedGuidance.intent === "recommendation-method" ||
          resolvedGuidance.intent === "milestone-rationale" ||
          resolvedGuidance.intent === "next-milestone" ||
          resolvedGuidance.intent === "milestone-completion" ||
@@ -12874,15 +13682,32 @@ I could not turn this recommendation into a clean action yet.
       return hasExplicitProjectDecisionLanguage(prompt);
    }
 
+   function buildSharedAIDockResponseJudgment(prompt: string, guidance: ProjectGuidanceResult, packet: AllevinInternalContextPacket = buildAllevinInternalContextPacket(prompt)) {
+      const materialGrounding = packet.materialGrounding || buildCurrentAIDockMaterialGrounding(prompt, packet, guidance.nextAction);
+
+      return buildAIDockResponseJudgment({
+         prompt,
+         guidance,
+         packet: packet.projectIntelligence,
+         materialGrounding,
+         calendarIntelligence: packet.calendar.intelligence,
+         calendarContext: [packet.calendar.todaySummary, packet.calendar.nextEventSummary].filter(Boolean).join(" "),
+      });
+   }
+
    function buildProjectGuidanceDisplayResponse(prompt: string, guidance: ProjectGuidanceResult) {
-      const grounded = sanitizeAssistantOutput(guidance.response).trim() || compactText(guidance.nextAction) || compactText(guidance.judgment);
+      const packet = buildAllevinInternalContextPacket(prompt);
+      const responseJudgment = buildSharedAIDockResponseJudgment(prompt, guidance, packet);
+      const responseMode = normalizeAIDockResponseMode(getActiveCognitionResponseMode());
+      const grounded = sanitizeAssistantOutput(renderAIDockResponseJudgment(responseJudgment, responseMode)).trim();
 
       if (!grounded) {
          return "";
       }
 
-      // Project Guidance has already resolved intent and shaped the project-lead answer.
-      // Keep that judgment intact instead of routing it through broader fallback logic.
+      // ALLEVIN MK X Build 2:
+      // Project Guidance resolves the project judgment once. Every response mode
+      // receives this same contract before any conversational delivery is applied.
       return cleanFinalAIDockResponse(grounded);
    }
 
@@ -12899,6 +13724,11 @@ I could not turn this recommendation into a clean action yet.
          "budget-memory",
          "material-history",
          "current-milestone",
+         "priority-rationale",
+         "rationale",
+         "milestone-rationale",
+         "material-rationale",
+         "hierarchy-explanation",
          "decision",
          "unresolved",
          "decision-status",
@@ -12907,6 +13737,14 @@ I could not turn this recommendation into a clean action yet.
          "milestone-change",
          "project-update",
          "project-change",
+         "conversation-transform",
+         "conversation-options",
+         "conversation-recall",
+         "conversation-reference",
+         "conversation-correction",
+         "recommendation-acceptance",
+         "recommendation-rejection",
+         "recommendation-method",
          "material-impact",
          "material-milestone",
          "material-completion",
@@ -13376,6 +14214,33 @@ I could not turn this recommendation into a clean action yet.
       return [packet.currentProject.title, activeMilestone, guidance.nextAction, ...selectedTitles, ...evidence.slice(0, 4)].map((value) => compactText(value).toLowerCase()).filter(Boolean);
    }
 
+   function looksLikeSamePriorityAlternativeRequest(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+      return /\b(?:another|different|alternate|alternative)\s+(?:way|approach|method|route)\b/i.test(lower) || /\b(?:approach|do|handle|carry out|work through)\s+(?:that|this|it)\s+(?:another|a different)\s+way\b/i.test(lower);
+   }
+
+   function getAIDockPreservationTerms(value?: string) {
+      const stopWords = new Set(["about", "after", "again", "another", "before", "current", "different", "from", "into", "project", "should", "that", "their", "there", "these", "this", "with", "work"]);
+      return compactText(value)
+         .toLowerCase()
+         .split(/[^a-z0-9]+/)
+         .filter((word) => word.length >= 5 && !stopWords.has(word));
+   }
+
+   function introducesUnsupportedAlternativeWork(candidate: string, groundedResponse: string) {
+      const source = compactText(groundedResponse).toLowerCase();
+      const cleanCandidate = compactText(candidate).toLowerCase();
+      const unsupportedAdditions: RegExp[] = [
+         /\b(?:potential users?|user group|focus group|survey|interviews?)\b/i,
+         /\b(?:committee|working group|advisory group)\b/i,
+         /\b(?:launch event|promotion|marketing campaign|fundraising event)\b/i,
+         /\bmission statement\b/i,
+         /\b(?:outside consultant|professional guidance)\b/i,
+      ];
+
+      return unsupportedAdditions.some((pattern) => pattern.test(cleanCandidate) && !pattern.test(source));
+   }
+
    function preservesSeniorProjectLeadJudgment(prompt: string, guidance: ProjectGuidanceResult, groundedResponse: string, candidateResponse: string) {
       const candidate = compactText(candidateResponse);
       const grounded = compactText(groundedResponse);
@@ -13404,24 +14269,38 @@ I could not turn this recommendation into a clean action yet.
       const minimumLengthRatio = asksForSimplification ? 0.28 : 0.55;
       const lengthRatio = candidate.length / Math.max(grounded.length, 1);
 
+      if (looksLikeSamePriorityAlternativeRequest(prompt)) {
+         const recommendationTerms = getAIDockPreservationTerms(guidance.nextAction);
+         const preservedRecommendationTerms = recommendationTerms.filter((word) => lowerCandidate.includes(word));
+         const requiredRecommendationTerms = Math.min(2, recommendationTerms.length);
+
+         if (preservedRecommendationTerms.length < requiredRecommendationTerms || introducesUnsupportedAlternativeWork(candidate, grounded)) {
+            return false;
+         }
+      }
+
       return preservationScore >= 0.28 && preservedTerms.length >= Math.min(1, requiredTerms.length) && lengthRatio >= minimumLengthRatio;
    }
 
    async function enhanceSeniorProjectLeadResponse(prompt: string, guidance: ProjectGuidanceResult) {
-      const groundedResponse = buildProjectGuidanceDisplayResponse(prompt, guidance);
+      const packet = buildAllevinInternalContextPacket(prompt);
+      const responseJudgment = buildSharedAIDockResponseJudgment(prompt, guidance, packet);
+      const responseMode = normalizeAIDockResponseMode(getActiveCognitionResponseMode());
+      const responseModeProfile = getAIDockResponseModeProfile(responseMode);
+      const groundedResponse = cleanFinalAIDockResponse(renderAIDockResponseJudgment(responseJudgment, responseMode));
 
       if (!groundedResponse) {
          return "";
       }
 
-      const packet = buildAllevinInternalContextPacket(prompt);
       const understanding = packet.projectIntelligence.projectUnderstanding;
       const activeMilestoneObject = understanding.milestones.find((milestone) => milestone.id === understanding.activeMilestoneId);
       const activeMilestone = activeMilestoneObject?.title || understanding.recommendedMove || packet.currentProject.recommendedNextAction;
-      const recentConversation = messages
-         .slice(-8)
-         .map((message) => `${message.role === "user" ? "User" : "ALLEVIN"}: ${compactText(message.content)}`)
-         .join("\n");
+      const projectTitle = compactText(packet.currentProject.title) || "General workspace";
+      const storedConversation = isAIDockConversationThreadForProject(projectConversationRef.current, projectTitle) ? projectConversationRef.current : readAIDockConversationThread(projectTitle);
+      const promptAwareConversation = recordAIDockConversationUserPrompt(storedConversation, prompt);
+      const conversationContext = buildAIDockLLMConversationContext(promptAwareConversation, prompt);
+      const recentConversation = (conversationContext.recentMessages || []).map((message) => `${message.role === "user" ? "User" : "ALLEVIN"}: ${compactText(message.content)}`).join("\n");
 
       try {
          const response = await requestAllevinLLM({
@@ -13429,29 +14308,45 @@ I could not turn this recommendation into a clean action yet.
             source: "aidock",
             title: packet.currentProject.title || "Active project",
             focus: groundedResponse,
+            responseJudgment,
+            materialGrounding: responseJudgment.materialGrounding,
             usefulContext: [
                packet.currentProject.goal ? `Project goal: ${packet.currentProject.goal}` : "",
                activeMilestone ? `Active checkpoint: ${activeMilestone}` : "",
-               guidance.currentUnderstanding ? `Current understanding: ${guidance.currentUnderstanding}` : "",
-               guidance.assessment ? `Assessment: ${guidance.assessment}` : "",
-               guidance.nextAction ? `Recommended action: ${guidance.nextAction}` : "",
-               guidance.reason ? `Reason: ${guidance.reason}` : "",
-               guidance.watchOut ? `Watch-out: ${guidance.watchOut}` : "",
-               packet.projectMaterials.selectedTitles.length ? `Referenced materials: ${packet.projectMaterials.selectedTitles.join(", ")}` : "",
-               guidance.evidenceUsed.length ? `Evidence used: ${guidance.evidenceUsed.slice(0, 8).join(" | ")}` : "",
+               responseJudgment.currentUnderstanding ? `Current understanding: ${responseJudgment.currentUnderstanding}` : "",
+               responseJudgment.assessment ? `Assessment: ${responseJudgment.assessment}` : "",
+               responseJudgment.recommendation ? `Recommendation: ${responseJudgment.recommendation}` : "",
+               responseJudgment.reason ? `Reason: ${responseJudgment.reason}` : "",
+               responseJudgment.whatItUnlocks ? `What it unlocks: ${responseJudgment.whatItUnlocks}` : "",
+               responseJudgment.caution ? `Caution: ${responseJudgment.caution}` : "",
+               responseJudgment.materialsUsed.length ? `Referenced materials: ${responseJudgment.materialsUsed.join(", ")}` : "",
+               responseJudgment.materialGrounding?.facts.length ? `Material facts: ${responseJudgment.materialGrounding.facts.map((fact) => `${fact.sourceTitle}: ${fact.statement}`).join(" | ")}` : "",
+               responseJudgment.materialGrounding?.contradictions.length
+                  ? `Material conflicts: ${responseJudgment.materialGrounding.contradictions.map((conflict) => `${conflict.firstSourceTitle} vs ${conflict.secondSourceTitle}: ${conflict.guidance}`).join(" | ")}`
+                  : "",
+               responseJudgment.calendarContext ? `Calendar context: ${responseJudgment.calendarContext}` : "",
+               responseJudgment.relevantFacts.length ? `Relevant facts: ${responseJudgment.relevantFacts.slice(0, 8).join(" | ")}` : "",
             ]
                .filter(Boolean)
                .join("\n"),
-            nextStep: guidance.nextAction,
+            nextStep: responseJudgment.nextAction,
             rawContent: recentConversation,
-            responseStyle: "conversational",
+            responseStyle: responseModeProfile.responseStyle,
+            responseMode,
             groundedResponse,
             conversation: {
+               ...conversationContext,
                lastUserPrompt: prompt,
-               lastAssistantResponse: messages.filter((message) => message.role === "assistant").slice(-1)[0]?.content || "",
-               lastRecommendation: guidance.nextAction || projectConversationRef.current.lastRecommendation,
-               currentTopic: understanding.conversation.currentTopic || activeMilestone,
-               requestedTransformation: /\b(?:simpler|shorter|rewrite|editorial|detailed|more detail|explain)\b/i.test(prompt) ? prompt : "",
+               lastRecommendation:
+                  guidance.intent === "recommendation-method" || guidance.intent === "recommendation-rejection"
+                     ? conversationContext.canonicalRecommendation || conversationContext.lastRecommendation
+                     : responseJudgment.recommendation || conversationContext.canonicalRecommendation || conversationContext.lastRecommendation,
+               canonicalRecommendation:
+                  guidance.intent === "recommendation-method" || guidance.intent === "recommendation-rejection"
+                     ? conversationContext.canonicalRecommendation || conversationContext.lastRecommendation
+                     : responseJudgment.recommendation || conversationContext.canonicalRecommendation || conversationContext.lastRecommendation,
+               currentTopic: conversationContext.currentTopic || understanding.conversation.currentTopic || activeMilestone,
+               requestedTransformation: conversationContext.requestedTransformation || (getAIDockContinuityIntent(prompt) !== "none" ? prompt : ""),
             },
             projectUnderstanding: {
                goal: understanding.goal,
@@ -13496,27 +14391,61 @@ I could not turn this recommendation into a clean action yet.
                     }
                   : undefined,
             },
-            contextPacket: packet,
+            contextPacket: {
+               ...packet,
+               conversation: conversationContext,
+               responseMode,
+               responseJudgment,
+               materialGrounding: responseJudgment.materialGrounding,
+            },
             userInstruction: `
-You are the conversational delivery layer for ALLEVIN MK IX.
+You are the conversational delivery layer for ALLEVIN MK X Build 3.
 
-The grounded project-lead response below is authoritative. Do not replace its judgment, recommendation, rationale, risk, milestone, or evidence. Your job is to make it sound like a thoughtful senior project lead speaking naturally to the user.
+The shared response judgment below is authoritative. It was created before any response mode was applied. Do not replace its answer, recommendation, rationale, caution, milestone, materials, calendar facts, or uncertainty. Your job is only to deliver that same judgment naturally.
 
 User question:
 ${prompt}
 
+Shared response judgment:
+${JSON.stringify(responseJudgment, null, 2)}
+
 Authoritative grounded response:
 ${groundedResponse}
 
+Project-scoped conversation continuity:
+${JSON.stringify(conversationContext, null, 2)}
+
+Active response mode:
+${responseModeProfile.label}
+
+Mode delivery rule:
+${responseModeProfile.deliveryRule}
+
 Requirements:
+- Preserve the truthSignature by keeping the same substantive answer in Balanced, Focused, and Creative.
+- Apply only the active mode named above. Do not blend response modes.
+- Balanced should be natural and well-rounded. Focused should answer first and stay concise. Creative should explore grounded framing or approaches without inventing facts.
 - Answer the user's actual question, not a generic version of it.
-- Treat the recent conversation as continuous: resolve words such as "that", "it", "this one", and "after that" from the previous project turn.
+- Treat the recent conversation as continuous: resolve words such as "that", "it", "this one", "the second option", and "after that" from the previous same-project turn.
+- Conversation continuity is isolated by project. Never use messages, recommendations, corrections, or options from another project.
+- If continuityIntent is shorten, simplify, expand, or rewrite, transform lastAssistantResponse rather than starting a new project analysis.
+- If continuityIntent is option-reference, answer about referencedOption specifically. Do not substitute a different option.
+- If continuityIntent is reject, do not recommend the rejected item again unless new project evidence makes it necessary and you explain why.
+- If continuityIntent is accept, keep that direction stable in later turns unless the user changes it.
+- Apply corrections to the current conversation and do not repeat the contradicted conversational assumption. Do not claim the correction changed saved project data unless a separate confirmed project update occurred.
 - Do not restate the project goal, full roadmap, or current milestone unless it directly helps answer this question.
 - Use only the grounded fields that answer this intent. Do not append a general roadmap, risk, next step, or project summary merely because it exists in context.
 - Facts, priorities, assumptions, risks, decisions, completion readiness, and next actions must sound meaningfully different because they answer different questions.
 - For a one-line follow-up such as "Why?", "What does it unlock?", or "What happens after that?", answer the remembered subject directly instead of restarting the project analysis.
+- When the user asks for another way, another approach, or another method without changing the priority, preserve the exact recommendation and deliverable. Change only the method used to reach it.
+- An alternate method may reorder supported work, work backward from the same result, or use a different supported comparison. It may not add testers, surveys, committees, approvals, launch events, research programs, mission statements, or replacement artifacts unless those already exist in the grounded judgment.
+- Focused rationale answers must state the actual reason first. What the work unlocks may follow, but it cannot replace the rationale.
 - Preserve every project-specific decision and recommendation.
 - Preserve named products, milestones, materials, tradeoffs, dependencies, and risks.
+- When materialGrounding.hasRelevantMaterials is true, use only its selected materials for evidence in this answer.
+- Treat materialGrounding.facts as source-grounded statements and selectedMaterials[].interpretation as ALLEVIN interpretation.
+- If materialGrounding.contradictions is non-empty, name the disagreement and say what must be confirmed. Do not quietly choose one source.
+- Do not add a visible Used line; AIDock appends that compact grounding line after the response.
 - Explain why the recommendation matters and what it unlocks next.
 - Use natural ChatGPT-style paragraphs and transitions.
 - Be decisive when the evidence supports a decision.
@@ -13531,7 +14460,7 @@ Requirements:
             projectStage: packet.currentProject.currentState || understanding.momentum,
             currentLocation: packet.currentProject.location || "Projects",
             priority: focusMode === "deep" ? "high" : "medium",
-            maxWords: 520,
+            maxWords: responseModeProfile.maxWords,
          });
 
          if (!response.ok || response.usedFallback) {
@@ -13540,7 +14469,8 @@ Requirements:
 
          const candidate = cleanFinalAIDockResponse(stripRoboticResponseLabels(sanitizeAssistantOutput(response.focus || response.summary || response.usefulContext || response.nextStep)));
 
-         return preservesSeniorProjectLeadJudgment(prompt, guidance, groundedResponse, candidate) ? candidate : groundedResponse;
+         const preservedResponse = preservesSeniorProjectLeadJudgment(prompt, guidance, groundedResponse, candidate) ? candidate : groundedResponse;
+         return appendAIDockMaterialGroundingLine(preservedResponse, responseJudgment.materialGrounding, responseMode);
       } catch {
          return groundedResponse;
       }
@@ -13574,6 +14504,8 @@ Requirements:
          return getNaturalConversationFallback(prompt);
       }
 
+      const responseModeProfile = getCurrentAIDockResponseModeProfile();
+
       try {
          const context = getLightLLMSourceContext();
 
@@ -13586,6 +14518,8 @@ Requirements:
             nextStep: getSafeRecommendedNextAction(),
             rawContent: buildCleanContinuationBody(),
             contextPacket: buildAllevinInternalContextPacket(prompt),
+            responseMode: responseModeProfile.mode,
+            responseStyle: responseModeProfile.responseStyle,
             userInstruction: `
 Rewrite the provided ALLEVIN response into natural human language. If this is a general knowledge answer, preserve the explanation and do not force project context unless it is useful.
 
@@ -13609,11 +14543,12 @@ Rules:
 - User prompt: ${prompt}
 - Base response to preserve: ${cleanBase}
 ${getCognitionPromptInstruction()}
+- Active MK X response mode: ${responseModeProfile.label}. ${responseModeProfile.deliveryRule}
             `.trim(),
             projectStage: context.stageLabel,
             currentLocation: context.locationLabel,
             priority: focusMode === "deep" ? "high" : "medium",
-            maxWords: 120,
+            maxWords: Math.min(responseModeProfile.maxWords, 180),
          });
 
          if (!response.ok && response.usedFallback) {
@@ -13633,6 +14568,8 @@ ${getCognitionPromptInstruction()}
    }
 
    async function generateGeneralKnowledgeAnswer(prompt: string) {
+      const responseModeProfile = getCurrentAIDockResponseModeProfile();
+
       try {
          const response = await requestAllevinLLM({
             mode: "aidock-guidance",
@@ -13643,10 +14580,13 @@ ${getCognitionPromptInstruction()}
             nextStep: "",
             rawContent: "",
             contextPacket: buildGeneralKnowledgeContextPacket(prompt),
+            responseMode: responseModeProfile.mode,
+            responseStyle: responseModeProfile.responseStyle,
             userInstruction: `
 User question: ${prompt}
 
-Use ALLEVIN MK IX style, but treat this as a general knowledge answer, not project guidance.
+Use ALLEVIN MK X style, but treat this as a general knowledge answer, not project guidance.
+Active response mode: ${responseModeProfile.label}. ${responseModeProfile.deliveryRule}
 
 Rules:
 - Answer the question directly.
@@ -13663,7 +14603,18 @@ Rules:
             projectStage: "general-knowledge",
             currentLocation: "AIDock",
             priority: focusMode === "deep" ? "high" : "medium",
-            maxWords: looksLikeRecommendationQuestion(prompt) ? 140 : looksLikeCreativeGuidanceQuestion(prompt) ? 120 : 80,
+            maxWords:
+               responseModeProfile.mode === "focused"
+                  ? looksLikeRecommendationQuestion(prompt)
+                     ? 90
+                     : 70
+                  : responseModeProfile.mode === "creative" && looksLikeCreativeGuidanceQuestion(prompt)
+                    ? 180
+                    : looksLikeRecommendationQuestion(prompt)
+                      ? 140
+                      : looksLikeCreativeGuidanceQuestion(prompt)
+                        ? 120
+                        : 80,
          });
 
          const candidate = cleanFinalAIDockResponse(stripRoboticResponseLabels(compactText(response.focus || response.summary || response.nextStep)));
@@ -13713,6 +14664,7 @@ Rules:
       }
 
       const context = getLightLLMSourceContext();
+      const responseModeProfile = getCurrentAIDockResponseModeProfile();
 
       const response = await requestAllevinLLM({
          mode: "aidock-guidance",
@@ -13723,11 +14675,13 @@ Rules:
          nextStep: context.nextStep,
          rawContent: buildCleanContinuationBody(),
          contextPacket: buildAllevinInternalContextPacket(prompt),
-         userInstruction: `${prompt}\n\nUse ALLEVIN MK IX natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, clear, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, including project materials when relevant, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. Because beta feedback showed the AI can feel unnecessary when it sounds generic, prioritize concrete guidance tied to the active project, Canvas text, calendar, and project materials. For event-planning projects, reason from the saved objective, attendees, timing, resources, dependencies, responsibilities, and execution flow. Do not invent event details that are not in the project. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Use natural ChatGPT-style depth. Keep simple answers brief, but allow several paragraphs when the user asks for explanation, analysis, writing, comparison, project strategy, or material interpretation.`,
+         responseMode: responseModeProfile.mode,
+         responseStyle: responseModeProfile.responseStyle,
+         userInstruction: `${prompt}\n\nUse ALLEVIN MK X natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, clear, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, including project materials when relevant, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. Active response mode: ${responseModeProfile.label}. ${responseModeProfile.deliveryRule} Because beta feedback showed the AI can feel unnecessary when it sounds generic, prioritize concrete guidance tied to the active project, Canvas text, calendar, and project materials. For event-planning projects, reason from the saved objective, attendees, timing, resources, dependencies, responsibilities, and execution flow. Do not invent event details that are not in the project. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Use natural ChatGPT-style depth. Keep simple answers brief, but allow several paragraphs when the user asks for explanation, analysis, writing, comparison, project strategy, or material interpretation.`,
          projectStage: context.stageLabel,
          currentLocation: context.locationLabel,
          priority: focusMode === "deep" ? "high" : "medium",
-         maxWords: 180,
+         maxWords: responseModeProfile.maxWords,
       });
 
       if (!response.ok && response.usedFallback) {
@@ -13808,7 +14762,10 @@ Rules:
       function refreshAfterProjectDelete(event?: Event) {
          rememberDeletedProjectFromEvent(event);
 
+         const customEvent = event as CustomEvent<Partial<TimelineEvent> & { title?: string; sourceTitle?: string }>;
+         deleteAIDockConversationThread(customEvent?.detail?.sourceTitle || customEvent?.detail?.title);
          scheduleThreadRefresh(0);
+         syncConversationToActiveProject();
       }
 
       window.addEventListener("allevin-memory-update", refreshActiveThread);
@@ -14160,11 +15117,11 @@ Rules:
 
       if (/\b(canvas|writing space|drafting space|work surface)\b/.test(lower)) {
          return {
-            moduleId: "integrations",
+            moduleId: "canvas",
             targetId: "work-area",
             targetView: "focus",
             label: "Canvas",
-            message: "Projects opened. Your main work surface is ready.",
+            message: "Canvas opened. Your current work is ready.",
          };
       }
 
@@ -14633,53 +15590,17 @@ ${getSafeRecommendedNextAction()}
       {
          mode: "balanced",
          label: "Balanced",
-         description: "Clear, helpful, and not too much.",
+         description: "Natural, well-rounded guidance with enough context to trust the next move.",
       },
       {
          mode: "deep-work",
          label: "Focused",
-         description: "Shorter answers with direct next steps.",
+         description: "The direct answer first, with only the context needed to act.",
       },
       {
          mode: "creative",
          label: "Creative",
-         description: "More idea-friendly and exploratory.",
-      },
-   ];
-
-   // ========================================
-   // Quick Actions
-   // ========================================
-
-   const quickActions = [
-      {
-         label: "Canvas",
-
-         description: "Write",
-
-         icon: NotebookPen,
-
-         action: () => openProductModule("canvas", "work-area", "focus", "Opening Canvas.", "canvas"),
-      },
-
-      {
-         label: "Projects",
-
-         description: "Track",
-
-         icon: FolderKanban,
-
-         action: () => openProductModule("integrations", "work-area", "integrations", "Opening Projects.", "integrations"),
-      },
-
-      {
-         label: "Calendar",
-
-         description: "Plan",
-
-         icon: CalendarDays,
-
-         action: () => openProductModule("calendar", "work-area", "workspace", "Opening Calendar.", "calendar"),
+         description: "Explores grounded approaches without changing facts or inventing project details.",
       },
    ];
 
@@ -15040,45 +15961,63 @@ Try one of these:
    // AI Response Generator
    // ========================================
 
-   function approvePendingDirectCalendarEvent() {
-      if (!pendingDirectCalendarEvent) {
-         return "No calendar event is waiting for approval.";
+   function approvePendingCalendarAction() {
+      const pending = pendingCalendarActionRef.current;
+
+      if (!pending) {
+         return "No Calendar change is waiting for approval.";
       }
 
-      const event = pendingDirectCalendarEvent;
+      updatePendingCalendarActionState(null);
 
-      // Clear first so repeated renders/rapid approvals cannot reuse the same pending event.
-      setPendingDirectCalendarEvent(null);
+      if (pending.action === "create") {
+         if (wasDirectCalendarEventRecentlyApproved(pending.event)) {
+            openProductModule("calendar", "work-area", "workspace", "");
+            return `That project session was already approved. I opened Calendar.\n\n${getDirectCalendarEventPreview(pending.event)}`;
+         }
 
-      if (wasDirectCalendarEventRecentlyApproved(event)) {
+         markDirectCalendarEventApproved(pending.event);
+         const saved = saveDirectCalendarEvent(pending.event);
          openProductModule("calendar", "work-area", "workspace", "");
 
-         return `Calendar event was already approved. I opened Calendar.\n\n${getDirectCalendarEventPreview(event)}`;
+         if (!saved) {
+            return `That project session is already on your Calendar. I opened Calendar.\n\n${getDirectCalendarEventPreview(pending.event)}`;
+         }
+
+         return `Project session approved. I opened Calendar.\n\n${getDirectCalendarEventPreview(pending.event)}`;
       }
 
-      markDirectCalendarEventApproved(event);
+      if (pending.action === "reschedule") {
+         const updated = updateDirectCalendarEvent(pending.previousEvent, pending.event);
+         openProductModule("calendar", "work-area", "workspace", "");
 
-      const saved = saveDirectCalendarEvent(event);
+         return updated ? `Calendar change approved. I moved the project session.\n\n${getDirectCalendarEventPreview(pending.event)}` : "I could not find the original local Calendar session, so nothing was changed.";
+      }
 
+      const deleted = deleteDirectCalendarEvent(pending.previousEvent);
       openProductModule("calendar", "work-area", "workspace", "");
 
-      if (!saved) {
-         return `Calendar event was already on your calendar. I opened Calendar.\n\n${getDirectCalendarEventPreview(event)}`;
-      }
-
-      return `Calendar event approved. I opened Calendar.\n\n${getDirectCalendarEventPreview(event)}`;
+      return deleted ? `Calendar removal approved. I removed ${pending.previousEvent.title}.` : "I could not find that local Calendar session, so nothing was removed.";
    }
 
-   function cancelPendingDirectCalendarEvent() {
-      if (!pendingDirectCalendarEvent) {
-         return "No calendar event is waiting for approval.";
+   function cancelPendingCalendarAction() {
+      const pending = pendingCalendarActionRef.current;
+
+      if (!pending) {
+         return "No Calendar change is waiting for approval.";
       }
 
-      const title = pendingDirectCalendarEvent.title;
+      updatePendingCalendarActionState(null);
 
-      setPendingDirectCalendarEvent(null);
+      if (pending.action === "create") {
+         return `Calendar preview canceled. Nothing was added for ${pending.event.title}.`;
+      }
 
-      return `Calendar event canceled. Nothing was added for ${title}.`;
+      if (pending.action === "reschedule") {
+         return `Calendar change canceled. ${pending.previousEvent.title} stays at ${getCalendarEventTimeRangeLabel(pending.previousEvent)}.`;
+      }
+
+      return `Calendar removal canceled. ${pending.previousEvent.title} stays on your Calendar.`;
    }
 
    function approvePendingInternalIntegration() {
@@ -15199,7 +16138,7 @@ Try one of these:
 
          const confidenceLabel = understanding.confidence >= 80 ? "High" : understanding.confidence >= 55 ? "Moderate" : understanding.confidence > 0 ? "Developing" : "Unknown";
 
-         return `MK IX Project Understanding is online.
+         return `MK X Shared Response Authority is online.
 
 Project: ${packet.currentProject.title || "None"}
 Location: ${packet.currentProject.location}
@@ -15522,7 +16461,7 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
    // ========================================
 
    async function handleSend() {
-      const currentInput = sanitizePlainText(input, SANITIZE_LIMITS.aidockMessage);
+      const currentInput = sanitizePlainText(inputRef.current?.value || "", SANITIZE_LIMITS.aidockMessage);
 
       if (!currentInput) {
          return;
@@ -15564,7 +16503,9 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
       // Cognition only changes ALLEVIN's response style.
       void refreshEnvironment;
 
-      setInput("");
+      if (inputRef.current) {
+         inputRef.current.value = "";
+      }
 
       setChatOpen(true);
 
@@ -15702,20 +16643,28 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
 ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. ${criterion}`).join("\n")}`,
               );
 
-         projectConversationRef.current = {
+         const milestoneThread = isAIDockConversationThreadForProject(projectConversationRef.current, milestoneCompletion.projectTitle) ? projectConversationRef.current : readAIDockConversationThread(milestoneCompletion.projectTitle);
+         const promptAwareMilestoneThread = recordAIDockConversationUserPrompt(milestoneThread, currentInput);
+         const milestoneSubject: ProjectGuidanceSubject = {
+            kind: "milestone",
+            title: milestoneCompletion.completed && milestoneCompletion.nextTitle ? milestoneCompletion.nextTitle : milestoneCompletion.completedTitle,
+            detail: milestoneCompletion.completed ? "active after completion" : "still has unchecked completion criteria",
+         };
+
+         projectConversationRef.current = writeAIDockConversationThread({
+            ...promptAwareMilestoneThread,
             projectTitle: milestoneCompletion.projectTitle,
             lastIntent: "milestone-completion",
             lastUserPrompt: sanitizeLongText(currentInput, 8000),
             lastAssistantResponse: responseContent,
             lastRecommendation: milestoneCompletion.completed ? milestoneCompletion.nextTitle : milestoneCompletion.completedTitle,
-            lastMilestoneTitle: milestoneCompletion.completed && milestoneCompletion.nextTitle ? milestoneCompletion.nextTitle : milestoneCompletion.completedTitle,
-            lastSubject: {
-               kind: "milestone",
-               title: milestoneCompletion.completed && milestoneCompletion.nextTitle ? milestoneCompletion.nextTitle : milestoneCompletion.completedTitle,
-               detail: milestoneCompletion.completed ? "active after completion" : "still has unchecked completion criteria",
-            },
+            lastMilestoneTitle: milestoneSubject.title,
+            lastSubject: milestoneSubject,
+            currentTopic: milestoneSubject.title,
+            activeReference: milestoneSubject.title,
+            responseMode: normalizeAIDockResponseMode(getActiveCognitionResponseMode()),
             updatedAt: Date.now(),
-         };
+         });
 
          setProjectContextRevision((revision) => revision + 1);
          setMessages((prev) => [...prev, { role: "assistant" as const, content: responseContent }]);
@@ -15734,6 +16683,126 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
             },
          ]);
 
+         return;
+      }
+
+      // ALLEVIN MK X Build 6 — Calendar actions resolve before general chat.
+      // A preview may be approved, revised, or canceled, but never applied
+      // silently. Project and milestone context stay attached to the pending
+      // action while the user decides. The ref is authoritative so a short
+      // confirmation cannot fall through during a dock rerender or module move.
+      const activePendingCalendarAction = pendingCalendarActionRef.current;
+
+      if (activePendingCalendarAction && looksLikeCancelPendingCalendarChange(currentInput)) {
+         const responseContent = cleanFinalAIDockResponse(cancelPendingCalendarAction());
+
+         setMessages((prev) => [...prev, { role: "assistant" as const, content: responseContent }]);
+         refreshThreadSoon();
+         return;
+      }
+
+      if (activePendingCalendarAction && looksLikeApprovalYes(currentInput)) {
+         const responseContent = cleanFinalAIDockResponse(approvePendingCalendarAction());
+
+         setMessages((prev) => [...prev, { role: "assistant" as const, content: responseContent }]);
+         refreshThreadSoon();
+         return;
+      }
+
+      if (activePendingCalendarAction && looksLikeApprovalNo(currentInput)) {
+         const responseContent = cleanFinalAIDockResponse(cancelPendingCalendarAction());
+
+         setMessages((prev) => [...prev, { role: "assistant" as const, content: responseContent }]);
+         refreshThreadSoon();
+         return;
+      }
+
+      if (activePendingCalendarAction?.action === "create" && looksLikeCalendarDeleteRequest(currentInput)) {
+         const responseContent = cleanFinalAIDockResponse(cancelPendingCalendarAction());
+
+         setMessages((prev) => [...prev, { role: "assistant" as const, content: responseContent }]);
+         refreshThreadSoon();
+         return;
+      }
+
+      if (activePendingCalendarAction && looksLikeCalendarRescheduleRequest(currentInput)) {
+         const calendarPacket = buildAllevinInternalContextPacket(currentInput).calendar.intelligence;
+         const revised = revisePendingCalendarAction(activePendingCalendarAction, currentInput, calendarPacket);
+
+         if (!revised) {
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content: "I could not read the revised day or time, so the existing Calendar preview is still waiting unchanged.",
+               },
+            ]);
+            return;
+         }
+
+         updatePendingCalendarActionState(revised);
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: cleanFinalAIDockResponse(buildCalmApprovalReminder(buildPendingCalendarActionPreview(revised))),
+            },
+         ]);
+         refreshThreadSoon();
+         return;
+      }
+
+      if (!activePendingCalendarAction && looksLikeCalendarRescheduleRequest(currentInput)) {
+         const calendarPacket = buildAllevinInternalContextPacket(currentInput).calendar.intelligence;
+         const action = prepareExistingCalendarAction("reschedule", currentInput, calendarPacket);
+
+         if (!action) {
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content: `I do not see an editable local ${calendarPacket.projectTitle || "project"} session to move. Nothing was changed.`,
+               },
+            ]);
+            return;
+         }
+
+         updatePendingCalendarActionState(action);
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: cleanFinalAIDockResponse(buildCalmApprovalReminder(buildPendingCalendarActionPreview(action))),
+            },
+         ]);
+         refreshThreadSoon();
+         return;
+      }
+
+      if (!activePendingCalendarAction && looksLikeCalendarDeleteRequest(currentInput)) {
+         const calendarPacket = buildAllevinInternalContextPacket(currentInput).calendar.intelligence;
+         const action = prepareExistingCalendarAction("delete", currentInput, calendarPacket);
+
+         if (!action) {
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content: `I do not see an editable local ${calendarPacket.projectTitle || "project"} session to remove. Nothing was changed.`,
+               },
+            ]);
+            return;
+         }
+
+         updatePendingCalendarActionState(action);
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: cleanFinalAIDockResponse(buildCalmApprovalReminder(buildPendingCalendarActionPreview(action))),
+            },
+         ]);
+         refreshThreadSoon();
          return;
       }
 
@@ -15762,42 +16831,6 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
          recommendedActionResponse = null;
 
          commandResponse = null;
-      }
-
-      if (pendingDirectCalendarEvent && looksLikeApprovalYes(currentInput)) {
-         const responseContent = cleanFinalAIDockResponse(approvePendingDirectCalendarEvent());
-
-         setMessages((prev) => [
-            ...prev,
-
-            {
-               role: "assistant" as const,
-
-               content: responseContent,
-            },
-         ]);
-
-         refreshThreadSoon();
-
-         return;
-      }
-
-      if (pendingDirectCalendarEvent && looksLikeApprovalNo(currentInput)) {
-         const responseContent = cleanFinalAIDockResponse(cancelPendingDirectCalendarEvent());
-
-         setMessages((prev) => [
-            ...prev,
-
-            {
-               role: "assistant" as const,
-
-               content: responseContent,
-            },
-         ]);
-
-         refreshThreadSoon();
-
-         return;
       }
 
       if (pendingInternalIntegration && looksLikeApprovalYes(currentInput)) {
@@ -15897,13 +16930,17 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
             localImprovementResponse = "";
          }
 
-         const safeImprovementResponse =
+         const improvementGrounding = buildAllevinInternalContextPacket(currentInput).materialGrounding;
+         const safeImprovementResponse = appendAIDockMaterialGroundingLine(
             cleanFinalAIDockResponse(
                withTypoAwareResponse(
                   currentInput,
                   localImprovementResponse || "I found the selected reference, but the improvement pass hit an issue. The reference is still available, so the safest next move is to compare its main feedback against the current feature you are building.",
                ),
-            ) || "I found the selected reference. Compare its main feedback against the current feature you are building and use that as the improvement target.";
+            ) || "I found the selected reference. Compare its main feedback against the current feature you are building and use that as the improvement target.",
+            improvementGrounding,
+            normalizeAIDockResponseMode(getActiveCognitionResponseMode()),
+         );
 
          setMessages((prev) => [
             ...prev,
@@ -15934,7 +16971,12 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                },
             ]);
          } catch {
-            const fallbackResponse = cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, buildProjectMaterialsReadbackResponse(currentInput)));
+            const fallbackGrounding = buildAllevinInternalContextPacket(currentInput).materialGrounding;
+            const fallbackResponse = appendAIDockMaterialGroundingLine(
+               cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, buildProjectMaterialsReadbackResponse(currentInput))),
+               fallbackGrounding,
+               normalizeAIDockResponseMode(getActiveCognitionResponseMode()),
+            );
 
             setMessages((prev) => [
                ...prev,
@@ -15954,7 +16996,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
 
       // MK IX Project Awareness:
       // Material-backed focus questions use the unified project + selected-material path.
-      if (looksLikeProjectFocusQuestion(currentInput) && getActiveProjectMaterialsForAIDock().length > 0 && !looksLikeDirectCalendarScheduleRequest(currentInput)) {
+      if (looksLikeProjectFocusQuestion(currentInput) && getActiveProjectMaterialsForAIDock().length > 0 && !looksLikeDirectCalendarScheduleRequest(currentInput) && !looksLikeCalendarScheduleQuestion(currentInput)) {
          setLlmBusy(true);
 
          try {
@@ -15970,7 +17012,12 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                },
             ]);
          } catch {
-            const fallbackResponse = cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, buildProjectMaterialsReadbackResponse(currentInput)));
+            const fallbackGrounding = buildAllevinInternalContextPacket(currentInput).materialGrounding;
+            const fallbackResponse = appendAIDockMaterialGroundingLine(
+               cleanFinalAIDockResponse(withTypoAwareResponse(currentInput, buildProjectMaterialsReadbackResponse(currentInput))),
+               fallbackGrounding,
+               normalizeAIDockResponseMode(getActiveCognitionResponseMode()),
+            );
 
             setMessages((prev) => [
                ...prev,
@@ -15989,38 +17036,39 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
       }
 
       if (looksLikeDirectCalendarScheduleRequest(currentInput)) {
-         const event = parseDirectCalendarScheduleRequest(currentInput);
+         const calendarPacket = buildAllevinInternalContextPacket(currentInput).calendar.intelligence;
+         const event = parseDirectCalendarScheduleRequest(currentInput, calendarPacket);
 
          if (!event) {
             setMessages((prev) => [
                ...prev,
-
                {
                   role: "assistant" as const,
-
-                  content: "I can schedule that, but I need the title, day, and time window. Try: Schedule “Start on script” June 25 from 9:00am to 9:30am, or Schedule “Start on script” tomorrow from 9:00am to 9:30am.",
+                  content: "I can prepare that session, but I need a day and start time. Try: Schedule the next step tomorrow at 6 PM, or Schedule a 45-minute project session Thursday at 6 PM.",
                },
             ]);
 
             refreshThreadSoon();
-
             return;
          }
 
-         setPendingDirectCalendarEvent(event);
+         const action: PendingCalendarAction = {
+            id: crypto.randomUUID(),
+            action: "create",
+            event,
+         };
+
+         updatePendingCalendarActionState(action);
 
          setMessages((prev) => [
             ...prev,
-
             {
                role: "assistant" as const,
-
                content: cleanFinalAIDockResponse(buildCalmApprovalReminder(buildDirectCalendarScheduleApprovalResponse(event))),
             },
          ]);
 
          refreshThreadSoon();
-
          return;
       }
 
@@ -16522,7 +17570,10 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
    // The Dock title must come from the same authoritative project packet used
    // for project guidance. Thread memory may describe earlier work and must
    // never visually override the project explicitly selected in Projects.
-   const visibleActiveProjectTitle = compactText(buildAllevinInternalContextPacket().currentProject.title) || getSafeThreadTitle();
+   // Keep render-time project title lookup lightweight. Building the complete
+   // project-intelligence and material-grounding packet on every keystroke made
+   // the controlled textarea feel delayed after Build 5.
+   const visibleActiveProjectTitle = compactText(getSelectedLiveProjectLibraryItem()?.title || getSourceAwareTitle()) || getSafeThreadTitle();
 
    // ========================================
    // Render
@@ -16630,7 +17681,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                   </div>
 
                   <div className="text-left">
-                     <p className="text-sm font-semibold">ALLEVIN MK IX</p>
+                     <p className="text-sm font-semibold">ALLEVIN MK X</p>
 
                      <p className="max-w-[180px] truncate text-sm text-[var(--color-text-secondary)] sm:max-w-[220px]">{visibleActiveProjectTitle}</p>
                   </div>
@@ -16726,7 +17777,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                            </div>
 
                            <div className="min-w-0">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN MK IX</p>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN MK X</p>
 
                               <h2 data-editorial-title="true" className="mt-1 truncate text-xl leading-tight">
                                  {visibleActiveProjectTitle}
@@ -16816,104 +17867,10 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                   </div>
 
                   <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                     {/* Quick Access */}
-
-                     <div className="border-b border-[var(--border-subtle)] bg-transparent px-4 py-3 sm:px-5 sm:py-4">
-                        <button
-                           onClick={() => setQuickAccessOpen((current) => !current)}
-                           className="
-                              flex
-                              w-full
-                              items-center
-                              justify-between
-                              gap-3
-                              px-1
-                              py-2
-                              text-left
-                              transition-colors
-                              hover:text-[var(--color-primary)]
-                           "
-                        >
-                           <div>
-                              <p className="text-sm font-medium">Quick access</p>
-
-                              <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Move between the main work areas.</p>
-                           </div>
-
-                           <ChevronDown
-                              size={16}
-                              className={`
-                                 shrink-0
-                                 transition-transform
-                                 duration-200
-
-                                 ${quickAccessOpen ? "rotate-180" : ""}
-                              `}
-                           />
-                        </button>
-
-                        <AnimatePresence initial={false}>
-                           {quickAccessOpen && (
-                              <motion.div
-                                 initial={{
-                                    opacity: 0,
-                                    height: 0,
-                                 }}
-                                 animate={{
-                                    opacity: 1,
-                                    height: "auto",
-                                 }}
-                                 exit={{
-                                    opacity: 0,
-                                    height: 0,
-                                 }}
-                                 transition={{
-                                    duration: 0.2,
-                                 }}
-                                 className="overflow-hidden"
-                              >
-                                 <div className="grid grid-cols-2 gap-2 pt-3 sm:grid-cols-4">
-                                    {quickActions.map((action) => {
-                                       const Icon = action.icon;
-
-                                       return (
-                                          <button
-                                             key={action.label}
-                                             onClick={action.action}
-                                             className="
-                                                flex
-                                                min-h-[54px]
-                                                flex-col
-                                                items-center
-                                                justify-center
-                                                gap-1.5
-                                                rounded-[var(--radius-md)]
-                                                border
-                                                border-[var(--border-subtle)]
-                                                bg-[var(--color-surface)]
-                                                px-2
-                                                py-2
-                                                text-center
-                                                transition-colors
-                                                hover:bg-[var(--color-surface-blue)]
-                                             "
-                                          >
-                                             <Icon size={15} className="text-[var(--color-primary)]" />
-
-                                             <p className="truncate text-[11px] font-medium">{action.label}</p>
-                                          </button>
-                                       );
-                                    })}
-                                 </div>
-                              </motion.div>
-                           )}
-                        </AnimatePresence>
-                     </div>
-
                      {/* Chat */}
 
                      <div className="px-4 py-4 sm:px-5 sm:py-5">
-                        <div className="max-h-[min(360px,calc(100dvh-24rem))] space-y-3 overflow-y-auto scroll-smooth pr-1 sm:max-h-[430px] sm:space-y-4">
+                        <div className="max-h-[min(440px,calc(100dvh-19rem))] space-y-3 overflow-y-auto scroll-smooth pr-1 sm:max-h-[520px] sm:space-y-4">
                            {visibleMessages.map((message, index) => (
                               <motion.div
                                  key={index}
@@ -16984,16 +17941,17 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                   >
                      <div className="flex items-end gap-2 sm:gap-3">
                         <textarea
-                           value={input}
+                           ref={inputRef}
+                           defaultValue=""
+                           maxLength={SANITIZE_LIMITS.aidockMessage}
                            disabled={llmBusy}
-                           onChange={(e) => setInput(sanitizeLiveAIDockInput(e.target.value))}
                            onFocus={() => {
                               setExpanded(true);
 
                               setChatOpen(true);
                            }}
                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && !e.shiftKey) {
+                              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                                  e.preventDefault();
 
                                  if (!llmBusy) {

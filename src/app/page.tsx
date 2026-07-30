@@ -27,10 +27,10 @@ import { getAllevinDisplayName, hasAllevinUserProfile, saveAllevinUserProfile, r
 import { getActiveProjectAwareness } from "@/components/MemoryEngine";
 
 // ========================================
-// ALLEVIN MK VIII Product Shell
+// ALLEVIN MK X Product Shell
 // Purpose:
 // Beginner-friendly project workspace layout.
-// MK VIII keeps the product centered on three ideas:
+// MK X keeps the product centered on three ideas:
 // Projects hold the work and materials, Calendar protects time,
 // and the Dock helps each project reach its finished outcome.
 // ========================================
@@ -111,6 +111,8 @@ const PROJECT_MEMORY_STORAGE_KEY = "allevin-mkii-project-memory";
 const LEGACY_PROJECT_MEMORY_STORAGE_KEY = "allevin-project-memory";
 
 const CALENDAR_EVENTS_STORAGE_KEY = "allevin-calendar-events-mki";
+
+const ACTIVE_PROJECT_SELECTION_STORAGE_KEY = "allevin-active-project-selection-mkviii";
 
 // ========================================
 // MK VIII — Page Shell Sanitization
@@ -227,21 +229,77 @@ function getHomeDateLabel(timestamp?: number) {
    });
 }
 
+interface HomeCalendarEvent {
+   title?: string;
+   startTime?: number;
+   endTime?: number;
+   allDay?: boolean;
+   repeat?: string;
+   sourceTitle?: string;
+   workflowId?: string;
+   originProjectsItemId?: string;
+   description?: string;
+   workingSummary?: string;
+   recommendedNextAction?: string;
+}
+
+interface HomeProjectIdentity {
+   id?: string;
+   title?: string;
+   workflowId?: string;
+   originBoardItemId?: string;
+}
+
+function getHomeProjectIdentityTokens(project?: HomeProjectIdentity | null) {
+   return new Set([project?.id, project?.workflowId, project?.originBoardItemId].map((value) => compactText(value)).filter(Boolean));
+}
+
+function calendarEventMatchesHomeProject(event: HomeCalendarEvent, project?: HomeProjectIdentity | null) {
+   if (!project?.title && !project?.id && !project?.workflowId && !project?.originBoardItemId) {
+      return false;
+   }
+
+   const projectTitleKey = normalizeHomeProjectTitle(project.title);
+   const eventTitleKey = normalizeHomeProjectTitle(event.title);
+   const sourceTitleKey = normalizeHomeProjectTitle(event.sourceTitle);
+   const projectTokens = getHomeProjectIdentityTokens(project);
+   const eventTokens = [event.workflowId, event.originProjectsItemId].map((value) => compactText(value)).filter(Boolean);
+
+   if (eventTokens.some((token) => projectTokens.has(token))) {
+      return true;
+   }
+
+   if (projectTitleKey && sourceTitleKey === projectTitleKey) {
+      return true;
+   }
+
+   return Boolean(projectTitleKey && (eventTitleKey === projectTitleKey || eventTitleKey.startsWith(`${projectTitleKey}-`)));
+}
+
+function formatHomeCalendarEvent(event: HomeCalendarEvent, prefix = "Next up") {
+   const title = compactText(event.title) || "Calendar event";
+   const repeatText = event.repeat && event.repeat !== "none" ? ", repeats" : "";
+   const todayStart = getStartOfTodayForHome();
+   const todayEnd = getEndOfTodayForHome();
+   const isToday = Number(event.startTime) <= todayEnd && Number(event.endTime) >= todayStart;
+
+   if (isToday) {
+      const timeText = event.allDay ? "all day" : getHomeTimeLabel(event.startTime);
+      return sanitizeCalendarGlanceText(`${title} is on your calendar today at ${timeText}${repeatText}.`);
+   }
+
+   const dateText = getHomeDateLabel(event.startTime);
+   const timeText = event.allDay ? "all day" : getHomeTimeLabel(event.startTime);
+
+   return sanitizeCalendarGlanceText(`${prefix}: ${title} on ${dateText} at ${timeText}${repeatText}.`);
+}
+
 function getHomeCalendarGlance() {
    if (typeof window === "undefined") {
       return "Calendar shows events, deadlines, and focused work blocks after you add them.";
    }
 
-   const events = safeParseStorage<
-      Array<{
-         title?: string;
-         startTime?: number;
-         endTime?: number;
-         allDay?: boolean;
-         repeat?: string;
-      }>
-   >(CALENDAR_EVENTS_STORAGE_KEY, []);
-
+   const events = safeParseStorage<HomeCalendarEvent[]>(CALENDAR_EVENTS_STORAGE_KEY, []);
    const now = Date.now();
 
    const cleanEvents = events
@@ -249,6 +307,9 @@ function getHomeCalendarGlance() {
       .map((event) => ({
          ...event,
          title: sanitizePageTitle(event.title),
+         sourceTitle: sanitizePageTitle(event.sourceTitle),
+         workflowId: compactText(event.workflowId),
+         originProjectsItemId: compactText(event.originProjectsItemId),
       }))
       .sort((a, b) => Number(a.startTime || 0) - Number(b.startTime || 0));
 
@@ -256,29 +317,19 @@ function getHomeCalendarGlance() {
       return "No events scheduled yet. Add one in Calendar when work needs protected time.";
    }
 
-   const todayStart = getStartOfTodayForHome();
+   const activeProject = getSelectedProjectLibraryItemForHome();
+   const activeProjectEvents = activeProject ? cleanEvents.filter((event) => calendarEventMatchesHomeProject(event, activeProject)) : [];
 
-   const todayEnd = getEndOfTodayForHome();
-
-   const todayEvents = cleanEvents.filter((event) => Number(event.startTime) <= todayEnd && Number(event.endTime) >= todayStart);
-
-   const targetEvent = todayEvents[0] || cleanEvents[0];
-
-   const title = compactText(targetEvent.title) || "Calendar event";
-
-   const repeatText = targetEvent.repeat && targetEvent.repeat !== "none" ? ", repeats" : "";
-
-   if (todayEvents.length) {
-      const timeText = targetEvent.allDay ? "all day" : getHomeTimeLabel(targetEvent.startTime);
-
-      return sanitizeCalendarGlanceText(`${title} is on your calendar today at ${timeText}${repeatText}.`);
+   if (activeProjectEvents.length) {
+      return formatHomeCalendarEvent(activeProjectEvents[0]);
    }
 
-   const dateText = getHomeDateLabel(targetEvent.startTime);
+   if (activeProject?.title) {
+      const nextEvent = formatHomeCalendarEvent(cleanEvents[0], "Next on your calendar");
+      return sanitizeCalendarGlanceText(`No upcoming ${sanitizePageTitle(activeProject.title)} session is scheduled. ${nextEvent}`);
+   }
 
-   const timeText = targetEvent.allDay ? "all day" : getHomeTimeLabel(targetEvent.startTime);
-
-   return sanitizeCalendarGlanceText(`Next up: ${title} on ${dateText} at ${timeText}${repeatText}.`);
+   return formatHomeCalendarEvent(cleanEvents[0]);
 }
 
 function getGeneratedHomeGreeting() {
@@ -321,21 +372,83 @@ function normalizeHomeProjectTitle(value?: string) {
       .replace(/^-+|-+$/g, "");
 }
 
-function getLatestProjectLibraryItemForHome() {
-   const projectLibrary = safeParseStorage<
-      Array<{
-         id?: string;
-         title?: string;
-         latestSummary?: string;
-         workflowId?: string;
-         originBoardItemId?: string;
-         notes?: Array<{ body?: string; summary?: string; savedAt?: number }>;
-         updatedAt?: number;
-         createdAt?: number;
-      }>
-   >(PROJECT_LIBRARY_STORAGE_KEY, []);
+interface HomeProjectLibraryItem {
+   id?: string;
+   title?: string;
+   latestSummary?: string;
+   workflowId?: string;
+   originBoardItemId?: string;
+   notes?: Array<{ body?: string; summary?: string; savedAt?: number }>;
+   updatedAt?: number;
+   createdAt?: number;
+}
 
-   return [...projectLibrary].filter((project) => compactText(project.title)).sort((a, b) => getProjectUpdatedAtForHome(b) - getProjectUpdatedAtForHome(a))[0];
+interface HomeActiveProjectSelection {
+   projectId: string;
+   title: string;
+}
+
+function readProjectLibraryForHome() {
+   const parsed = safeParseStorage<HomeProjectLibraryItem[] | { items?: HomeProjectLibraryItem[] }>(PROJECT_LIBRARY_STORAGE_KEY, []);
+   const projects = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : [];
+
+   return projects.filter((project) => compactText(project?.title));
+}
+
+function readActiveProjectSelectionForHome(): HomeActiveProjectSelection | null {
+   if (typeof window === "undefined") {
+      return null;
+   }
+
+   const parsed = safeParseStorage<{
+      projectId?: string;
+      id?: string;
+      title?: string;
+      projectTitle?: string;
+   } | null>(ACTIVE_PROJECT_SELECTION_STORAGE_KEY, null);
+
+   if (!parsed || typeof parsed !== "object") {
+      return null;
+   }
+
+   const projectId = compactText(parsed.projectId || parsed.id);
+   const title = sanitizePageTitle(parsed.title || parsed.projectTitle);
+
+   if (!projectId && !title) {
+      return null;
+   }
+
+   return {
+      projectId,
+      title,
+   };
+}
+
+function getSelectedProjectLibraryItemForHome() {
+   const projectLibrary = readProjectLibraryForHome();
+   const selection = readActiveProjectSelectionForHome();
+
+   if (!selection) {
+      return undefined;
+   }
+
+   const selectedTitleKey = normalizeHomeProjectTitle(selection.title);
+
+   return projectLibrary.find((project) => {
+      const projectTitleKey = normalizeHomeProjectTitle(project.title);
+
+      return Boolean((selection.projectId && compactText(project.id) === selection.projectId) || (selectedTitleKey && projectTitleKey === selectedTitleKey));
+   });
+}
+
+function getLatestProjectLibraryItemForHome() {
+   const selectedProject = getSelectedProjectLibraryItemForHome();
+
+   if (selectedProject) {
+      return selectedProject;
+   }
+
+   return [...readProjectLibraryForHome()].sort((a, b) => getProjectUpdatedAtForHome(b) - getProjectUpdatedAtForHome(a))[0];
 }
 
 function getLatestProjectMemoryItemForHome() {
@@ -393,35 +506,35 @@ function getLastWorkedOnProject() {
    } | null>(CANVAS_STORAGE_KEY, null);
 
    const canvasTitle = sanitizePageTitle(canvas?.sourceTitle || canvas?.title);
-
    const canvasBody = sanitizePageText(canvas?.content || canvas?.sourceContent || canvas?.workingSummary, PAGE_SANITIZE_LIMITS.preview);
+   const selectedLibraryProject = getSelectedProjectLibraryItemForHome();
+
+   if (selectedLibraryProject?.title) {
+      const selectedTitle = sanitizePageTitle(selectedLibraryProject.title);
+      const selectedTitleKey = normalizeHomeProjectTitle(selectedTitle);
+      const selectedBody = getProjectBodyPreviewForHome(selectedLibraryProject.notes?.[0]?.body, selectedLibraryProject.notes?.[0]?.summary, selectedLibraryProject.latestSummary);
+      const canvasMatchesSelection = Boolean(selectedTitleKey && normalizeHomeProjectTitle(canvasTitle) === selectedTitleKey);
+
+      return {
+         title: selectedTitle,
+         body: (canvasMatchesSelection ? canvasBody : "") || selectedBody,
+         source: "Projects",
+      };
+   }
 
    const latestLibraryProject = getLatestProjectLibraryItemForHome();
-
    const libraryTitle = sanitizePageTitle(latestLibraryProject?.title);
-
    const libraryBody = getProjectBodyPreviewForHome(latestLibraryProject?.notes?.[0]?.body, latestLibraryProject?.notes?.[0]?.summary, latestLibraryProject?.latestSummary);
-
    const latestMemoryProject = getLatestProjectMemoryItemForHome();
-
    const memoryTitle = sanitizePageTitle(latestMemoryProject?.cleanTitle || latestMemoryProject?.title);
-
    const memoryBody = getProjectBodyPreviewForHome(latestMemoryProject?.body, latestMemoryProject?.sourceContent, latestMemoryProject?.workingSummary, latestMemoryProject?.latestSummary);
-
    const canvasUpdated = Number(canvas?.updatedAt || 0);
-
    const libraryUpdated = getProjectUpdatedAtForHome(latestLibraryProject || {});
-
    const memoryUpdated = Number(latestMemoryProject?.updatedAt || 0);
-
    const canvasKey = normalizeHomeProjectTitle(canvasTitle);
-
    const libraryKey = normalizeHomeProjectTitle(libraryTitle);
-
    const memoryKey = normalizeHomeProjectTitle(memoryTitle);
 
-   // If Canvas is currently showing a saved project, prefer Canvas so Home
-   // matches the active work surface and AIDock's current-project behavior.
    if (canvasTitle && (canvasKey === libraryKey || canvasKey === memoryKey || canvasUpdated >= libraryUpdated || canvasUpdated >= memoryUpdated)) {
       return {
          title: canvasTitle,
@@ -572,7 +685,9 @@ function getHomeSuggestion(project: { title: string; body: string; source: strin
 
    try {
       const awareness = getActiveProjectAwareness();
-      const understanding = awareness.projectIntelligence?.projectUnderstanding;
+      const awarenessTitle = sanitizePageTitle(awareness.title);
+      const awarenessMatchesProject = Boolean(awareness.hasActiveProject && awarenessTitle && normalizeHomeProjectTitle(awarenessTitle) === normalizeHomeProjectTitle(project.title));
+      const understanding = awarenessMatchesProject ? awareness.projectIntelligence?.projectUnderstanding : undefined;
 
       if (understanding) {
          const recommendedMove = sanitizePageText(understanding.recommendedMove, PAGE_SANITIZE_LIMITS.suggestion);
@@ -718,6 +833,8 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
 
       window.addEventListener("allevin-project-library-update", refreshHomeContext);
 
+      window.addEventListener("allevin-active-project-selection-change", refreshHomeContext);
+
       window.addEventListener("allevin-project-progress-update", refreshHomeContext);
 
       window.addEventListener("allevin-project-materials-update", refreshHomeContext);
@@ -750,6 +867,8 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
          window.removeEventListener("allevin-project-memory-update", refreshHomeContext);
 
          window.removeEventListener("allevin-project-library-update", refreshHomeContext);
+
+         window.removeEventListener("allevin-active-project-selection-change", refreshHomeContext);
 
          window.removeEventListener("allevin-project-progress-update", refreshHomeContext);
 
@@ -1033,7 +1152,7 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
                </div>
             </section>
 
-            {/* MK VIII project flow */}
+            {/* MK X project flow */}
 
             <section>
                <div className="mb-4 px-1 sm:px-2">

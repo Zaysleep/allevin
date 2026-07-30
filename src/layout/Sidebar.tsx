@@ -801,7 +801,7 @@ export default function Sidebar() {
                   text-[var(--color-text-tertiary)]
                "
             >
-               MK IX
+               MK X
             </span>
          </div>
       </aside>

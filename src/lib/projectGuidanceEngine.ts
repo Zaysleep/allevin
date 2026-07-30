@@ -35,6 +35,13 @@ export type ProjectGuidanceIntent =
    | "project-change"
    | "project-update"
    | "conversation-transform"
+   | "conversation-recall"
+   | "conversation-reference"
+   | "conversation-correction"
+   | "recommendation-acceptance"
+   | "recommendation-rejection"
+   | "recommendation-method"
+   | "conversation-options"
    | "current-milestone"
    | "milestone-rationale"
    | "next-milestone"
@@ -103,8 +110,26 @@ export interface ProjectGuidanceConversationContext {
    lastUserPrompt?: string;
    lastAssistantResponse?: string;
    lastRecommendation?: string;
+   canonicalRecommendation?: string;
+   currentMethod?: string;
+   acceptedMethod?: string;
+   rejectedMethods?: string[];
    lastMilestoneTitle?: string;
    lastSubject?: ProjectGuidanceSubject;
+   currentTopic?: string;
+   activeReference?: string;
+   referencedOption?: string;
+   optionSet?: {
+      id?: string;
+      topic?: string;
+      options?: Array<{ id?: string; title?: string; detail?: string }>;
+      selectedOptionId?: string;
+   };
+   requestedTransformation?: string;
+   continuityIntent?: "none" | "continue" | "shorten" | "expand" | "simplify" | "rewrite" | "alternate-method" | "accept" | "reject" | "correct" | "option-reference";
+   acceptedRecommendations?: string[];
+   rejectedRecommendations?: string[];
+   corrections?: string[];
    recentMessages?: Array<{ role: "user" | "assistant"; content: string }>;
 }
 
@@ -262,6 +287,165 @@ function uniqueStrings(values: string[], limit = 12) {
    }
 
    return result;
+}
+
+// ========================================
+// ALLEVIN MK X Build 2 repair — Same-priority method changes
+// Purpose:
+// A request for "another way" changes the route to the existing result. It
+// must not create a new deliverable, actor, research program, or milestone.
+// ========================================
+
+function normalizeRecommendationAction(value?: string) {
+   const clean = compactText(value, 1800)
+      .replace(/[.!?]+$/, "")
+      .trim();
+
+   if (!clean) {
+      return "";
+   }
+
+   return `${clean.charAt(0).toLowerCase()}${clean.slice(1)}`;
+}
+
+function buildSamePriorityAlternativeMethod(recommendation?: string, excludedMethods: string[] = []) {
+   const action = normalizeRecommendationAction(recommendation);
+   const lower = action.toLowerCase();
+
+   if (!action) {
+      return "Use a different sequence to reach the same saved deliverable, without adding a new project objective.";
+   }
+
+   let candidates: string[] = [];
+
+   if (/\b(?:promise|positioning|brand|identity|message|language|mission|vision)\b/i.test(lower)) {
+      candidates = [
+         ensureSentence(`Work backward from the major products or parts the language must cover: write the outcome each one creates, identify the common thread, then ${action}`),
+         ensureSentence(`Write one sentence for the shared human need behind each major product or part, compare the overlap, then ${action}`),
+         ensureSentence(`List the principles that must be recognizable in every major product or part, combine the strongest shared principle, then ${action}`),
+      ];
+   } else if (/^(?:draft|write|define|outline|create|prepare|describe|document)\b/i.test(action)) {
+      candidates = [
+         ensureSentence(`Start from the examples or components the deliverable must fit, extract the common pattern, then ${action}`),
+         ensureSentence(`Work backward from the reader or user outcome the deliverable must create, define the required sections, then ${action}`),
+         ensureSentence(`Draft the smallest complete version first, compare it with the saved criteria, then ${action}`),
+      ];
+   } else if (/^(?:choose|select|decide|compare|evaluate|rank|finalize|confirm)\b/i.test(action)) {
+      candidates = [
+         ensureSentence(`Write the decision criteria first, test each supported option against the same criteria, then ${action}`),
+         ensureSentence(`Eliminate any option that violates a confirmed constraint, compare what remains, then ${action}`),
+         ensureSentence(`Work backward from what the next milestone needs to know, compare the supported choices, then ${action}`),
+      ];
+   } else if (/^(?:research|gather|review|investigate|verify|validate|interview)\b/i.test(action)) {
+      candidates = [
+         ensureSentence(`Turn the unresolved questions into a small evidence table, answer the highest-impact question first, then ${action}`),
+         ensureSentence(`Start with the source most likely to change the decision, record what it confirms, then ${action}`),
+         ensureSentence(`Separate confirmed facts from assumptions, close the most consequential gap first, then ${action}`),
+      ];
+   } else if (/^(?:build|implement|develop|prototype|set up|configure|install)\b/i.test(action)) {
+      candidates = [
+         ensureSentence(`Start with the smallest end-to-end version that proves the required outcome, verify it, then ${action}`),
+         ensureSentence(`Begin at the riskiest dependency, prove that connection works, then ${action}`),
+         ensureSentence(`Use one representative case to test the full workflow before expanding, then ${action}`),
+      ];
+   } else if (/^(?:plan|schedule|organize|sequence|map)\b/i.test(action)) {
+      candidates = [
+         ensureSentence(`Work backward from the result that must exist, identify the dependencies in reverse order, then ${action}`),
+         ensureSentence(`Start with the fixed dates or constraints, place the dependent work around them, then ${action}`),
+         ensureSentence(`Group the work by decision, preparation, execution, and review, then ${action}`),
+      ];
+   } else if (/^(?:inspect|audit|test|check|assess)\b/i.test(action)) {
+      candidates = [
+         ensureSentence(`Create a short checklist from the saved completion criteria, test one representative case, then ${action}`),
+         ensureSentence(`Begin with the highest-consequence failure point, record the evidence, then ${action}`),
+         ensureSentence(`Compare the current result against each confirmed requirement, note the gaps, then ${action}`),
+      ];
+   } else {
+      candidates = [
+         ensureSentence(`Start from the result this action must produce, identify the evidence or decisions it depends on, then ${action}`),
+         ensureSentence(`Work backward from what the next milestone needs, identify the smallest useful result, then ${action}`),
+         ensureSentence(`Use the saved success criteria as a checklist, complete the highest-impact item first, then ${action}`),
+      ];
+   }
+
+   const excluded = excludedMethods.map((item) => normalizePrompt(item)).filter(Boolean);
+   return candidates.find((candidate) => !excluded.includes(normalizePrompt(candidate))) || candidates[candidates.length - 1];
+}
+
+function getRequestedConversationOptionCount(prompt?: string) {
+   const lower = normalizePrompt(prompt);
+   const wordCounts: Array<[RegExp, number]> = [
+      [/\b(?:two|2)\b/i, 2],
+      [/\b(?:three|3)\b/i, 3],
+      [/\b(?:four|4)\b/i, 4],
+      [/\b(?:five|5)\b/i, 5],
+   ];
+
+   return wordCounts.find(([pattern]) => pattern.test(lower))?.[1] || 3;
+}
+
+function buildGroundedConversationOptions(packet: ProjectIntelligencePacket, prompt: string, conversation: ProjectGuidanceConversationContext) {
+   const active = getAuthoritativeActiveMilestone(packet);
+   const recommendation = cleanAuthoritativeStatement(conversation.canonicalRecommendation || conversation.lastRecommendation || active?.startingPrompt || getConcreteMilestoneAction(active) || packet.projectUnderstanding.recommendedMove);
+   const requestedTopic = compactText(prompt.match(/\b(?:frame|position|write|express|describe)\s+(.+?)(?:[?.!]|$)/i)?.[1], 900);
+   const topic = compactText(requestedTopic || conversation.currentTopic || active?.title || recommendation || packet.projectTitle, 900);
+   const searchable = `${prompt} ${topic} ${recommendation}`.toLowerCase();
+   const count = getRequestedConversationOptionCount(prompt);
+   const projectName = getReadableProjectSubjectName(packet.projectTitle);
+
+   const brandOptions = [
+      {
+         title: "Outcome-led",
+         detail: `Frame the promise around the shared result every major part of ${projectName} creates, then test that wording against each product.`,
+      },
+      {
+         title: "Human-need-led",
+         detail: `Start with the recurring human need the products serve, then describe how ${projectName} responds to that need across the full product family.`,
+      },
+      {
+         title: "Principle-led",
+         detail: `Lead with the standard that should be recognizable in every product, then use that principle to shape the company promise.`,
+      },
+      {
+         title: "Relationship-led",
+         detail: `Explain what connects the products under one company before describing what each product contributes on its own.`,
+      },
+      {
+         title: "Contrast-led",
+         detail: `Define what the company deliberately avoids, then frame the promise around the clearer alternative its products provide.`,
+      },
+   ];
+
+   const generalOptions = [
+      {
+         title: "Outcome-led",
+         detail: `Start from the result the work must create, then shape ${recommendation ? recommendation.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase()) : "the deliverable"} around that result.`,
+      },
+      {
+         title: "Evidence-led",
+         detail: "Start from the strongest saved facts or materials, identify what they support, and build the answer only from that evidence.",
+      },
+      {
+         title: "Constraint-led",
+         detail: "Begin with the limits the project cannot violate, then choose the direction that works cleanly inside them.",
+      },
+      {
+         title: "Sequence-led",
+         detail: "Work backward from the next milestone and define what the current result must settle before that work can begin.",
+      },
+      {
+         title: "Comparison-led",
+         detail: "Create a small set of supported alternatives, compare them against the same criteria, and keep the one that best fits the project goal.",
+      },
+   ];
+
+   const options = /\b(?:brand|promise|positioning|identity|message|language|mission|vision)\b/i.test(searchable) ? brandOptions : generalOptions;
+
+   return {
+      topic,
+      recommendation,
+      options: options.slice(0, count),
+   };
 }
 
 // ========================================
@@ -1073,6 +1257,35 @@ export function getProjectGuidanceIntent(prompt: string, conversation: ProjectGu
       return "general";
    }
 
+   // ALLEVIN MK X Build 3 — explicit conversation continuity.
+   // These intents are resolved before general project-update or brainstorming
+   // detection so a natural follow-up cannot be mistaken for new project work.
+   const continuityIntent = conversation.continuityIntent;
+
+   if (continuityIntent === "shorten" || continuityIntent === "expand" || continuityIntent === "simplify" || continuityIntent === "rewrite") {
+      return "conversation-transform";
+   }
+
+   if (continuityIntent === "correct" || /^(?:actually|correction\b|i meant\b)|\b(?:that is wrong|that's wrong|that was wrong|is incorrect|should be|the correct .+ is)\b/i.test(lower)) {
+      return "conversation-correction";
+   }
+
+   if (continuityIntent === "reject" || /\b(?:i do not agree|i don't agree|i disagree|i do not want that|i don't want that|not that approach|that does not fit|that doesn't fit|reject that|do not use that|don't use that)\b/i.test(lower)) {
+      return "recommendation-rejection";
+   }
+
+   if (continuityIntent === "accept" || /\b(?:that works|sounds good|let's do that|lets do that|i agree|go with that|use that approach|keep that plan)\b/i.test(lower)) {
+      return "recommendation-acceptance";
+   }
+
+   if (continuityIntent === "option-reference" || (/\b(?:first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)\b/i.test(lower) && /\b(?:option|choice|approach|idea|one)\b/i.test(lower))) {
+      return "conversation-reference";
+   }
+
+   if (/^(?:what were we discussing|where were we|continue|keep going|pick up where we left off|remind me where we were)\??$/.test(lower)) {
+      return "conversation-recall";
+   }
+
    // ALLEVIN MK IX — conversational reference resolution.
    // Short follow-ups inherit the subject of the previous project turn instead
    // of being reclassified as generic chat.
@@ -1110,12 +1323,27 @@ export function getProjectGuidanceIntent(prompt: string, conversation: ProjectGu
       return "recommendation-fit";
    }
 
+   const asksForConversationOptions =
+      /\b(?:give|show|offer|list|draft|create)\s+(?:me\s+)?(?:two|three|four|five|[2-5])\s+(?:possible\s+)?(?:ways|options|approaches|ideas|directions|versions|frames)\b/i.test(lower) ||
+      /\b(?:two|three|four|five|[2-5])\s+(?:possible\s+)?(?:ways|options|approaches|ideas|directions|versions|frames)\s+(?:to|for)\b/i.test(lower);
+
+   if (asksForConversationOptions) {
+      return "conversation-options";
+   }
+
+   const asksForAnotherMethod = /\b(?:another|different|alternate|alternative)\s+(?:way|approach|method|route)\b/i.test(lower) || /\b(?:approach|do|handle|carry out|work through)\s+(?:that|this|it)\s+(?:another|a different)\s+way\b/i.test(lower);
+
+   if (asksForAnotherMethod && (conversation.lastRecommendation || previousIntent)) {
+      return "recommendation-method";
+   }
+
    if (
       includesAny(lower, [
          "make that simpler",
          "simplify that",
          "say that more simply",
          "make it shorter",
+         "make that shorter",
          "shorten that",
          "give me more detail",
          "tell me more",
@@ -3008,6 +3236,7 @@ function formatResponse(draft: ProfileGuidanceDraft, intent?: ProjectGuidanceInt
       "assumptions",
       "premature-decision",
       "next-action-detail",
+      "recommendation-method",
       "milestone-rationale",
       "next-milestone",
       "recommendation-fit",
@@ -3063,6 +3292,9 @@ function formatResponse(draft: ProfileGuidanceDraft, intent?: ProjectGuidanceInt
          case "rationale":
          case "milestone-rationale":
             return clean(draft.assessment, draft.reason);
+
+         case "recommendation-method":
+            return clean(draft.currentUnderstanding, draft.assessment, draft.reason);
 
          case "decision-impact":
          case "subject-unlock":
@@ -7499,6 +7731,110 @@ function buildAuthoritativeProjectConversationDraft(intent: ProjectGuidanceInten
       };
    }
 
+   if (intent === "conversation-options") {
+      const optionDraft = buildGroundedConversationOptions(packet, prompt, conversation);
+      return {
+         currentUnderstanding: optionDraft.topic
+            ? `Here are ${optionDraft.options.length} grounded ways to frame ${optionDraft.topic.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}:`
+            : `Here are ${optionDraft.options.length} grounded options:`,
+         assessment: optionDraft.options.map((option, index) => `${index + 1}. ${option.title}: ${option.detail}`).join("\n"),
+         recommendation: "",
+         reason: optionDraft.recommendation ? `Each option keeps the current priority in place: ${ensureSentence(optionDraft.recommendation)}` : "",
+         watchOut: "",
+         evidenceUsed: uniqueStrings([optionDraft.topic, optionDraft.recommendation, ...optionDraft.options.flatMap((option) => [option.title, option.detail])], 12),
+      };
+   }
+
+   if (intent === "conversation-recall") {
+      const topic = compactText(conversation.currentTopic || conversation.lastSubject?.title || active?.title || understanding.recommendedMove);
+      const recommendation = compactText(conversation.canonicalRecommendation || conversation.lastRecommendation);
+      const currentMethod = compactText(conversation.currentMethod || conversation.acceptedMethod);
+      const correction = compactText(conversation.corrections?.[0], 1200);
+      const selectedOption = compactText(conversation.optionSet?.options?.find((option) => option.id === conversation.optionSet?.selectedOptionId)?.title || conversation.referencedOption, 1200);
+      const brandTopic = /\b(?:brand|promise|positioning|identity|message|language)\b/i.test(topic);
+      const topicObject = topic.replace(/[.!?]+$/, "").replace(/^(?:finalize|define|draft|write|refine|create)\s+/i, "");
+
+      return {
+         currentUnderstanding: topic ? (brandTopic ? `We were refining ${topicObject}.` : `We were working on ${topic.replace(/[.!?]+$/, "")}.`) : "I do not have a previous project topic saved for this conversation yet.",
+         assessment: recommendation ? ensureSentence(`The current priority is still ${recommendation.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}`) : "",
+         recommendation: "",
+         reason: [
+            currentMethod ? ensureSentence(`The working method is ${currentMethod.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}`) : "",
+            selectedOption ? ensureSentence(`The option currently in view is ${selectedOption.replace(/[.!?]+$/, "")}`) : "",
+            correction ? ensureSentence(`You also clarified that ${correction.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}`) : "",
+         ]
+            .filter(Boolean)
+            .join(" "),
+         watchOut: "",
+         evidenceUsed: uniqueStrings([topic, recommendation, currentMethod, selectedOption, correction], 8),
+      };
+   }
+
+   if (intent === "conversation-reference") {
+      const reference = compactText(conversation.referencedOption || conversation.activeReference, 1800);
+      const selected = conversation.optionSet?.options?.find((option) => option.id === conversation.optionSet?.selectedOptionId);
+      const matchedOption = reference ? understanding.options.find((option) => getProjectFactOverlapRatio(option.name, reference) >= 0.45 || normalizePrompt(reference).includes(normalizePrompt(option.name))) : undefined;
+      const optionTitle = compactText(selected?.title || matchedOption?.name || reference.split(":")[0], 500);
+      const optionDetail = compactText(selected?.detail || matchedOption?.fitWithGoal || reference.split(":").slice(1).join(":"), 1800);
+      const tradeoffs = matchedOption ? uniqueStrings([...matchedOption.advantages, ...matchedOption.disadvantages], 3) : [];
+      const canonical = compactText(conversation.canonicalRecommendation || conversation.lastRecommendation, 1800);
+
+      return {
+         currentUnderstanding: reference ? `You’re referring to ${optionTitle || reference.replace(/[.!?]+$/, "")}.` : "I do not have a real option list to resolve that reference from yet.",
+         assessment: optionDetail ? ensureSentence(optionDetail) : "",
+         recommendation: "",
+         reason: tradeoffs.length
+            ? tradeoffs.map((item) => ensureSentence(item)).join(" ")
+            : canonical && reference
+              ? ensureSentence(`This is a different framing of the same priority: ${canonical.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}`)
+              : "",
+         watchOut: matchedOption?.risks?.[0] ? ensureSentence(matchedOption.risks[0]) : "",
+         evidenceUsed: uniqueStrings([reference, optionTitle, optionDetail, canonical, ...tradeoffs], 8),
+      };
+   }
+
+   if (intent === "conversation-correction") {
+      const correction = compactText(conversation.corrections?.[0] || prompt, 1800)
+         .replace(/^(?:actually|correction|i meant)\s*[:\-,]?\s*/i, "")
+         .trim();
+      return {
+         currentUnderstanding: correction ? `Understood. I’ll carry this forward in our current project conversation: ${ensureSentence(correction)}` : "I did not receive a clear correction to carry forward.",
+         assessment: "",
+         recommendation: "",
+         reason: correction ? "I haven’t changed the saved project itself." : "",
+         watchOut: "",
+         evidenceUsed: uniqueStrings([correction], 6),
+      };
+   }
+
+   if (intent === "recommendation-acceptance") {
+      const accepted = compactText(conversation.activeReference || conversation.lastRecommendation || conversation.lastSubject?.title, 1800);
+
+      return {
+         currentUnderstanding: accepted ? `I’ll keep this as the working direction for this project conversation: ${ensureSentence(accepted)}` : "I’ll keep the current project direction in place.",
+         assessment: conversation.currentTopic ? ensureSentence(`We’re still working inside ${conversation.currentTopic.replace(/[.!?]+$/, "")}`) : "",
+         recommendation: "",
+         reason: "",
+         watchOut: "",
+         evidenceUsed: uniqueStrings([accepted, conversation.currentTopic || ""], 6),
+      };
+   }
+
+   if (intent === "recommendation-rejection") {
+      const rejected = compactText(conversation.currentMethod || conversation.activeReference || conversation.acceptedMethod, 1800);
+      const priority = compactText(conversation.canonicalRecommendation || conversation.lastRecommendation || active?.startingPrompt || getConcreteMilestoneAction(active) || understanding.recommendedMove, 1800);
+      const alternativeMethod = buildSamePriorityAlternativeMethod(priority, [rejected, ...(conversation.rejectedMethods || [])]);
+
+      return {
+         currentUnderstanding: rejected ? `Understood. We’ll stop using that method: ${ensureSentence(rejected)}` : "Understood. We’ll use a different method.",
+         assessment: priority ? ensureSentence(`The priority remains ${priority.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}`) : "The project priority stays in place.",
+         recommendation: alternativeMethod,
+         reason: "",
+         watchOut: "",
+         evidenceUsed: uniqueStrings([rejected, priority, alternativeMethod, ...(conversation.rejectedMethods || [])], 8),
+      };
+   }
+
    if (intent === "project-update") {
       const update = cleanAuthoritativeStatement(prompt, 16000);
       const explicitUpdateFacts = extractExplicitProjectUpdateFacts(prompt);
@@ -7737,6 +8073,9 @@ function getProjectGuidanceSubject(intent: ProjectGuidanceIntent, packet: Projec
    if (
       [
          "challenge-recommendation",
+         "recommendation-method",
+         "recommendation-acceptance",
+         "recommendation-rejection",
          "recommendation-fit",
          "option-recommendation",
          "option-vs-existing",
@@ -7761,7 +8100,7 @@ function getProjectGuidanceSubject(intent: ProjectGuidanceIntent, packet: Projec
       return risk ? { kind: "risk", title: risk.title, detail: risk.consequence, id: risk.id } : { kind: "none", title: "", detail: "" };
    }
 
-   if (intent === "project-update" || intent === "project-change") {
+   if (intent === "project-update" || intent === "project-change" || intent === "conversation-correction") {
       return { kind: "update", title: cleanAuthoritativeStatement(conversation.lastUserPrompt), detail: draft.assessment };
    }
 
@@ -8050,11 +8389,35 @@ function buildCanonicalProjectUnderstandingDraft(intent: ProjectGuidanceIntent, 
       };
    }
 
-   if (intent === "conversation-transform") {
-      const previous = compactText(conversation.lastAssistantResponse, 4000);
+   if (intent === "recommendation-method") {
+      const recommendation = compactText(conversation.canonicalRecommendation || conversation.lastRecommendation || activeMilestone?.startingPrompt || nextMove, 1800);
+      const alternativeMethod = buildSamePriorityAlternativeMethod(recommendation, [conversation.currentMethod || "", ...(conversation.rejectedMethods || [])]);
+
       return {
-         currentUnderstanding: previous || "I do not have a previous project response to transform.",
-         assessment: "",
+         currentUnderstanding: recommendation ? `Keep the current priority unchanged: ${ensureSentence(recommendation)}` : "Keep the current project priority unchanged.",
+         assessment: alternativeMethod,
+         recommendation,
+         reason: "This changes the method, not the deliverable or the project order.",
+         watchOut: "",
+         evidenceUsed: uniqueStrings([recommendation, alternativeMethod, conversation.currentMethod || "", ...(conversation.rejectedMethods || []), activeMilestone?.title || "", understanding.whatItUnlocks], 10),
+      };
+   }
+
+   if (intent === "conversation-transform") {
+      const previous = compactText(conversation.lastAssistantResponse, 5000);
+      const transformation = conversation.continuityIntent;
+      const firstSentence = getFirstMeaningfulSentence(previous, 600);
+      const sentences =
+         previous
+            .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+            ?.map((sentence) => compactText(sentence, 1000))
+            .filter(Boolean) || [];
+      const shortVersion = firstSentence || sentences[0] || previous;
+      const simpleVersion = sentences.slice(0, 2).join(" ") || shortVersion;
+
+      return {
+         currentUnderstanding: transformation === "shorten" ? shortVersion : transformation === "simplify" ? simpleVersion : previous || "I do not have a previous project response to transform.",
+         assessment: transformation === "expand" && conversation.lastSubject?.detail ? ensureSentence(conversation.lastSubject.detail) : "",
          recommendation: "",
          reason: "",
          watchOut: "",
@@ -8961,6 +9324,56 @@ function buildCanonicalProjectUnderstandingDraft(intent: ProjectGuidanceIntent, 
 }
 
 // ========================================
+// ALLEVIN MK X Build 3 — continuity overlay
+// Purpose:
+// Respect conversational corrections and rejected recommendations without
+// silently changing the canonical project record.
+// ========================================
+
+function applyConversationContinuityToDraft(intent: ProjectGuidanceIntent, draft: ProfileGuidanceDraft, conversation: ProjectGuidanceConversationContext = {}) {
+   const rejectedMethods = uniqueStrings([...(conversation.rejectedMethods || []), ...(conversation.rejectedRecommendations || [])], 8);
+   const latestCorrection = compactText(conversation.corrections?.[0], 1800);
+   const candidateRecommendation = compactText(draft.recommendation || (intent === "next-action" || intent === "next-action-detail" || intent === "project-lead" ? draft.currentUnderstanding : ""), 1800);
+   const repeatsRejectedMethod = Boolean(
+      candidateRecommendation &&
+      rejectedMethods.some((item) => {
+         const overlap = getProjectFactOverlapRatio(item, candidateRecommendation);
+         return overlap >= 0.62 || normalizePrompt(item).includes(normalizePrompt(candidateRecommendation)) || normalizePrompt(candidateRecommendation).includes(normalizePrompt(item));
+      }),
+   );
+
+   let adjusted = { ...draft, evidenceUsed: [...draft.evidenceUsed] };
+
+   if (repeatsRejectedMethod && intent !== "recommendation-rejection") {
+      const canonicalRecommendation = compactText(conversation.canonicalRecommendation || conversation.lastRecommendation || candidateRecommendation, 1800);
+      const alternateMethod = buildSamePriorityAlternativeMethod(canonicalRecommendation, rejectedMethods);
+      adjusted = {
+         ...adjusted,
+         currentUnderstanding: "We already ruled out that method.",
+         assessment: alternateMethod,
+         recommendation: canonicalRecommendation,
+         reason: "The priority stays the same; only the route changes.",
+         watchOut: "",
+         evidenceUsed: uniqueStrings([...adjusted.evidenceUsed, ...rejectedMethods, canonicalRecommendation, alternateMethod], 16),
+      };
+   }
+
+   if (latestCorrection) {
+      adjusted.evidenceUsed = uniqueStrings([latestCorrection, ...adjusted.evidenceUsed], 16);
+
+      if (["project-facts", "budget-memory", "priority-fact", "decision-status", "project-understanding"].includes(intent)) {
+         const correctionLine = ensureSentence(`You clarified that ${latestCorrection.replace(/[.!?]+$/, "").replace(/^./, (character) => character.toLowerCase())}`);
+         const existingText = `${adjusted.currentUnderstanding} ${adjusted.assessment}`;
+         if (getProjectFactOverlapRatio(existingText, latestCorrection) < 0.5) {
+            adjusted.assessment = [correctionLine, adjusted.assessment].filter(Boolean).join(" ");
+         }
+      }
+   }
+
+   return adjusted;
+}
+
+// ========================================
 // Public guidance builder
 // ========================================
 
@@ -8994,13 +9407,16 @@ export function buildProjectGuidance(input: ProjectGuidanceInput): ProjectGuidan
    const authoritativeDraft = buildAuthoritativeProjectConversationDraft(intent, packet, input.prompt, input.conversation || {});
    const canonicalDraft = buildCanonicalProjectUnderstandingDraft(intent, packet, input.prompt, input.conversation);
    const groundedDraft = authoritativeDraft || canonicalDraft || applyIntent(intent, packet, profileDraft, input.prompt);
-   const draft = authoritativeDraft ? groundedDraft : applyDecisionCoachMode(coachingMode, input.prompt, packet, groundedDraft);
+   const coachedDraft = authoritativeDraft ? groundedDraft : applyDecisionCoachMode(coachingMode, input.prompt, packet, groundedDraft);
+   const draft = applyConversationContinuityToDraft(intent, coachedDraft, input.conversation || {});
    const response = formatResponse(draft, intent, coachingMode);
    const confidence = Math.max(0, Math.min(98, Math.round(packet.confidence * 0.7 + packet.reasoningProfileConfidence * 0.3)));
 
    const actionIntents: ProjectGuidanceIntent[] = [
       "next-action",
       "next-action-detail",
+      "recommendation-method",
+      "recommendation-rejection",
       "priority-decision",
       "simplification",
       "project-lead",

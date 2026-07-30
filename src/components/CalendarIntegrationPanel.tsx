@@ -13,12 +13,14 @@ import { CalendarDays, Clock3, MapPin, ChevronDown, Plus, Trash2 } from "lucide-
 // ========================================
 // ALLEVIN Calendar
 // Purpose:
-// Simple schedule layer for project time blocks and events.
-// Calendar stays inside ALLEVIN as a clean schedule view,
-// while project notes and materials stay with Projects/Canvas.
+// MK X schedule workspace for project time blocks and events.
+// Today, Week, and Month views share the same saved Calendar authority.
+// Project notes return to Projects/Canvas without assuming completion.
 // ========================================
 
 type CalendarEventStatus = "upcoming" | "active" | "completed";
+
+type CalendarWorkspaceView = "today" | "week" | "month";
 
 interface AllevinCalendarEvent {
    id: string;
@@ -826,6 +828,191 @@ function getDurationLabel(startTime: number, endTime: number) {
    return `${hours} hr ${remainingMinutes} min`;
 }
 
+function getStartOfWeek(timestamp: number) {
+   const date = new Date(timestamp);
+
+   date.setDate(date.getDate() - date.getDay());
+
+   date.setHours(0, 0, 0, 0);
+
+   return date.getTime();
+}
+
+function getEndOfWeek(timestamp: number) {
+   const date = new Date(getStartOfWeek(timestamp));
+
+   date.setDate(date.getDate() + 6);
+
+   date.setHours(23, 59, 59, 999);
+
+   return date.getTime();
+}
+
+function getWeekDays(timestamp: number) {
+   const start = new Date(getStartOfWeek(timestamp));
+
+   return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(start);
+
+      date.setDate(start.getDate() + index);
+
+      date.setHours(0, 0, 0, 0);
+
+      return date.getTime();
+   });
+}
+
+function getWeekRangeLabel(timestamp: number) {
+   const start = new Date(getStartOfWeek(timestamp));
+
+   const end = new Date(getEndOfWeek(timestamp));
+
+   const sameMonth = start.getMonth() === end.getMonth();
+
+   const startLabel = start.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+   });
+
+   const endLabel = end.toLocaleDateString([], {
+      month: sameMonth ? undefined : "short",
+      day: "numeric",
+      year: "numeric",
+   });
+
+   return `${startLabel} – ${endLabel}`;
+}
+
+function getPlannedTimeLabel(totalMinutes: number) {
+   if (totalMinutes <= 0) {
+      return "No protected time";
+   }
+
+   const hours = Math.floor(totalMinutes / 60);
+
+   const minutes = totalMinutes % 60;
+
+   if (!hours) {
+      return `${minutes} minutes protected`;
+   }
+
+   if (!minutes) {
+      return `${hours} ${hours === 1 ? "hour" : "hours"} protected`;
+   }
+
+   return `${hours} hr ${minutes} min protected`;
+}
+
+function getCalendarWorkspaceStatusLabel(event: AllevinCalendarEvent) {
+   const status = getEventStatus(event);
+
+   if (status === "active") {
+      return "In progress";
+   }
+
+   if (status === "completed") {
+      return "Passed";
+   }
+
+   if (isSameCalendarDay(event.startTime, Date.now())) {
+      return "Later today";
+   }
+
+   if (isSameCalendarDay(event.startTime, getStartOfTomorrow())) {
+      return "Tomorrow";
+   }
+
+   return "Upcoming";
+}
+
+function getCalendarWorkspaceStatusNote(event: AllevinCalendarEvent) {
+   const status = getEventStatus(event);
+
+   if (status === "active") {
+      return "This session is happening now. Calendar still waits for you to record what changed.";
+   }
+
+   if (status === "completed") {
+      return "This time has passed. Calendar does not assume the work was completed.";
+   }
+
+   return "This session is scheduled. Its result stays open until you record progress.";
+}
+
+function getCalendarContextText(event: AllevinCalendarEvent) {
+   return [event.description, event.sourceContent].filter(Boolean).join("\n");
+}
+
+function getCalendarLabeledValue(event: AllevinCalendarEvent, label: string) {
+   const context = getCalendarContextText(event);
+
+   if (!context) {
+      return "";
+   }
+
+   const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+   const match = context.match(new RegExp(`(?:^|\\n)\\s*${escapedLabel}\\s*:\\s*([^\\n]+)`, "i"));
+
+   return sanitizeCalendarPlainText(match?.[1], 1000).replace(/\s+/g, " ").trim();
+}
+
+function getCalendarProjectSessionDetails(event: AllevinCalendarEvent) {
+   const contextProject = getCalendarLabeledValue(event, "Project");
+
+   const contextMilestone = getCalendarLabeledValue(event, "Milestone");
+
+   const contextGoal = getCalendarLabeledValue(event, "Session goal");
+
+   const contextResult = getCalendarLabeledValue(event, "Expected result");
+
+   const sourceTitle = sanitizeCalendarTitle(event.sourceTitle);
+
+   const sourceLooksLinked = Boolean(sourceTitle && getNormalizedCalendarTitleKey(sourceTitle) !== getNormalizedCalendarTitleKey(event.title));
+
+   const project = contextProject || (sourceLooksLinked ? sourceTitle : "");
+
+   const stage = sanitizeCalendarPlainText(event.projectStage, 180).replace(/\s+/g, " ").trim();
+
+   const milestone = contextMilestone || (!["scheduled", "scheduled-task", "general-knowledge", "reviewing"].includes(stage.toLowerCase()) ? stage : "");
+
+   const titleWithoutProject =
+      project && event.title.toLowerCase().startsWith(project.toLowerCase())
+         ? event.title
+              .slice(project.length)
+              .replace(/^[\s:—–-]+/, "")
+              .trim()
+         : "";
+
+   const workingSummary = sanitizeCalendarSummary(event.workingSummary);
+
+   const sessionGoal = contextGoal || workingSummary || titleWithoutProject || sanitizeCalendarSummary(event.description) || event.title;
+
+   const expectedResult = contextResult || sanitizeCalendarPlainText(event.recommendedNextAction, 1000);
+
+   const isProjectSession = Boolean(project && (contextProject || contextMilestone || sourceLooksLinked || /^aidock-calendar-/i.test(event.workflowId || "") || event.projectStage === "scheduled-task"));
+
+   return {
+      isProjectSession,
+      project,
+      milestone,
+      sessionGoal,
+      expectedResult,
+   };
+}
+
+function getDefaultCalendarSelection(events: AllevinCalendarEvent[]) {
+   const readable = getReadableCalendarEvents(events);
+
+   if (readable[0]) {
+      return readable[0];
+   }
+
+   const sorted = sortEvents(events);
+
+   return sorted[sorted.length - 1] || null;
+}
+
 function getRepeatLabel(repeat?: AllevinCalendarEvent["repeat"]) {
    switch (repeat) {
       case "daily":
@@ -1225,6 +1412,8 @@ export default function CalendarIntegrationPanel() {
 
    const [mounted, setMounted] = useState(false);
 
+   const [workspaceView, setWorkspaceView] = useState<CalendarWorkspaceView>("today");
+
    const [calendarNow, setCalendarNow] = useState(getNow);
 
    const [events, setEvents] = useState<AllevinCalendarEvent[]>([]);
@@ -1292,20 +1481,38 @@ export default function CalendarIntegrationPanel() {
 
             status: getEventStatus(event),
          })),
-      [events],
+      [events, calendarNow],
    );
 
    const readableEvents = useMemo(() => getReadableCalendarEvents(hydratedEvents, calendarNow), [hydratedEvents, calendarNow]);
 
-   const todayEvents = readableEvents.filter((event) => event.startTime >= getStartOfToday() && event.startTime <= getEndOfToday());
+   const todayEvents = useMemo(() => getEventsBetween(hydratedEvents, getStartOfToday(), getEndOfToday()), [hydratedEvents, calendarNow]);
 
    const upcomingEvents = readableEvents;
 
-   const selectedEvent = upcomingEvents.find((event) => event.id === selectedEventId) || upcomingEvents[0] || null;
+   const selectedEvent = hydratedEvents.find((event) => event.id === selectedEventId) || getDefaultCalendarSelection(hydratedEvents);
 
    const monthGridDays = useMemo(() => getMonthGridDays(visibleMonthDate), [visibleMonthDate]);
 
    const selectedDayEvents = useMemo(() => getEventsForDay(hydratedEvents, selectedDayDate), [hydratedEvents, selectedDayDate]);
+
+   const weekStart = getStartOfWeek(selectedDayDate);
+
+   const weekEnd = getEndOfWeek(selectedDayDate);
+
+   const weekDays = useMemo(() => getWeekDays(selectedDayDate), [selectedDayDate]);
+
+   const visibleWeekEvents = useMemo(() => getEventsBetween(hydratedEvents, weekStart, weekEnd), [hydratedEvents, weekStart, weekEnd]);
+
+   const currentWeekEvents = useMemo(() => getEventsBetween(hydratedEvents, getStartOfWeek(Date.now()), getEndOfWeek(Date.now())), [hydratedEvents, calendarNow]);
+
+   const todayPlannedMinutes = todayEvents.reduce((total, event) => total + Math.max(1, Math.round((event.endTime - event.startTime) / 60000)), 0);
+
+   const visibleWeekPlannedMinutes = visibleWeekEvents.reduce((total, event) => total + Math.max(1, Math.round((event.endTime - event.startTime) / 60000)), 0);
+
+   const currentWeekPlannedMinutes = currentWeekEvents.reduce((total, event) => total + Math.max(1, Math.round((event.endTime - event.startTime) / 60000)), 0);
+
+   const nextEvent = upcomingEvents[0] || null;
 
    const visibleMonthLabel = getMonthLabel(visibleMonthDate);
 
@@ -1342,7 +1549,7 @@ export default function CalendarIntegrationPanel() {
 
       setNotes(cleanedState.notes);
 
-      setSelectedEventId(getReadableCalendarEvents(initialEvents)[0]?.id || null);
+      setSelectedEventId(getDefaultCalendarSelection(initialEvents)?.id || null);
 
       saveStoredEvents(initialEvents);
 
@@ -1380,7 +1587,7 @@ export default function CalendarIntegrationPanel() {
 
       const readableEvents = getReadableCalendarEvents(nextEvents);
 
-      setSelectedEventId((current) => (current && readableEvents.some((event) => event.id === current) ? current : readableEvents[0]?.id || null));
+      setSelectedEventId((current) => (current && nextEvents.some((event) => event.id === current) ? current : getDefaultCalendarSelection(nextEvents)?.id || null));
 
       syncCalendarStatus(nextEvents.length > 0 ? "schedule-context-active" : "workspace-stable");
 
@@ -1851,7 +2058,7 @@ export default function CalendarIntegrationPanel() {
 
       setNotes(nextNotes);
 
-      setSelectedEventId(getReadableCalendarEvents(nextEvents)[0]?.id || null);
+      setSelectedEventId(getDefaultCalendarSelection(nextEvents)?.id || null);
 
       syncCalendarStatus(nextEvents.length > 0 ? "schedule-context-active" : "workspace-stable");
 
@@ -2250,6 +2457,26 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
       setMonthJumpOpen(false);
    }
 
+   function moveVisibleWeek(offset: number) {
+      const date = new Date(selectedDayDate);
+
+      date.setDate(date.getDate() + offset * 7);
+
+      date.setHours(0, 0, 0, 0);
+
+      setSelectedDayDate(date.getTime());
+
+      setVisibleMonthDate(new Date(date.getFullYear(), date.getMonth(), 1).getTime());
+   }
+
+   function selectCalendarWorkspaceView(view: CalendarWorkspaceView) {
+      setWorkspaceView(view);
+
+      if (view === "today") {
+         jumpToToday();
+      }
+   }
+
    function selectCalendarDay(timestamp: number) {
       setSelectedDayDate(getStartOfDay(timestamp));
 
@@ -2277,70 +2504,100 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
 
       const expanded = expandedEventIds.includes(event.id);
 
-      const hasDetails = Boolean(event.description || event.location || event.sourceContent || event.workingSummary);
+      const details = getCalendarProjectSessionDetails(event);
+
+      const eventNotes = getNotesForEvent(event);
+
+      const hasDetails = Boolean(event.description || event.location || event.sourceContent || event.workingSummary || details.milestone || details.expectedResult);
 
       return (
-         <div
+         <article
             key={event.id}
             className={`
-               border-b
-               border-[var(--border-subtle)]
-               px-1
-               py-4
+               rounded-[var(--radius-lg)]
+               border
+               p-4
                transition-colors
 
-               ${selected ? "bg-[var(--color-surface-blue)]" : "bg-transparent"}
+               ${selected ? "border-[rgba(48,92,222,0.4)] bg-[var(--color-surface-blue)]" : "border-[var(--border-subtle)] bg-[var(--color-surface)]"}
             `}
          >
-            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-               <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{event.title}</p>
+            <button type="button" onClick={() => selectEvent(event)} className="w-full text-left" aria-pressed={selected}>
+               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                     <p className="text-sm font-semibold leading-5 text-[var(--color-text-primary)]">{event.title}</p>
 
-                  <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{getDateLabel(event.startTime)}</p>
-               </div>
+                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{getDateLabel(event.startTime)}</p>
+                  </div>
 
-               <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{event.repeat && event.repeat !== "none" ? getRepeatLabel(event.repeat) : getEventStatus(event)}</span>
-            </div>
-
-            <div className="space-y-2 text-xs text-[var(--color-text-secondary)]">
-               <div className="flex items-center gap-2">
-                  <Clock3 size={13} />
-
-                  <span>
-                     {getEventTimeRangeLabel(event)} • {event.allDay ? getRepeatLabel(event.repeat) : getDurationLabel(event.startTime, event.endTime)}
+                  <span className="w-fit rounded-full border border-[var(--border-subtle)] bg-[var(--color-bg)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
+                     {getCalendarWorkspaceStatusLabel(event)}
                   </span>
                </div>
 
-               {event.location && (
-                  <div className="flex items-center gap-2">
-                     <MapPin size={13} />
+               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-[var(--color-text-secondary)]">
+                  <span className="flex items-center gap-2">
+                     <Clock3 size={13} />
+                     {getEventTimeRangeLabel(event)} · {event.allDay ? "All day" : getDurationLabel(event.startTime, event.endTime)}
+                  </span>
 
-                     <span>{event.location}</span>
+                  {event.location && (
+                     <span className="flex items-center gap-2">
+                        <MapPin size={13} />
+
+                        {event.location}
+                     </span>
+                  )}
+               </div>
+
+               {details.isProjectSession && details.project && (
+                  <div className="mt-3 border-l-2 border-[var(--color-primary)] pl-3">
+                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Project</p>
+
+                     <p className="mt-1 text-xs font-medium text-[var(--color-text-primary)]">{details.project}</p>
+
+                     {details.milestone && <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">{details.milestone}</p>}
                   </div>
                )}
-            </div>
 
-            {event.description && <p className={`mt-3 text-xs leading-5 text-[var(--color-text-secondary)] ${expanded ? "whitespace-pre-wrap" : "line-clamp-2"}`}>{event.description}</p>}
+               {details.sessionGoal && details.sessionGoal !== event.title && (
+                  <div className="mt-3">
+                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Session focus</p>
+
+                     <p className="mt-1 text-xs leading-5 text-[var(--color-text-primary)]">{details.sessionGoal}</p>
+                  </div>
+               )}
+            </button>
 
             <AnimatePresence initial={false}>
                {expanded && hasDetails && (
                   <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
-                     <div className="mt-3 space-y-3 border-t border-[var(--border-subtle)] pt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+                     <div className="mt-4 space-y-4 border-t border-[var(--border-subtle)] pt-4 text-xs leading-5 text-[var(--color-text-secondary)]">
+                        {details.expectedResult && (
+                           <div>
+                              <p className="font-semibold text-[var(--color-text-primary)]">Expected result</p>
+
+                              <p className="mt-1">{details.expectedResult}</p>
+                           </div>
+                        )}
+
+                        {event.description && event.description !== details.sessionGoal && event.description !== details.expectedResult && (
+                           <div>
+                              <p className="font-semibold text-[var(--color-text-primary)]">Event notes</p>
+
+                              <p className="mt-1 whitespace-pre-wrap">{event.description}</p>
+                           </div>
+                        )}
+
                         {event.sourceContent && event.sourceContent !== event.description && (
                            <div>
-                              <p className="font-medium text-[var(--color-text-primary)]">Project notes</p>
+                              <p className="font-semibold text-[var(--color-text-primary)]">Project context</p>
 
                               <p className="mt-1 whitespace-pre-wrap">{event.sourceContent}</p>
                            </div>
                         )}
 
-                        {event.workingSummary && event.workingSummary !== event.description && event.workingSummary !== event.sourceContent && (
-                           <div>
-                              <p className="font-medium text-[var(--color-text-primary)]">Summary</p>
-
-                              <p className="mt-1 whitespace-pre-wrap">{event.workingSummary}</p>
-                           </div>
-                        )}
+                        <p>{getCalendarWorkspaceStatusNote(event)}</p>
                      </div>
                   </motion.div>
                )}
@@ -2349,7 +2606,9 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
             <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                <button onClick={() => toggleEventDetails(event.id)} className="studio-button-secondary min-h-9 w-full justify-center px-3 py-2 text-xs" disabled={!hasDetails}>
                   <ChevronDown size={13} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
-                  {expanded ? "Hide details" : "Show details"}
+
+                  {expanded ? "Hide context" : "View context"}
+                  {eventNotes.length > 0 ? ` · ${eventNotes.length} note${eventNotes.length === 1 ? "" : "s"}` : ""}
                </button>
 
                <button onClick={() => deleteEvent(event.id)} className="studio-button-secondary min-h-9 w-full justify-center px-3 py-2 text-xs">
@@ -2357,6 +2616,317 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                   Delete
                </button>
             </div>
+         </article>
+      );
+   }
+
+   function renderSelectedEventPanel(event: AllevinCalendarEvent) {
+      const details = getCalendarProjectSessionDetails(event);
+
+      const eventNotes = getNotesForEvent(event);
+
+      const latestNote = eventNotes[0];
+
+      return (
+         <aside className="studio-paper p-4 sm:p-6">
+            <div className="flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-5 sm:flex-row sm:items-start sm:justify-between">
+               <div className="min-w-0">
+                  <p className="studio-eyebrow">{details.isProjectSession ? "Project session" : "Selected event"}</p>
+
+                  <h3 className="mt-2 text-2xl leading-tight">{event.title}</h3>
+               </div>
+
+               <span className="w-fit rounded-full border border-[var(--border-subtle)] bg-[var(--color-surface-blue)] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                  {getCalendarWorkspaceStatusLabel(event)}
+               </span>
+            </div>
+
+            <div className="grid gap-4 border-b border-[var(--border-subtle)] py-5 sm:grid-cols-2">
+               <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">When</p>
+
+                  <p className="mt-2 text-sm font-medium">{getDateLabel(event.startTime)}</p>
+
+                  <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+                     {getEventTimeRangeLabel(event)} · {event.allDay ? "All day" : getDurationLabel(event.startTime, event.endTime)}
+                  </p>
+               </div>
+
+               <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">{details.isProjectSession ? "Project" : "Schedule type"}</p>
+
+                  <p className="mt-2 text-sm font-medium">{details.isProjectSession ? details.project : event.repeat && event.repeat !== "none" ? getRepeatLabel(event.repeat) : "Calendar event"}</p>
+
+                  {details.milestone && <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">{details.milestone}</p>}
+               </div>
+            </div>
+
+            <div className="space-y-5 py-5">
+               {details.sessionGoal && (
+                  <div>
+                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Session goal</p>
+
+                     <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{details.sessionGoal}</p>
+                  </div>
+               )}
+
+               {details.expectedResult && (
+                  <div>
+                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Expected result</p>
+
+                     <p className="mt-2 text-sm leading-6 text-[var(--color-text-primary)]">{details.expectedResult}</p>
+                  </div>
+               )}
+
+               {event.location && (
+                  <div>
+                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Location</p>
+
+                     <p className="mt-2 flex items-center gap-2 text-sm text-[var(--color-text-primary)]">
+                        <MapPin size={14} />
+
+                        {event.location}
+                     </p>
+                  </div>
+               )}
+
+               <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--color-bg-soft)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">{getCalendarWorkspaceStatusNote(event)}</div>
+            </div>
+
+            <div className="border-t border-[var(--border-subtle)] pt-5">
+               <button type="button" onClick={() => setNotesOpen((current) => !current)} className="flex w-full items-start justify-between gap-4 text-left" aria-expanded={notesOpen}>
+                  <div>
+                     <p className="font-semibold">Session notes</p>
+
+                     <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">Notes return useful context to the project. They do not mark the milestone complete.</p>
+                  </div>
+
+                  <ChevronDown size={18} className={`shrink-0 transition-transform ${notesOpen ? "rotate-180" : ""}`} />
+               </button>
+
+               <AnimatePresence initial={false}>
+                  {notesOpen && (
+                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
+                        <div className="mt-4 space-y-4">
+                           <textarea
+                              value={noteDraft}
+                              onChange={(event) => setNoteDraft(sanitizeLiveCalendarNote(event.target.value))}
+                              placeholder="What changed during this session?"
+                              className="min-h-[120px] w-full resize-none rounded-2xl border border-[var(--border-subtle)] bg-[var(--color-bg)] p-4 text-sm leading-6 outline-none"
+                           />
+
+                           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                              <button type="button" onClick={saveNoteForSelectedEvent} className="studio-button-primary w-full justify-center">
+                                 Save note
+                              </button>
+
+                              <button type="button" onClick={clearNoteDraft} className="studio-button-secondary w-full justify-center">
+                                 Clear draft
+                              </button>
+                           </div>
+
+                           {latestNote && (
+                              <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--color-surface)] p-4">
+                                 <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                       <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Latest saved note</p>
+
+                                       <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[var(--color-text-primary)]">{latestNote.note}</p>
+
+                                       <p className="mt-2 text-xs text-[var(--color-text-secondary)]">{new Date(latestNote.updatedAt).toLocaleString()}</p>
+                                    </div>
+
+                                    <button type="button" onClick={() => deleteNote(latestNote.id)} className="studio-button-secondary shrink-0 px-3 py-2 text-xs" aria-label="Delete latest calendar note">
+                                       <Trash2 size={13} />
+                                    </button>
+                                 </div>
+                              </div>
+                           )}
+
+                           {eventNotes.length > 1 && (
+                              <div className="space-y-3">
+                                 <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Earlier notes</p>
+
+                                 {eventNotes.slice(1, 5).map((note) => (
+                                    <div key={note.id} className="flex items-start justify-between gap-3 border-t border-[var(--border-subtle)] pt-3">
+                                       <div>
+                                          <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--color-text-primary)]">{note.note}</p>
+
+                                          <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{new Date(note.updatedAt).toLocaleString()}</p>
+                                       </div>
+
+                                       <button type="button" onClick={() => deleteNote(note.id)} className="studio-button-secondary shrink-0 px-3 py-2 text-xs" aria-label="Delete calendar note">
+                                          <Trash2 size={13} />
+                                       </button>
+                                    </div>
+                                 ))}
+                              </div>
+                           )}
+
+                           {eventNotes.length > 0 && (
+                              <button type="button" onClick={clearNotesForSelectedEvent} className="studio-button-secondary w-full justify-center text-xs">
+                                 Clear saved notes
+                              </button>
+                           )}
+                        </div>
+                     </motion.div>
+                  )}
+               </AnimatePresence>
+            </div>
+         </aside>
+      );
+   }
+
+   function renderWorkspaceSummary() {
+      return (
+         <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="studio-paper p-4 sm:p-5">
+               <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Today</p>
+
+               <p className="mt-2 text-2xl font-semibold">{todayEvents.length}</p>
+
+               <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">
+                  {todayEvents.length === 1 ? "One calendar block" : `${todayEvents.length} calendar blocks`} · {getPlannedTimeLabel(todayPlannedMinutes)}
+               </p>
+            </div>
+
+            <div className="studio-paper p-4 sm:p-5">
+               <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">This week</p>
+
+               <p className="mt-2 text-2xl font-semibold">{currentWeekEvents.length}</p>
+
+               <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">
+                  {currentWeekEvents.length === 1 ? "One calendar block" : `${currentWeekEvents.length} calendar blocks`} · {getPlannedTimeLabel(currentWeekPlannedMinutes)}
+               </p>
+            </div>
+
+            <div className="studio-paper p-4 sm:p-5">
+               <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Next</p>
+
+               {nextEvent ? (
+                  <>
+                     <p className="mt-2 line-clamp-2 text-sm font-semibold leading-5">{nextEvent.title}</p>
+
+                     <p className="mt-2 text-xs leading-5 text-[var(--color-text-secondary)]">
+                        {getDateLabel(nextEvent.startTime)} · {getEventTimeRangeLabel(nextEvent)}
+                     </p>
+                  </>
+               ) : (
+                  <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">No upcoming event is scheduled.</p>
+               )}
+            </div>
+         </div>
+      );
+   }
+
+   function renderTodayWorkspace() {
+      return (
+         <div className="mb-5 grid grid-cols-1 gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+            <section className="studio-paper p-4 sm:p-6">
+               <div className="mb-5 flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                     <p className="studio-eyebrow">Today</p>
+
+                     <h3 className="mt-2 text-2xl">{getDateLabel(Date.now())}</h3>
+                  </div>
+
+                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{getPlannedTimeLabel(todayPlannedMinutes)}</p>
+               </div>
+
+               {todayEvents.length > 0 ? (
+                  <div className="space-y-3">{todayEvents.map((event) => renderEventCard(event))}</div>
+               ) : (
+                  <div className="rounded-[var(--radius-lg)] border border-dashed border-[var(--border-subtle)] bg-[var(--color-bg-soft)] p-5">
+                     <p className="font-semibold">No project session is scheduled today.</p>
+
+                     <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">Calendar is only showing saved time. It does not assume the rest of the day is available.</p>
+
+                     {nextEvent && (
+                        <button type="button" onClick={() => selectEvent(nextEvent)} className="mt-4 text-left text-sm font-semibold text-[var(--color-primary)]">
+                           Next: {nextEvent.title} · {getDateLabel(nextEvent.startTime)}
+                        </button>
+                     )}
+                  </div>
+               )}
+            </section>
+
+            {selectedEvent ? (
+               renderSelectedEventPanel(selectedEvent)
+            ) : (
+               <aside className="studio-paper p-6">
+                  <p className="studio-eyebrow">Selected event</p>
+
+                  <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">Choose a saved event to see its project, milestone, goal, expected result, and notes.</p>
+               </aside>
+            )}
+         </div>
+      );
+   }
+
+   function renderWeekWorkspace() {
+      return (
+         <div className="mb-5 grid grid-cols-1 gap-5 xl:grid-cols-[1.08fr_0.92fr]">
+            <section className="studio-paper p-4 sm:p-6">
+               <div className="mb-5 flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                     <p className="studio-eyebrow">Week</p>
+
+                     <h3 className="mt-2 text-2xl">{getWeekRangeLabel(selectedDayDate)}</h3>
+
+                     <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{getPlannedTimeLabel(visibleWeekPlannedMinutes)}</p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                     <button type="button" onClick={() => moveVisibleWeek(-1)} className="studio-button-secondary px-3 py-2 text-xs" aria-label="Previous week">
+                        ←
+                     </button>
+
+                     <button type="button" onClick={jumpToToday} className="studio-button-secondary px-3 py-2 text-xs">
+                        This week
+                     </button>
+
+                     <button type="button" onClick={() => moveVisibleWeek(1)} className="studio-button-secondary px-3 py-2 text-xs" aria-label="Next week">
+                        →
+                     </button>
+                  </div>
+               </div>
+
+               <div className="space-y-5">
+                  {weekDays.map((dayTimestamp) => {
+                     const dayEvents = getEventsForDay(hydratedEvents, dayTimestamp);
+
+                     return (
+                        <div key={dayTimestamp} className="grid gap-3 border-b border-[var(--border-subtle)] pb-5 last:border-b-0 last:pb-0 md:grid-cols-[130px_1fr]">
+                           <div>
+                              <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{new Date(dayTimestamp).toLocaleDateString([], { weekday: "short" })}</p>
+
+                              <p className={`mt-1 text-lg font-semibold ${isSameCalendarDay(dayTimestamp, Date.now()) ? "text-[var(--color-primary)]" : ""}`}>{new Date(dayTimestamp).toLocaleDateString([], { month: "short", day: "numeric" })}</p>
+
+                              <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+                                 {dayEvents.length} event{dayEvents.length === 1 ? "" : "s"}
+                              </p>
+                           </div>
+
+                           {dayEvents.length > 0 ? (
+                              <div className="space-y-3">{dayEvents.map((event) => renderEventCard(event))}</div>
+                           ) : (
+                              <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--border-subtle)] px-4 py-3 text-sm text-[var(--color-text-secondary)]">No saved time.</div>
+                           )}
+                        </div>
+                     );
+                  })}
+               </div>
+            </section>
+
+            {selectedEvent ? (
+               renderSelectedEventPanel(selectedEvent)
+            ) : (
+               <aside className="studio-paper p-6">
+                  <p className="studio-eyebrow">Selected event</p>
+
+                  <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">Choose a session from the week to inspect its project connection and notes.</p>
+               </aside>
+            )}
          </div>
       );
    }
@@ -2386,7 +2956,11 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
 
          <div className="mb-6 flex flex-col gap-5 border-b border-[var(--border-subtle)] pb-5 xl:flex-row xl:items-end xl:justify-between">
             <div>
-               <p className="studio-eyebrow">Calendar</p>
+               <div className="flex items-center gap-2">
+                  <CalendarDays size={16} className="text-[var(--color-primary)]" />
+
+                  <p className="studio-eyebrow">Calendar</p>
+               </div>
 
                <h2 data-editorial-title="true" className="mt-2 text-4xl leading-tight sm:text-5xl">
                   Plan the time around the work.
@@ -2395,6 +2969,39 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
 
             {notice && <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-blue)] px-4 py-3 text-sm font-medium text-[var(--color-text-secondary)]">{notice}</div>}
          </div>
+
+         <div className="mb-5 flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="inline-flex w-full rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--color-surface)] p-1 sm:w-auto">
+               {(["today", "week", "month"] as CalendarWorkspaceView[]).map((view) => (
+                  <button
+                     key={view}
+                     type="button"
+                     onClick={() => selectCalendarWorkspaceView(view)}
+                     aria-pressed={workspaceView === view}
+                     className={`
+                        min-h-10
+                        flex-1
+                        rounded-[var(--radius-md)]
+                        px-4
+                        py-2
+                        text-sm
+                        font-semibold
+                        capitalize
+                        transition-colors
+                        sm:flex-none
+
+                        ${workspaceView === view ? "bg-[var(--color-primary)] text-[var(--color-cream)] shadow-[var(--shadow-soft)]" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-soft)] hover:text-[var(--color-text-primary)]"}
+                     `}
+                  >
+                     {view}
+                  </button>
+               ))}
+            </div>
+
+            <p className="text-xs leading-5 text-[var(--color-text-secondary)]"></p>
+         </div>
+
+         {renderWorkspaceSummary()}
 
          {/* Add Event */}
 
@@ -2549,16 +3156,22 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
             </AnimatePresence>
          </div>
 
-         {/* Month View */}
+         {workspaceView === "today" && renderTodayWorkspace()}
 
-         <div className="studio-paper mb-5 p-4 sm:p-6">
-            <div className="mb-4 flex items-center justify-end gap-2">
-               <button
-                  type="button"
-                  onClick={() => moveVisibleMonth(-1)}
-                  aria-label="Previous month"
-                  title="Previous month"
-                  className="
+         {workspaceView === "week" && renderWeekWorkspace()}
+
+         {workspaceView === "month" && (
+            <>
+               {/* Month View */}
+
+               <div className="studio-paper mb-5 p-4 sm:p-6">
+                  <div className="mb-4 flex items-center justify-end gap-2">
+                     <button
+                        type="button"
+                        onClick={() => moveVisibleMonth(-1)}
+                        aria-label="Previous month"
+                        title="Previous month"
+                        className="
                      flex
                      h-10
                      w-10
@@ -2573,18 +3186,18 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                      hover:bg-[var(--color-bg-soft)]
                      hover:text-[var(--color-text-primary)]
                   "
-               >
-                  <span aria-hidden="true" className="text-xl leading-none">
-                     ←
-                  </span>
-               </button>
+                     >
+                        <span aria-hidden="true" className="text-xl leading-none">
+                           ←
+                        </span>
+                     </button>
 
-               <button
-                  type="button"
-                  onClick={() => moveVisibleMonth(1)}
-                  aria-label="Next month"
-                  title="Next month"
-                  className="
+                     <button
+                        type="button"
+                        onClick={() => moveVisibleMonth(1)}
+                        aria-label="Next month"
+                        title="Next month"
+                        className="
                      flex
                      h-10
                      w-10
@@ -2599,84 +3212,84 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
                      hover:bg-[var(--color-bg-soft)]
                      hover:text-[var(--color-text-primary)]
                   "
-               >
-                  <span aria-hidden="true" className="text-xl leading-none">
-                     →
-                  </span>
-               </button>
-            </div>
-
-            <div className="mb-5 border-y border-[var(--border-subtle)] py-5">
-               <div className="relative">
-                  <button onClick={() => setMonthJumpOpen((current) => !current)} className="flex items-center gap-3 text-left transition-colors hover:text-[var(--color-primary)]" aria-expanded={monthJumpOpen}>
-                     <span data-editorial-title="true" className="text-3xl leading-tight sm:text-4xl">
-                        {visibleMonthLabel}
-                     </span>
-
-                     <ChevronDown size={18} className={`transition-transform ${monthJumpOpen ? "rotate-180" : ""}`} />
-                  </button>
-               </div>
-
-               <AnimatePresence initial={false}>
-                  {monthJumpOpen && (
-                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
-                        <div className="mt-4 grid grid-cols-1 gap-3 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--color-surface)] p-4 sm:grid-cols-2">
-                           <label className="text-xs font-medium text-[var(--color-text-secondary)]">
-                              Month
-                              <select
-                                 value={visibleMonthIndex}
-                                 onChange={(event) => jumpToCalendarMonth(Number(event.target.value), visibleYear)}
-                                 className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-primary)] outline-none"
-                              >
-                                 {CALENDAR_MONTH_OPTIONS.map((month, index) => (
-                                    <option key={month} value={index}>
-                                       {month}
-                                    </option>
-                                 ))}
-                              </select>
-                           </label>
-
-                           <label className="text-xs font-medium text-[var(--color-text-secondary)]">
-                              Year
-                              <select
-                                 value={visibleYear}
-                                 onChange={(event) => jumpToCalendarMonth(visibleMonthIndex, Number(event.target.value))}
-                                 className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-primary)] outline-none"
-                              >
-                                 {calendarYearOptions.map((year) => (
-                                    <option key={year} value={year}>
-                                       {year}
-                                    </option>
-                                 ))}
-                              </select>
-                           </label>
-                        </div>
-                     </motion.div>
-                  )}
-               </AnimatePresence>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_0.9fr]">
-               <div>
-                  <div className="mb-2 grid grid-cols-7 gap-1 sm:gap-2">
-                     {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
-                        <div key={day} className="border-b border-[var(--border-subtle)] px-1 py-2 text-center text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-secondary)] sm:px-2 sm:text-xs">
-                           {day}
-                        </div>
-                     ))}
+                     >
+                        <span aria-hidden="true" className="text-xl leading-none">
+                           →
+                        </span>
+                     </button>
                   </div>
 
-                  <div className="grid grid-cols-7 gap-1 sm:gap-2">
-                     {monthGridDays.map((day) => {
-                        const dayEvents = getEventsForDay(hydratedEvents, day.timestamp);
+                  <div className="mb-5 border-y border-[var(--border-subtle)] py-5">
+                     <div className="relative">
+                        <button onClick={() => setMonthJumpOpen((current) => !current)} className="flex items-center gap-3 text-left transition-colors hover:text-[var(--color-primary)]" aria-expanded={monthJumpOpen}>
+                           <span data-editorial-title="true" className="text-3xl leading-tight sm:text-4xl">
+                              {visibleMonthLabel}
+                           </span>
 
-                        const selected = isSameCalendarDay(day.timestamp, selectedDayDate);
+                           <ChevronDown size={18} className={`transition-transform ${monthJumpOpen ? "rotate-180" : ""}`} />
+                        </button>
+                     </div>
 
-                        return (
-                           <button
-                              key={day.timestamp}
-                              onClick={() => selectCalendarDay(day.timestamp)}
-                              className={`
+                     <AnimatePresence initial={false}>
+                        {monthJumpOpen && (
+                           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
+                              <div className="mt-4 grid grid-cols-1 gap-3 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--color-surface)] p-4 sm:grid-cols-2">
+                                 <label className="text-xs font-medium text-[var(--color-text-secondary)]">
+                                    Month
+                                    <select
+                                       value={visibleMonthIndex}
+                                       onChange={(event) => jumpToCalendarMonth(Number(event.target.value), visibleYear)}
+                                       className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-primary)] outline-none"
+                                    >
+                                       {CALENDAR_MONTH_OPTIONS.map((month, index) => (
+                                          <option key={month} value={index}>
+                                             {month}
+                                          </option>
+                                       ))}
+                                    </select>
+                                 </label>
+
+                                 <label className="text-xs font-medium text-[var(--color-text-secondary)]">
+                                    Year
+                                    <select
+                                       value={visibleYear}
+                                       onChange={(event) => jumpToCalendarMonth(visibleMonthIndex, Number(event.target.value))}
+                                       className="mt-2 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2 text-sm font-medium text-[var(--color-text-primary)] outline-none"
+                                    >
+                                       {calendarYearOptions.map((year) => (
+                                          <option key={year} value={year}>
+                                             {year}
+                                          </option>
+                                       ))}
+                                    </select>
+                                 </label>
+                              </div>
+                           </motion.div>
+                        )}
+                     </AnimatePresence>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_0.9fr]">
+                     <div>
+                        <div className="mb-2 grid grid-cols-7 gap-1 sm:gap-2">
+                           {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+                              <div key={day} className="border-b border-[var(--border-subtle)] px-1 py-2 text-center text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-secondary)] sm:px-2 sm:text-xs">
+                                 {day}
+                              </div>
+                           ))}
+                        </div>
+
+                        <div className="grid grid-cols-7 gap-1 sm:gap-2">
+                           {monthGridDays.map((day) => {
+                              const dayEvents = getEventsForDay(hydratedEvents, day.timestamp);
+
+                              const selected = isSameCalendarDay(day.timestamp, selectedDayDate);
+
+                              return (
+                                 <button
+                                    key={day.timestamp}
+                                    onClick={() => selectCalendarDay(day.timestamp)}
+                                    className={`
                                  min-h-[58px]
                                  rounded-[var(--radius-md)]
                                  sm:min-h-[92px]
@@ -2701,52 +3314,56 @@ Ask what is on your calendar, what you have tomorrow, or what you should schedul
 
                                  ${day.isCurrentMonth ? "" : "opacity-45"}
                               `}
-                           >
-                              <div className="mb-1 flex items-center justify-between gap-1 sm:mb-2 sm:gap-2">
-                                 <span className={`text-xs font-medium sm:text-sm ${day.isToday ? "text-[var(--color-primary)]" : ""}`}>{getShortDayNumber(day.timestamp)}</span>
+                                 >
+                                    <div className="mb-1 flex items-center justify-between gap-1 sm:mb-2 sm:gap-2">
+                                       <span className={`text-xs font-medium sm:text-sm ${day.isToday ? "text-[var(--color-primary)]" : ""}`}>{getShortDayNumber(day.timestamp)}</span>
 
-                                 {dayEvents.length > 0 && <span className="rounded-full bg-[var(--color-primary)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-cream)] shadow-sm sm:px-2">{dayEvents.length}</span>}
-                              </div>
-
-                              <div className="hidden space-y-1 sm:block">
-                                 {dayEvents.slice(0, 2).map((event) => (
-                                    <div key={event.id} className="truncate rounded-lg border border-[rgba(48,92,222,0.22)] bg-[rgba(48,92,222,0.12)] px-2 py-1 text-[10px] font-semibold text-[var(--color-primary)]">
-                                       {event.allDay ? "All day" : getShortTimeLabel(event.startTime)} {event.title}
+                                       {dayEvents.length > 0 && <span className="rounded-full bg-[var(--color-primary)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-cream)] shadow-sm sm:px-2">{dayEvents.length}</span>}
                                     </div>
-                                 ))}
 
-                                 {dayEvents.length > 2 && <div className="px-2 text-[10px] text-[var(--color-text-secondary)]">+{dayEvents.length - 2} more</div>}
-                              </div>
-                           </button>
-                        );
-                     })}
-                  </div>
-               </div>
+                                    <div className="hidden space-y-1 sm:block">
+                                       {dayEvents.slice(0, 2).map((event) => (
+                                          <div key={event.id} className="truncate rounded-lg border border-[rgba(48,92,222,0.22)] bg-[rgba(48,92,222,0.12)] px-2 py-1 text-[10px] font-semibold text-[var(--color-primary)]">
+                                             {event.allDay ? "All day" : getShortTimeLabel(event.startTime)} {event.title}
+                                          </div>
+                                       ))}
 
-               <div className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--color-surface)] p-4 shadow-[var(--shadow-soft)]">
-                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                     <div>
-                        <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Day</p>
-
-                        <h3 className="mt-1 text-xl">{getDateLabel(selectedDayDate)}</h3>
+                                       {dayEvents.length > 2 && <div className="px-2 text-[10px] text-[var(--color-text-secondary)]">+{dayEvents.length - 2} more</div>}
+                                    </div>
+                                 </button>
+                              );
+                           })}
+                        </div>
                      </div>
 
-                     <span className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
-                        {selectedDayEvents.length} event
-                        {selectedDayEvents.length === 1 ? "" : "s"}
-                     </span>
-                  </div>
+                     <div className="rounded-[var(--radius-xl)] border border-[var(--border-subtle)] bg-[var(--color-surface)] p-4 shadow-[var(--shadow-soft)]">
+                        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                           <div>
+                              <p className="text-xs uppercase tracking-[0.15em] text-[var(--color-text-secondary)]">Day</p>
 
-                  <div className="space-y-3">
-                     {selectedDayEvents.length === 0 ? (
-                        <div className="border-y border-[var(--border-subtle)] py-5 text-sm leading-6 text-[var(--color-text-secondary)]">No events scheduled for this day.</div>
-                     ) : (
-                        selectedDayEvents.map((event) => renderEventCard(event))
-                     )}
+                              <h3 className="mt-1 text-xl">{getDateLabel(selectedDayDate)}</h3>
+                           </div>
+
+                           <span className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
+                              {selectedDayEvents.length} event
+                              {selectedDayEvents.length === 1 ? "" : "s"}
+                           </span>
+                        </div>
+
+                        <div className="space-y-3">
+                           {selectedDayEvents.length === 0 ? (
+                              <div className="border-y border-[var(--border-subtle)] py-5 text-sm leading-6 text-[var(--color-text-secondary)]">No events scheduled for this day.</div>
+                           ) : (
+                              selectedDayEvents.map((event) => renderEventCard(event))
+                           )}
+                        </div>
+                     </div>
                   </div>
                </div>
-            </div>
-         </div>
+
+               {selectedEvent && <div className="mb-5">{renderSelectedEventPanel(selectedEvent)}</div>}
+            </>
+         )}
       </motion.section>
    );
 }
