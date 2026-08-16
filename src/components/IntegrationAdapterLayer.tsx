@@ -10,25 +10,32 @@ import { useWorkspace } from "@/components/WorkspaceContext";
 
 import { upsertProjectMemory, deleteProjectMemory } from "@/lib/allevinProjectMemory";
 
+import { readCanonicalProjectSelection, refreshCanonicalProjectState, resolveCanonicalProjectSelection, writeCanonicalProjectSelection } from "@/lib/projectStateAuthority";
+
 import { interpretMaterialWithLLM, requestAllevinLLM } from "@/lib/allevinLLMClient";
 
 import { buildLocalProjectDraftGuide, buildProjectDraftGuide, renderProjectDraftGuide } from "@/lib/projectDraftIntelligence";
+
+import {
+   ALLEVIN_PROJECT_WORK_JOURNAL_UPDATED_EVENT,
+   appendProjectWorkJournalEntry,
+   formatMilestoneCheckpoint,
+   readProjectMilestoneWorkJournal,
+} from "@/lib/projectWorkJournal";
 
 import { rememberDeletedProjectMemorySignal } from "@/components/MemoryEngine";
 
 // ========================================
 // ALLEVIN Projects Workspace
 // Purpose:
-// MK IX project home base.
-// Projects keeps each project, ALLEVIN's Guide, milestones, schedule, and materials together.
+// MK XI project home base using the Unified Project State authority.
+// Projects keeps the goal, current milestone, useful context, and materials together without making the user manage ALLEVIN's internal structure.
 // ALLEVIN turns a user's description into an editable project draft before it is saved.
 // ========================================
 
 const STORAGE_KEY = "allevin-internal-output-hub";
 
 const PROJECT_LIBRARY_STORAGE_KEY = "allevin-project-library";
-
-const ACTIVE_PROJECT_SELECTION_STORAGE_KEY = "allevin-active-project-selection-mkviii";
 
 const DELETED_PROJECTS_STORAGE_KEY = "allevin-project-deleted";
 
@@ -189,6 +196,11 @@ interface IncomingIntegrationPayload {
 
    sourceContent?: string;
 
+   // MK XI keeps the user's original project description as hidden project context.
+   // The calm project plan is what the user sees; the source brief remains available
+   // to project intelligence so simplification never throws useful context away.
+   sourceBrief?: string;
+
    workingSummary?: string;
 
    cleanSourceContent?: string;
@@ -277,6 +289,8 @@ interface InternalOutputItem {
 
    sourceContent?: string;
 
+   sourceBrief?: string;
+
    workingSummary?: string;
 
    cleanSourceContent?: string;
@@ -318,6 +332,9 @@ interface ProjectLibraryItem {
    originBoardItemId?: string;
 
    latestSummary: string;
+
+   // Hidden original user description retained for MK XI project intelligence.
+   sourceBrief?: string;
 
    latestMovement: string;
 
@@ -366,6 +383,10 @@ interface ProjectTrackingMeta {
    priority: "low" | "medium" | "high";
 
    nextStep: string;
+
+   // MK XI: one explicit milestone id travels with the tracking record so every
+   // consumer resolves the same current milestone instead of re-inferring it.
+   activeMilestoneId: string;
 
    milestones: ProjectMilestone[];
 
@@ -3464,8 +3485,8 @@ function buildGeneratedProjectMilestoneMetadata(project: ProjectLibraryItem, tit
    const lower = cleanTitle.toLowerCase();
    const projectBody = sanitizeProjectBody(project.notes[0]?.body || project.latestSummary);
    const confirmed = getMilestoneProjectSectionItems(project, ["Confirmed Decisions", "Decisions", "Decided"]);
-   const openQuestions = getMilestoneProjectSectionItems(project, ["Open Questions", "Questions", "Unresolved Decisions"]);
-   const constraints = getMilestoneProjectSectionItems(project, ["Constraints", "Requirements", "Limits"]);
+   const openQuestions = getMilestoneProjectSectionItems(project, ["Things to Decide", "Still to Decide", "Open Questions", "Questions", "Unresolved Decisions"]);
+   const constraints = getMilestoneProjectSectionItems(project, ["Keep in Mind", "Constraints", "Requirements", "Limits"]);
    const relatedDecisions = getMilestoneRelatedItems(cleanTitle, confirmed, 8);
    const relatedQuestions = getMilestoneRelatedItems(cleanTitle, openQuestions, 8);
    void getMilestoneRelatedItems(cleanTitle, constraints, 6);
@@ -3907,7 +3928,7 @@ function buildGeneratedProjectMilestoneMetadata(project: ProjectLibraryItem, tit
       ];
    }
 
-   const criteriaFromQuestions = milestoneQuestions.map((question) => `A supported answer is recorded for: ${question.replace(/[.?]+$/, "")}`);
+   const criteriaFromQuestions = milestoneQuestions.map((question) => ensureProjectQuestionMark(question)).filter(Boolean);
    completionCriteria = uniqueProjectIntakeStatements([...completionCriteria, ...criteriaFromQuestions], 10);
 
    return {
@@ -4028,12 +4049,8 @@ function sanitizeProjectMilestones(value: unknown, project: ProjectLibraryItem):
             ? uniqueProjectIntakeStatements(
                  [
                     ...item.completionCriteria
-                       .map((entry: unknown) => sanitizeProjectSummary(String(entry)))
-                       .filter((entry: string) => {
-                          if (!isGeneratedProjectCriterionCompatible(title, entry)) return false;
-                          if (!/^A supported answer is recorded for:/i.test(entry)) return true;
-                          return metadata.completionCriteria.some((criterion) => getProjectIntakeSemanticOverlap(criterion, entry) >= 0.72);
-                       }),
+                       .map((entry: unknown) => formatMilestoneCheckpoint(String(entry)))
+                       .filter((entry: string) => isGeneratedProjectCriterionCompatible(title, entry)),
                     ...metadata.completionCriteria,
                  ],
                  40,
@@ -4088,11 +4105,15 @@ function sanitizeProjectMilestones(value: unknown, project: ProjectLibraryItem):
 }
 
 function getDefaultProjectTracking(project: ProjectLibraryItem): ProjectTrackingMeta {
+   const milestones = getDefaultProjectMilestones(project);
+   const activeMilestone = milestones.find((milestone) => milestone.status === "active") || milestones.find((milestone) => milestone.status !== "complete") || null;
+
    return {
       status: inferProjectTrackingStatus(project),
       priority: "medium",
       nextStep: getProjectTypeInsight(project).nextMove,
-      milestones: getDefaultProjectMilestones(project),
+      activeMilestoneId: activeMilestone?.id || "",
+      milestones,
       calendarTaskTitle: "",
       calendarTaskDate: "",
       calendarTaskTime: "",
@@ -4160,7 +4181,7 @@ function getNextStatus(status: ProjectTrackingStatus): ProjectTrackingStatus {
 
 function getTrackingGuidance(status: ProjectTrackingStatus) {
    if (status === "idea") {
-      return "Review the project guide and clarify the first progress checkpoint.";
+      return "Review the project plan and clarify the first progress checkpoint.";
    }
 
    if (status === "active") {
@@ -4476,6 +4497,8 @@ function buildInternalOutputFromPayload(payload: IncomingIntegrationPayload): In
 
       sourceContent: sanitizeProjectBody(payload.sourceContent || payload.cleanSourceContent || body),
 
+      sourceBrief: sanitizeProjectBody(payload.sourceBrief),
+
       workingSummary: sanitizeProjectSummary(payload.workingSummary || body),
 
       cleanSourceContent: sanitizeProjectBody(payload.cleanSourceContent || payload.sourceContent || body),
@@ -4697,76 +4720,27 @@ interface ActiveProjectSelectionRecord {
 }
 
 function readActiveProjectSelection(): ActiveProjectSelectionRecord | null {
-   if (typeof window === "undefined") {
-      return null;
-   }
+   const selection = readCanonicalProjectSelection();
 
-   try {
-      const stored = localStorage.getItem(ACTIVE_PROJECT_SELECTION_STORAGE_KEY);
-      const parsed = stored ? JSON.parse(stored) : null;
-
-      if (!parsed || typeof parsed !== "object") {
-         return null;
-      }
-
-      const projectId = compactText(parsed.projectId);
-      const title = sanitizeProjectTitle(parsed.title);
-      const updatedAt = typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : 0;
-
-      if (!projectId && !title) {
-         return null;
-      }
-
-      return {
-         projectId,
-         title,
-         updatedAt,
-      };
-   } catch {
-      return null;
-   }
+   return selection
+      ? {
+           projectId: selection.projectId,
+           title: selection.title,
+           updatedAt: selection.updatedAt,
+        }
+      : null;
 }
 
 function writeActiveProjectSelection(project?: ProjectLibraryItem | null) {
-   if (typeof window === "undefined" || !project) {
+   if (!project) {
       return;
    }
 
-   const record: ActiveProjectSelectionRecord = {
-      projectId: compactText(project.id),
-      title: sanitizeProjectTitle(project.title),
-      updatedAt: Date.now(),
-   };
-
-   localStorage.setItem(ACTIVE_PROJECT_SELECTION_STORAGE_KEY, JSON.stringify(record));
-
-   window.dispatchEvent(
-      new CustomEvent("allevin-active-project-selection-change", {
-         detail: record,
-      }),
-   );
+   writeCanonicalProjectSelection(project);
 }
 
 function resolvePersistedProjectSelection(projects: ProjectLibraryItem[]): ProjectLibraryItem | null {
-   const selection = readActiveProjectSelection();
-
-   if (!projects.length) {
-      return null;
-   }
-
-   if (!selection) {
-      return projects[0] || null;
-   }
-
-   const idMatch = selection.projectId ? projects.find((project) => project.id === selection.projectId) : null;
-
-   if (idMatch) {
-      return idMatch;
-   }
-
-   const selectionTitleKey = getProjectTitleKey(selection.title);
-
-   return projects.find((project) => getProjectTitleKey(project.title) === selectionTitleKey) || projects[0] || null;
+   return resolveCanonicalProjectSelection(projects).project;
 }
 
 function readProjectLibrary() {
@@ -4793,6 +4767,7 @@ function readProjectLibrary() {
             ...project,
             title: sanitizeProjectTitle(project.title),
             latestSummary: sanitizeProjectSummary(project.latestSummary),
+            sourceBrief: sanitizeProjectBody(project.sourceBrief),
             latestMovement: sanitizeProjectPlainText(project.latestMovement, 300),
             workflowId: typeof project.workflowId === "string" ? project.workflowId : undefined,
             originBoardItemId: typeof project.originBoardItemId === "string" ? project.originBoardItemId : undefined,
@@ -4896,7 +4871,7 @@ function saveProjectDirectly(item: InternalOutputItem) {
       title: cleanTitle,
       body,
       sourceTitle: cleanTitle,
-      sourceContent: sanitizeProjectBody(item.sourceContent || body),
+      sourceContent: sanitizeProjectBody(item.sourceBrief || item.sourceContent || body),
       workingSummary: sanitizeProjectSummary(item.workingSummary || summary || body),
       workflowId: item.workflowId,
       originBoardItemId: item.originBoardItemId,
@@ -4906,7 +4881,7 @@ function saveProjectDirectly(item: InternalOutputItem) {
       status: "active",
       priority: "medium",
       latestMovement: "Saved to Projects",
-      recommendedNextAction: getStructuredProjectSection(body, ["Recommended Starting Point", "Recommended Move", "Starting Point"]) || sanitizeProjectNextStep(item.suggestedNextStep) || "Review the first unfinished progress checkpoint.",
+      recommendedNextAction: getStructuredProjectSection(body, ["Start Here", "Start", "Recommended Starting Point", "Recommended Move", "Starting Point"]) || sanitizeProjectNextStep(item.suggestedNextStep) || "Review the first unfinished progress checkpoint.",
    });
 
    upsertProjectLibraryNote({
@@ -4916,6 +4891,7 @@ function saveProjectDirectly(item: InternalOutputItem) {
       workflowId: item.workflowId,
       originBoardItemId: item.originBoardItemId,
       noteId,
+      sourceBrief: item.sourceBrief,
    });
 
    window.dispatchEvent(
@@ -4963,6 +4939,7 @@ function upsertProjectLibraryNote({
    workflowId,
    originBoardItemId,
    noteId,
+   sourceBrief,
 }: {
    title: string;
 
@@ -4975,6 +4952,8 @@ function upsertProjectLibraryNote({
    originBoardItemId?: string;
 
    noteId: string;
+
+   sourceBrief?: string;
 }) {
    const cleanTitle = sanitizeProjectTitle(cleanProjectTitle(title));
 
@@ -5018,6 +4997,8 @@ function upsertProjectLibraryNote({
 
            latestSummary: sanitizeProjectSummary(chooseLongestProjectDocument(body, existing.notes?.[0]?.body, summary, existing.latestSummary)),
 
+           sourceBrief: sanitizeProjectBody(sourceBrief || existing.sourceBrief),
+
            latestMovement: "Saved to Projects",
 
            notes: [note, ...existing.notes.filter((existingNote: ProjectLibraryNote) => existingNote.id !== note.id && cleanProjectTitle(existingNote.title) !== cleanTitle)].slice(0, 30),
@@ -5034,6 +5015,8 @@ function upsertProjectLibraryNote({
            originBoardItemId,
 
            latestSummary: sanitizeProjectSummary(chooseLongestProjectDocument(body, summary)),
+
+           sourceBrief: sanitizeProjectBody(sourceBrief),
 
            latestMovement: "Saved to Projects",
 
@@ -5345,10 +5328,6 @@ export default function IntegrationAdapterLayer() {
 
    const [milestoneWorkingDrafts, setMilestoneWorkingDrafts] = useState<Record<string, string>>({});
 
-   const [selectedMilestoneWorkspaceId, setSelectedMilestoneWorkspaceId] = useState("");
-
-   const milestoneAutosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-
    const [projectMaterials, setProjectMaterials] = useState<ProjectMaterial[]>([]);
 
    const [materialBuilderOpen, setMaterialBuilderOpen] = useState(false);
@@ -5409,7 +5388,7 @@ export default function IntegrationAdapterLayer() {
       }
 
       const projectBody = sanitizeProjectBody(project.notes[0]?.body || project.latestSummary);
-      const projectGoal = sanitizeProjectSummary(getStructuredProjectSection(projectBody, ["Project Goal", "Goal", "Main Goal", "Objective"]))
+      const projectGoal = sanitizeProjectSummary(getStructuredProjectSection(projectBody, ["What You're Building", "What You Are Building", "Project Goal", "Goal", "Main Goal", "Objective"]))
          .split("\n")
          .map((line) => sanitizeProjectSummary(line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "")))
          .filter(Boolean)[0];
@@ -5419,8 +5398,8 @@ export default function IntegrationAdapterLayer() {
       }
 
       const summary = sanitizeProjectSummary(project.latestSummary)
-         .replace(/^(?:Project Goal|Goal|Main Goal|Objective)\s*:\s*/i, "")
-         .split(/\b(?:Success Looks Like|Current Situation|Confirmed Decisions|Open Questions|Constraints|ALLEVIN['’]s Guide|Working Notes|Initial Milestones|Recommended Starting Point)\s*:/i)[0]
+         .replace(/^(?:What You[’']re Building|What You Are Building|Project Goal|Goal|Main Goal|Objective)\s*:\s*/i, "")
+         .split(/\b(?:What Good Looks Like|Success Looks Like|Things to Decide|Keep in Mind|Current Situation|Confirmed Decisions|Open Questions|Constraints|ALLEVIN['’]s Guide|Working Notes|Initial Milestones|Milestones|Start Here|Recommended Starting Point)\s*:/i)[0]
          .trim();
 
       return getShortPreview(summary || "Open the project to review its guide and milestones.", limit);
@@ -6024,13 +6003,25 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
    function getProjectTracking(project: ProjectLibraryItem) {
       const storedTracking = projectTrackingMap[project.id];
-
       const fallbackTracking = getDefaultProjectTracking(project);
+      const milestones = sanitizeProjectMilestones(storedTracking?.milestones, project);
+
+      // MK XI current-milestone authority: prefer the persisted explicit id.
+      // Older projects migrate automatically by resolving the existing active
+      // status, then the first unfinished milestone, without changing the UI.
+      const storedActiveMilestoneId = sanitizeProjectPlainText(storedTracking?.activeMilestoneId, 180);
+      const activeMilestone =
+         milestones.find((milestone) => milestone.id === storedActiveMilestoneId && milestone.status !== "complete") ||
+         milestones.find((milestone) => milestone.status === "active") ||
+         milestones.find((milestone) => milestone.status !== "complete") ||
+         milestones[0] ||
+         null;
 
       return {
          ...fallbackTracking,
          ...storedTracking,
-         milestones: sanitizeProjectMilestones(storedTracking?.milestones, project),
+         activeMilestoneId: activeMilestone?.id || "",
+         milestones,
          calendarTaskTitle: storedTracking?.calendarTaskTitle || "",
          calendarTaskDate: storedTracking?.calendarTaskDate || "",
          calendarTaskTime: storedTracking?.calendarTaskTime || "",
@@ -6040,12 +6031,47 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
    function updateProjectTracking(project: ProjectLibraryItem, updates: Partial<ProjectTrackingMeta>, options: { quiet?: boolean } = {}) {
       const currentTracking = getProjectTracking(project);
+      const sanitizedMilestones = sanitizeProjectMilestones(updates.milestones ?? currentTracking.milestones, project);
+      const requestedActiveMilestoneId = sanitizeProjectPlainText(updates.activeMilestoneId ?? currentTracking.activeMilestoneId, 180);
+
+      const authoritativeMilestone =
+         sanitizedMilestones.find((milestone) => milestone.id === requestedActiveMilestoneId && milestone.status !== "complete") ||
+         sanitizedMilestones.find((milestone) => milestone.status === "active") ||
+         sanitizedMilestones.find((milestone) => milestone.status !== "complete") ||
+         null;
+
+      const activeMilestoneId = authoritativeMilestone?.id || "";
+
+      // Exactly one unfinished milestone may be current. This keeps the visible
+      // switch, canonical state, AIDock, and persisted tracking map aligned.
+      const milestones = sanitizedMilestones.map((milestone) => {
+         if (milestone.status === "complete") return milestone;
+
+         if (milestone.id === activeMilestoneId) {
+            return {
+               ...milestone,
+               status: "active" as const,
+               completed: false,
+            };
+         }
+
+         if (milestone.status === "active") {
+            return {
+               ...milestone,
+               status: "waiting" as const,
+               completed: false,
+            };
+         }
+
+         return milestone;
+      });
 
       const nextTracking: ProjectTrackingMeta = {
          ...currentTracking,
          ...updates,
-         nextStep: sanitizeProjectNextStep(updates.nextStep ?? currentTracking.nextStep),
-         milestones: sanitizeProjectMilestones(updates.milestones ?? currentTracking.milestones, project),
+         activeMilestoneId,
+         nextStep: sanitizeProjectNextStep(updates.nextStep ?? authoritativeMilestone?.title ?? currentTracking.nextStep),
+         milestones,
          calendarTaskTitle: sanitizeLiveProjectTitle(updates.calendarTaskTitle ?? currentTracking.calendarTaskTitle),
          calendarTaskDate: sanitizeProjectPlainText(updates.calendarTaskDate ?? currentTracking.calendarTaskDate, 40),
          calendarTaskTime: sanitizeProjectPlainText(updates.calendarTaskTime ?? currentTracking.calendarTaskTime, 40),
@@ -6053,13 +6079,15 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
          updatedAt: getNow(),
       };
 
+      // Read the persisted map at write time rather than trusting a React-state
+      // closure. Rapid milestone changes therefore cannot resurrect an older
+      // active milestone while setState is still settling.
       const nextMap = {
-         ...projectTrackingMap,
+         ...getProjectTrackingMap(),
          [project.id]: nextTracking,
       };
 
       setProjectTrackingMap(nextMap);
-
       saveProjectTrackingMap(nextMap);
 
       upsertProjectMemory({
@@ -6117,6 +6145,11 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
       window.dispatchEvent(new CustomEvent("allevin-project-memory-update"));
 
+      // Rebuild and emit the canonical snapshot immediately after the tracking
+      // write so AIDock never has to wait for a React rerender to see the user's
+      // newly selected milestone.
+      refreshCanonicalProjectState({ emit: true });
+
       if (!options.quiet) showNotice("Project updated");
    }
 
@@ -6163,7 +6196,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       window.dispatchEvent(new CustomEvent("allevin-project-memory-update"));
       window.dispatchEvent(new CustomEvent("allevin-project-library-update"));
 
-      showNotice("ALLEVIN’s Guide saved");
+      showNotice("Project context saved");
    }
 
    function normalizeMilestoneStatuses(milestones: ProjectMilestone[]) {
@@ -6203,8 +6236,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
          const uncheckedCriteria = targetMilestone.completionCriteria.filter((criterion) => !targetMilestone.completedCriteria.some((completedCriterion) => normalizeProjectMatchValue(completedCriterion) === normalizeProjectMatchValue(criterion)));
 
          if (uncheckedCriteria.length) {
-            setSelectedMilestoneWorkspaceId(milestoneId);
-            showNotice(`Check ${uncheckedCriteria.length === 1 ? "the remaining criterion" : `the ${uncheckedCriteria.length} remaining criteria`} before completing this milestone`);
+            showNotice(`Check ${uncheckedCriteria.length === 1 ? "the remaining checkpoint" : `the ${uncheckedCriteria.length} remaining checkpoints`} before completing this milestone`);
             return;
          }
       }
@@ -6242,15 +6274,10 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
       updateProjectTracking(project, {
          milestones,
+         activeMilestoneId: nextOpenMilestone?.id || "",
          status: allComplete ? "done" : tracking.status === "idea" || tracking.status === "done" ? "active" : tracking.status,
          nextStep: nextOpenMilestone?.title || (allComplete ? "Review the finished project and close any remaining gaps." : tracking.nextStep),
       });
-
-      if (reopening) {
-         setSelectedMilestoneWorkspaceId(milestoneId);
-      } else if (selectedMilestoneWorkspaceId === milestoneId && nextOpenMilestone?.id) {
-         setSelectedMilestoneWorkspaceId(nextOpenMilestone.id);
-      }
 
       window.dispatchEvent(
          new CustomEvent("allevin-project-progress-update", {
@@ -6370,6 +6397,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
       updateProjectTracking(project, {
          milestones,
+         activeMilestoneId: activeMilestone?.id || tracking.activeMilestoneId,
          nextStep: activeMilestone?.title || tracking.nextStep,
       });
 
@@ -6377,45 +6405,116 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       showNotice("Milestone saved");
    }
 
-   function scheduleMilestoneWorkingContentSave(project: ProjectLibraryItem, milestone: ProjectMilestone, value: string) {
-      const safeValue = sanitizeLiveProjectBody(value);
+   function saveMilestoneWorkArea(project: ProjectLibraryItem, milestone: ProjectMilestone) {
+      const tracking = getProjectTracking(project);
+      const storedMilestone = tracking.milestones.find((item) => item.id === milestone.id) || milestone;
+      const draftValue = milestoneWorkingDrafts[milestone.id];
+      const nextWork = sanitizeProjectBody(draftValue ?? storedMilestone.workingContent ?? "");
+      const previousWork = sanitizeProjectBody(storedMilestone.workingContent || "");
 
-      setMilestoneWorkingDrafts((current) => ({ ...current, [milestone.id]: safeValue }));
+      // MK XI B4 — the Work Area is persistent milestone state, not a one-shot
+      // note composer. Each milestone keeps its own editable working surface, so
+      // switching milestones immediately swaps the user's current work context.
+      const milestones = tracking.milestones.map((item) =>
+         item.id === milestone.id
+            ? {
+                 ...item,
+                 workingContent: nextWork,
+                 updatedAt: getNow(),
+              }
+            : item,
+      );
 
-      const existingTimer = milestoneAutosaveTimers.current[milestone.id];
-      if (existingTimer) clearTimeout(existingTimer);
-
-      milestoneAutosaveTimers.current[milestone.id] = setTimeout(() => {
-         const tracking = getProjectTracking(project);
-         const milestones = tracking.milestones.map((item) =>
-            item.id === milestone.id
-               ? {
-                    ...item,
-                    workingContent: sanitizeProjectBody(safeValue),
-                    updatedAt: getNow(),
-                 }
-               : item,
-         );
-
-         updateProjectTracking(project, { milestones }, { quiet: true });
-         setMilestoneWorkingDrafts((current) => {
-            const next = { ...current };
-            delete next[milestone.id];
-            return next;
+      // Keep a quiet timeline snapshot for reference without making history the
+      // primary workspace. AIDock writes to the same journal independently.
+      if (normalizeProjectMatchValue(nextWork) !== normalizeProjectMatchValue(previousWork)) {
+         appendProjectWorkJournalEntry({
+            projectId: project.id,
+            projectTitle: project.title,
+            milestoneId: milestone.id,
+            milestoneTitle: milestone.title,
+            kind: "update",
+            text: nextWork || "Cleared the milestone work area.",
+            source: "user",
          });
+      }
 
-         window.dispatchEvent(
-            new CustomEvent("allevin-project-milestone-workspace-update", {
-               detail: {
-                  projectId: project.id,
-                  projectTitle: project.title,
-                  milestoneId: milestone.id,
-                  milestoneTitle: milestone.title,
-                  updatedAt: getNow(),
-               },
-            }),
-         );
-      }, 850);
+      updateProjectTracking(
+         project,
+         {
+            milestones,
+            activeMilestoneId: tracking.activeMilestoneId || milestone.id,
+            nextStep: tracking.nextStep || milestone.title,
+         },
+         { quiet: true },
+      );
+
+      setMilestoneWorkingDrafts((current) => ({
+         ...current,
+         [milestone.id]: nextWork,
+      }));
+
+      showNotice("Work area saved");
+   }
+
+   function setProjectMilestoneAsCurrent(project: ProjectLibraryItem, milestoneId: string) {
+      const tracking = getProjectTracking(project);
+      const target = tracking.milestones.find((milestone) => milestone.id === milestoneId);
+      if (!target) return;
+
+      const now = getNow();
+      const milestones = normalizeMilestoneStatuses(
+         tracking.milestones.map((milestone) => {
+            if (milestone.id === milestoneId) {
+               return {
+                  ...milestone,
+                  status: "active" as const,
+                  completed: false,
+                  completedAt: undefined,
+                  updatedAt: now,
+               };
+            }
+
+            if (milestone.status === "active") {
+               return {
+                  ...milestone,
+                  status: "waiting" as const,
+                  completed: false,
+                  updatedAt: now,
+               };
+            }
+
+            return milestone;
+         }),
+      );
+
+      updateProjectTracking(project, {
+         milestones,
+         activeMilestoneId: target.id,
+         status: "active",
+         nextStep: target.title,
+      });
+      showNotice("Current milestone updated");
+   }
+
+   function removeProjectMilestone(project: ProjectLibraryItem, milestoneId: string) {
+      const tracking = getProjectTracking(project);
+      if (tracking.milestones.length <= 1) {
+         showNotice("Keep at least one milestone");
+         return;
+      }
+
+      const nextMilestones = normalizeMilestoneStatuses(tracking.milestones.filter((milestone) => milestone.id !== milestoneId));
+      const nextActive = nextMilestones.find((milestone) => milestone.status === "active") || nextMilestones.find((milestone) => milestone.status !== "complete");
+      const allComplete = nextMilestones.length > 0 && nextMilestones.every((milestone) => milestone.status === "complete");
+
+      updateProjectTracking(project, {
+         milestones: nextMilestones,
+         activeMilestoneId: nextActive?.id || "",
+         status: allComplete ? "done" : "active",
+         nextStep: nextActive?.title || (allComplete ? "Review the finished project and close any remaining gaps." : tracking.nextStep),
+      });
+      showNotice("Milestone removed");
    }
 
    function addProjectMilestone(project: ProjectLibraryItem) {
@@ -6455,9 +6554,12 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
          },
       ]);
 
+      const activeMilestone = milestones.find((milestone) => milestone.status === "active") || milestones.find((milestone) => milestone.status !== "complete") || null;
+
       updateProjectTracking(project, {
          milestones,
-         nextStep: milestones.find((milestone) => milestone.status === "active")?.title || title,
+         activeMilestoneId: activeMilestone?.id || tracking.activeMilestoneId,
+         nextStep: activeMilestone?.title || title,
       });
 
       setNewMilestoneTitle("");
@@ -6589,6 +6691,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       window.addEventListener("allevin-project-library-update", refreshProjectLibrary);
 
       window.addEventListener("allevin-project-materials-update", refreshProjectLibrary);
+      window.addEventListener(ALLEVIN_PROJECT_WORK_JOURNAL_UPDATED_EVENT, refreshProjectLibrary);
 
       function refreshCalendarSession() {
          setCalendarRevision((current) => current + 1);
@@ -6610,6 +6713,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
          window.removeEventListener("allevin-project-library-update", refreshProjectLibrary);
 
          window.removeEventListener("allevin-project-materials-update", refreshProjectLibrary);
+         window.removeEventListener(ALLEVIN_PROJECT_WORK_JOURNAL_UPDATED_EVENT, refreshProjectLibrary);
 
          window.removeEventListener("allevin-calendar-events-updated", refreshCalendarSession);
 
@@ -6703,7 +6807,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
          try {
             setManualDraftGenerating(true);
-            showNotice("ALLEVIN MK IX is building the project understanding");
+            showNotice("ALLEVIN is setting up the project");
 
             // ========================================
             // ALLEVIN MK IX — Shared project-draft authority
@@ -6721,7 +6825,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
             setManualBody(sanitizeLiveProjectBody(generatedBody));
             setManualDraftGenerated(true);
-            showNotice("MK IX project guide ready to review");
+            showNotice("Project plan ready to review");
          } catch {
             const guide = buildLocalProjectDraftGuide({
                title: cleanTitle,
@@ -6730,7 +6834,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
 
             setManualBody(sanitizeLiveProjectBody(renderProjectDraftGuide(guide)));
             setManualDraftGenerated(true);
-            showNotice("MK IX project guide ready to review");
+            showNotice("Project plan ready to review");
          } finally {
             setManualDraftGenerating(false);
          }
@@ -6739,11 +6843,11 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       }
 
       if (!cleanBody) {
-         showNotice("Review or add ALLEVIN’s Guide before saving");
+         showNotice("Review or add Project context before saving");
          return;
       }
 
-      const startingPoint = getStructuredProjectSection(cleanBody, ["Recommended Starting Point", "Recommended Move", "Starting Point"]) || "Review the first unfinished progress checkpoint.";
+      const startingPoint = getStructuredProjectSection(cleanBody, ["Start Here", "Start", "Recommended Starting Point", "Recommended Move", "Starting Point"]) || "Review the first unfinished progress checkpoint.";
 
       const output = buildInternalOutputFromPayload({
          title: cleanTitle,
@@ -6751,6 +6855,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
          destination: "notes",
          objectType: "project-summary",
          source: "manual-generated",
+         sourceBrief: cleanDescription,
          recommendation: {
             suggestedNextStep: startingPoint,
          },
@@ -6880,10 +6985,11 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                   };
                });
 
-               const startingPoint = getStructuredProjectSection(item.body, ["Recommended Starting Point", "Recommended Move", "Starting Point"]) || milestones[0]?.title || "Review the project guide and confirm the first checkpoint.";
+               const startingPoint = getStructuredProjectSection(item.body, ["Start Here", "Start", "Recommended Starting Point", "Recommended Move", "Starting Point"]) || milestones[0]?.title || "Review the plan and confirm the first checkpoint.";
 
                updateProjectTracking(savedProject, {
                   status: "active",
+                  activeMilestoneId: milestones[0]?.id || "",
                   milestones,
                   nextStep: startingPoint,
                });
@@ -7445,7 +7551,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
       const nextMaterials = projectMaterials.filter((material) => material.projectId !== project.id);
 
       if (!saveProjectMaterials(nextMaterials)) {
-         showNotice("Project materials could not be cleaned up");
+         showNotice("Materials could not be cleaned up");
 
          return;
       }
@@ -7560,7 +7666,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                <p className="studio-eyebrow">Projects</p>
 
                <h2 data-editorial-title="true" className="mt-2 text-4xl leading-tight sm:text-5xl">
-                  Your project library.
+                  Keep the work clear.
                </h2>
             </div>
 
@@ -7601,8 +7707,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                      <p className="text-lg font-semibold">Start a Project</p>
 
                      <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">
-                        Give ALLEVIN as much useful detail as you can about the goal, what already exists, decisions already made, open questions, deadlines, limits, materials, and what a good result should look like. ALLEVIN MK IX will read the project
-                        as a whole and turn that context into a specific ALLEVIN’s Guide, dependency-based milestones, clear open questions, and one concrete place to begin.
+                        Tell ALLEVIN what you want to accomplish. Add any context that matters now; you can add more later. ALLEVIN will organize the project and give you a clear place to start.
                      </p>
 
                      <div className="mt-5">
@@ -7620,7 +7725,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                      </div>
 
                      <div className="mt-4">
-                        <label className="text-sm font-medium text-[var(--color-text-primary)]">What are you looking to do?</label>
+                        <label className="text-sm font-medium text-[var(--color-text-primary)]">What are you trying to accomplish?</label>
 
                         <textarea
                            value={manualDescription}
@@ -7628,7 +7733,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                               setManualDescription(sanitizeLiveProjectBody(event.target.value));
                               if (manualDraftGenerated) setManualDraftGenerated(false);
                            }}
-                           placeholder="Describe the goal, finished outcome, important context, requirements, dates, constraints, decisions already made, and anything else ALLEVIN should understand."
+                           placeholder="Describe the goal in your own words. Include important context only if it matters right now."
                            className="mt-2 min-h-[140px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
                         />
                      </div>
@@ -7637,8 +7742,8 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                         <div className="mt-5 border-t border-[var(--border-subtle)] pt-5">
                            <div className="flex flex-wrap items-end justify-between gap-3">
                               <div>
-                                 <p className="text-sm font-semibold text-[var(--color-text-primary)]">Review the project guide</p>
-                                 <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Change anything that does not match your intent. This becomes ALLEVIN MK IX’s starting understanding of the project.</p>
+                                 <p className="text-sm font-semibold text-[var(--color-text-primary)]">Here’s the plan</p>
+                                 <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">Make sure this feels like the project you meant. You can add or change details later.</p>
                               </div>
 
                               <button type="button" onClick={() => setManualDraftGenerated(false)} className="rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-xs font-medium transition-colors hover:bg-[var(--color-bg)]">
@@ -7646,11 +7751,21 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                               </button>
                            </div>
 
-                           <textarea
-                              value={manualBody}
-                              onChange={(event) => setManualBody(sanitizeLiveProjectBody(event.target.value))}
-                              className="mt-3 min-h-[360px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
-                           />
+                           <div className="mt-4 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--color-bg-soft)] p-4 sm:p-5">
+                              <p className="whitespace-pre-wrap text-sm leading-7 text-[var(--color-text-primary)]">{manualBody}</p>
+                           </div>
+
+                           <details className="group mt-3 border-t border-[var(--border-subtle)] pt-3">
+                              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-[var(--color-text-secondary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]">
+                                 Edit the setup
+                                 <ChevronDown size={16} className="transition-transform group-open:rotate-180" />
+                              </summary>
+                              <textarea
+                                 value={manualBody}
+                                 onChange={(event) => setManualBody(sanitizeLiveProjectBody(event.target.value))}
+                                 className="mt-3 min-h-[260px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-3 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                              />
+                           </details>
                         </div>
                      )}
 
@@ -7673,7 +7788,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                            className="flex items-center justify-center gap-2 rounded-md bg-[var(--color-primary)] px-5 py-3 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                            {manualDraftGenerating ? <RotateCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                           {manualDraftGenerating ? "Reading the project..." : manualDraftGenerated ? "Save Project" : "Build Project Guide"}
+                           {manualDraftGenerating ? "Reading the project..." : manualDraftGenerated ? "Save Project" : "Set Up Project"}
                         </button>
                      </div>
                   </div>
@@ -7693,7 +7808,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                         const projectTracking = getProjectTracking(activeProject);
 
                         return (
-                           <div className="min-w-0 border-t border-[var(--border-subtle)] bg-white px-5 pb-10 pt-6 sm:px-8 sm:pt-8 lg:px-10">
+                           <div className="flex min-w-0 flex-col border-t border-[var(--border-subtle)] bg-white px-5 pb-10 pt-6 sm:px-8 sm:pt-8 lg:px-10">
                               <div className="mb-5 flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-4 sm:mb-6 sm:flex-row sm:items-start sm:justify-between sm:pb-5">
                                  <div className="min-w-0 flex-1">
                                     <p className="mb-3 text-xs text-[var(--color-text-secondary)]">Updated {getReadableProjectDate(activeProject.updatedAt)}</p>
@@ -7798,12 +7913,12 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                  </div>
                               </div>
 
-                              <details className="group mb-7 border-y border-[var(--border-subtle)] py-5">
+                              <details className="group order-3 mb-4 border-y border-[var(--border-subtle)] py-5">
                                  <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-0 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]">
                                     <div>
-                                       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN’s Guide</p>
+                                       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Project details</p>
                                        <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
-                                          ALLEVIN’s senior-level guide for this project. It keeps the goal, key decisions, limits, and direction in one place so the work is easier to move forward.
+                                          Goal, decisions, constraints, and direction that ALLEVIN is using for this project.
                                        </p>
                                     </div>
 
@@ -7817,7 +7932,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                           onClick={() => saveAllevinGuide(activeProject)}
                                           className="inline-flex w-full items-center justify-center border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40 sm:w-auto"
                                        >
-                                          Save guide
+                                          Save context
                                        </button>
                                     </div>
 
@@ -7826,14 +7941,14 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                        onChange={(event) => setAllevinGuideDraft(sanitizeLiveProjectBody(event.target.value))}
                                        rows={14}
                                        maxLength={PROJECT_SANITIZE_LIMITS.body}
-                                       placeholder="Refine ALLEVIN’s project guide, decisions, constraints, questions, or operating notes..."
+                                       placeholder="Add or correct anything ALLEVIN should keep in mind..."
                                        className="min-h-[320px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-4 py-4 text-sm leading-7 text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
                                     />
                                  </div>
                               </details>
 
-                              <section aria-label="Project tools" className="mb-8 border-t border-[var(--border-subtle)]">
-                                 <details className="group border-b border-[var(--border-subtle)] py-4">
+                              <section aria-label="Project tools" className="order-2 mb-4 border-t border-[var(--border-subtle)]">
+                                 <details className="hidden">
                                     <summary className="flex cursor-pointer list-none items-start justify-between gap-4 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]">
                                        <div className="flex min-w-0 items-start gap-3">
                                           <CalendarDays size={18} className="mt-0.5 shrink-0 text-[var(--color-text-secondary)]" />
@@ -7931,7 +8046,7 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                        <div className="flex min-w-0 items-start gap-3">
                                           <FileText size={18} className="mt-0.5 shrink-0 text-[var(--color-text-secondary)]" />
                                           <div className="min-w-0">
-                                             <p className="font-medium text-[var(--color-text-primary)]">Project materials</p>
+                                             <p className="font-medium text-[var(--color-text-primary)]">Materials</p>
                                              <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
                                                 {activeProjectMaterials.length > 0
                                                    ? `${activeProjectMaterials.length} ${activeProjectMaterials.length === 1 ? "item" : "items"} connected to this project.`
@@ -8265,108 +8380,118 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                           )
                                        ) : (
                                           <div className="mt-4 rounded-md bg-[var(--color-bg)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-                                             No materials attached yet. Add notes, feedback, references, documents, or planning details so this project has context to work from.
+                                             No materials yet. Add a document, reference, image, feedback item, or note when it gives ALLEVIN useful project context.
                                           </div>
                                        )}
                                     </div>
                                  </details>
                               </section>
 
-                              <div className="mb-8 border-t border-[var(--border-subtle)] pt-8">
-                                 <section aria-labelledby="milestone-workspaces-heading" className="space-y-6">
+                              <div className="order-1 mb-6 border-t border-[var(--border-subtle)] pt-6">
+                                 <section aria-labelledby="milestone-workspaces-heading" className="flex flex-col gap-6">
                                     {(() => {
                                        const visibleMilestones = [...projectTracking.milestones].sort((left, right) => left.order - right.order);
+                                       const currentMilestone =
+                                          visibleMilestones.find((milestone) => milestone.id === projectTracking.activeMilestoneId && milestone.status !== "complete") ||
+                                          visibleMilestones.find((milestone) => milestone.status === "active") ||
+                                          visibleMilestones.find((milestone) => milestone.status !== "complete") ||
+                                          visibleMilestones[0];
 
-                                       const currentMilestone = visibleMilestones.find((milestone) => milestone.status === "active") || visibleMilestones.find((milestone) => milestone.status !== "complete") || visibleMilestones[0];
+                                       if (!currentMilestone) return null;
 
-                                       const selectedMilestone = visibleMilestones.find((milestone) => milestone.id === selectedMilestoneWorkspaceId) || currentMilestone;
+                                       const isEditing = editingMilestoneIds.includes(currentMilestone.id);
+                                       const draft = milestoneEditDrafts[currentMilestone.id] || currentMilestone;
+                                       const workDraft = milestoneWorkingDrafts[currentMilestone.id] ?? currentMilestone.workingContent ?? "";
+                                       const journalEntries = readProjectMilestoneWorkJournal(activeProject.id, activeProject.title, currentMilestone.id, currentMilestone.title);
+                                       const checkpointCount = currentMilestone.completionCriteria.length;
+                                       const completedCheckpointCount = currentMilestone.completedCriteria.length;
+                                       const currentMilestoneIndex = Math.max(0, visibleMilestones.findIndex((milestone) => milestone.id === currentMilestone.id));
 
-                                       if (!selectedMilestone) {
-                                          return null;
-                                       }
-
-                                       const selectedIndex = visibleMilestones.findIndex((milestone) => milestone.id === selectedMilestone.id);
-                                       const isEditing = editingMilestoneIds.includes(selectedMilestone.id);
-                                       const draft = milestoneEditDrafts[selectedMilestone.id] || selectedMilestone;
-                                       const isComplete = selectedMilestone.status === "complete";
-                                       const isActive = selectedMilestone.status === "active";
-                                       const workingValue = Object.prototype.hasOwnProperty.call(milestoneWorkingDrafts, selectedMilestone.id) ? milestoneWorkingDrafts[selectedMilestone.id] : selectedMilestone.workingContent;
+                                       const getJournalLabel = (kind: string) => {
+                                          if (kind === "decision") return "Decision";
+                                          if (kind === "open-option") return "Option";
+                                          if (kind === "question") return "Question";
+                                          // Keep implementation-level progress categories internal. Users only
+                                          // need to know that the project changed, not which engine label caused it.
+                                          return "Update";
+                                       };
 
                                        return (
                                           <>
-                                             <div className="mb-7 border-b border-[var(--border-subtle)] pb-6">
-                                                <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-                                                   <div>
-                                                      <p id="milestone-workspaces-heading" className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
-                                                         Milestones
-                                                      </p>
-                                                      <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-                                                         {projectTracking.milestones.filter((milestone) => milestone.status === "complete").length}/{projectTracking.milestones.length} complete
-                                                      </p>
-                                                   </div>
-
-                                                   <div className="w-full md:max-w-lg">
-                                                      <label htmlFor="milestone-workspace-selector" className="sr-only">
-                                                         Choose a milestone
-                                                      </label>
-                                                      <div className="relative">
-                                                         <select
-                                                            id="milestone-workspace-selector"
-                                                            value={selectedMilestone.id}
-                                                            onChange={(event) => {
-                                                               cancelEditingMilestone(selectedMilestone.id);
-                                                               setSelectedMilestoneWorkspaceId(event.target.value);
-                                                            }}
-                                                            className="w-full appearance-none rounded-md border border-[var(--border-subtle)] bg-white px-3 py-3 pr-10 text-sm font-medium text-[var(--color-text-primary)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                                                         >
-                                                            {visibleMilestones.map((milestone, index) => (
-                                                               <option key={milestone.id} value={milestone.id}>
-                                                                  {index + 1}. {milestone.title}
-                                                                  {milestone.status === "active" ? " — Current" : milestone.status === "complete" ? " — Complete" : ""}
-                                                               </option>
-                                                            ))}
-                                                         </select>
-                                                         <ChevronDown aria-hidden="true" size={18} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]" />
-                                                      </div>
-                                                   </div>
-                                                </div>
-
-                                                <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-                                                   <input
-                                                      value={newMilestoneTitle}
-                                                      onChange={(event) => setNewMilestoneTitle(sanitizeLiveProjectTitle(event.target.value))}
-                                                      onKeyDown={(event) => {
-                                                         if (event.key === "Enter") {
-                                                            event.preventDefault();
-                                                            addProjectMilestone(activeProject);
-                                                         }
-                                                      }}
-                                                      maxLength={120}
-                                                      placeholder="Add a new milestone"
-                                                      className="min-w-0 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--color-primary)]"
-                                                   />
-
-                                                   <button
-                                                      type="button"
-                                                      onClick={() => addProjectMilestone(activeProject)}
-                                                      className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-primary)] transition-colors hover:border-[var(--color-primary)]/40"
-                                                   >
-                                                      Add milestone
-                                                   </button>
-                                                </div>
-                                             </div>
-
-                                             <section aria-labelledby={`milestone-heading-${selectedMilestone.id}`} className="scroll-mt-24">
-                                                <div className={`border-y py-6 ${isActive ? "border-[var(--color-primary)]" : "border-[var(--border-subtle)]"}`}>
+                                             <section aria-labelledby={`milestone-heading-${currentMilestone.id}`} className="order-1 scroll-mt-24">
+                                                <div className="border-y border-[var(--color-primary)] py-6">
                                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                                       <div className="min-w-0">
-                                                         <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">{isActive ? "Current Milestone" : isComplete ? "Complete" : "Upcoming"}</span>
-
-                                                         <h4 id={`milestone-heading-${selectedMilestone.id}`} className="mt-2 break-words text-xl font-semibold leading-7 text-[var(--color-text-primary)]">
-                                                            {selectedMilestone.title}
+                                                         <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)]">Current milestone</span>
+                                                         <h4 id={`milestone-heading-${currentMilestone.id}`} className="mt-2 break-words text-xl font-semibold leading-7 text-[var(--color-text-primary)]">
+                                                            {currentMilestone.title}
                                                          </h4>
                                                       </div>
+                                                      <div className="flex shrink-0 flex-col items-start gap-1 text-xs text-[var(--color-text-secondary)] sm:items-end">
+                                                         <span>{completedCheckpointCount}/{checkpointCount || 0} checkpoints</span>
+                                                         <span>Milestone {currentMilestoneIndex + 1} of {visibleMilestones.length}</span>
+                                                      </div>
                                                    </div>
+
+                                                   <details className="group mt-5 border-t border-[var(--border-subtle)] pt-4">
+                                                      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]">
+                                                         <div>
+                                                            <p className="text-sm font-medium text-[var(--color-text-primary)]">Change milestone</p>
+                                                            <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Switch focus, remove a milestone, or add the next one here.</p>
+                                                         </div>
+                                                         <ChevronDown size={17} className="shrink-0 text-[var(--color-text-secondary)] transition-transform group-open:rotate-180" />
+                                                      </summary>
+
+                                                      <div className="mt-4 space-y-4 border-t border-[var(--border-subtle)] pt-3">
+                                                         <ol className="space-y-1">
+                                                            {visibleMilestones.map((milestone, index) => {
+                                                               const isCurrent = milestone.id === currentMilestone.id;
+                                                               const isComplete = milestone.status === "complete";
+                                                               return (
+                                                                  <li key={milestone.id} className={`flex flex-col gap-3 border-b border-[var(--border-subtle)] py-3 last:border-b-0 sm:flex-row sm:items-center sm:justify-between ${isCurrent ? "text-[var(--color-text-primary)]" : "text-[var(--color-text-secondary)]"}`}>
+                                                                     <div className="min-w-0">
+                                                                        <span className="text-xs font-medium text-[var(--color-text-secondary)]">{index + 1}</span>
+                                                                        <span className={`ml-3 text-sm ${isCurrent ? "font-semibold" : "font-medium"}`}>{milestone.title}</span>
+                                                                        {isCurrent && <span className="ml-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--color-primary)]">Current</span>}
+                                                                        {isComplete && <span className="ml-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-secondary)]">Done</span>}
+                                                                     </div>
+                                                                     <div className="flex shrink-0 flex-wrap gap-2">
+                                                                        {!isCurrent && (
+                                                                           <button type="button" onClick={() => setProjectMilestoneAsCurrent(activeProject, milestone.id)} className="text-xs font-medium text-[var(--color-primary)] hover:underline">
+                                                                              Current
+                                                                           </button>
+                                                                        )}
+                                                                        {visibleMilestones.length > 1 && (
+                                                                           <button type="button" onClick={() => removeProjectMilestone(activeProject, milestone.id)} className="text-xs font-medium text-[var(--color-text-secondary)] hover:text-red-600">
+                                                                              Remove
+                                                                           </button>
+                                                                        )}
+                                                                     </div>
+                                                                  </li>
+                                                               );
+                                                            })}
+                                                         </ol>
+
+                                                         <div className="flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-4 sm:flex-row">
+                                                            <input
+                                                               value={newMilestoneTitle}
+                                                               onChange={(event) => setNewMilestoneTitle(sanitizeLiveProjectTitle(event.target.value))}
+                                                               onKeyDown={(event) => {
+                                                                  if (event.key === "Enter") {
+                                                                     event.preventDefault();
+                                                                     addProjectMilestone(activeProject);
+                                                                  }
+                                                               }}
+                                                               maxLength={120}
+                                                               placeholder="Add a milestone"
+                                                               className="min-w-0 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--color-bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--color-primary)]"
+                                                            />
+                                                            <button type="button" onClick={() => addProjectMilestone(activeProject)} className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-primary)] transition-colors hover:border-[var(--color-primary)]/40">
+                                                               Add milestone
+                                                            </button>
+                                                         </div>
+                                                      </div>
+                                                   </details>
 
                                                    <div className="mt-5 border-t border-[var(--border-subtle)] pt-5">
                                                       {isEditing ? (
@@ -8375,48 +8500,32 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                                                <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Milestone title</label>
                                                                <input
                                                                   value={String(draft.title || "")}
-                                                                  onChange={(event) => updateMilestoneEditDraft(selectedMilestone.id, { title: sanitizeLiveProjectTitle(event.target.value) })}
+                                                                  onChange={(event) => updateMilestoneEditDraft(currentMilestone.id, { title: sanitizeLiveProjectTitle(event.target.value) })}
                                                                   className="mt-2 w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-primary)]"
                                                                />
                                                             </div>
-
-                                                            {[
-                                                               { key: "decisions", label: "Decisions", placeholder: "One decision per line" },
-                                                               { key: "openQuestions", label: "Open questions", placeholder: "One question per line" },
-                                                               { key: "completionCriteria", label: "Completion criteria", placeholder: "What must be true before this milestone is complete?" },
-                                                            ].map((field) => (
-                                                               <div key={field.key}>
-                                                                  <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{field.label}</label>
-                                                                  <textarea
-                                                                     value={Array.isArray((draft as any)[field.key]) ? ((draft as any)[field.key] as string[]).join("\n") : ""}
-                                                                     onChange={(event) =>
-                                                                        updateMilestoneEditDraft(selectedMilestone.id, {
-                                                                           [field.key]: event.target.value
-                                                                              .split("\n")
-                                                                              .map((item) => sanitizeProjectSummary(item))
-                                                                              .filter(Boolean),
-                                                                        } as Partial<ProjectMilestone>)
-                                                                     }
-                                                                     placeholder={field.placeholder}
-                                                                     rows={4}
-                                                                     className="mt-2 w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
-                                                                  />
-                                                               </div>
-                                                            ))}
-
+                                                            <div>
+                                                               <label className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Checkpoints</label>
+                                                               <textarea
+                                                                  value={Array.isArray(draft.completionCriteria) ? draft.completionCriteria.map((item) => formatMilestoneCheckpoint(item)).join("\n") : ""}
+                                                                  onChange={(event) =>
+                                                                     updateMilestoneEditDraft(currentMilestone.id, {
+                                                                        completionCriteria: event.target.value
+                                                                           .split("\n")
+                                                                           .map((item) => sanitizeProjectSummary(item))
+                                                                           .filter(Boolean),
+                                                                     })
+                                                                  }
+                                                                  placeholder="One question or checkpoint per line"
+                                                                  rows={4}
+                                                                  className="mt-2 w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--color-primary)]"
+                                                               />
+                                                            </div>
                                                             <div className="flex flex-wrap gap-2">
-                                                               <button
-                                                                  type="button"
-                                                                  onClick={() => saveMilestoneStructuralChanges(activeProject, selectedMilestone.id)}
-                                                                  className="bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90"
-                                                               >
+                                                               <button type="button" onClick={() => saveMilestoneStructuralChanges(activeProject, currentMilestone.id)} className="bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
                                                                   Save milestone
                                                                </button>
-                                                               <button
-                                                                  type="button"
-                                                                  onClick={() => cancelEditingMilestone(selectedMilestone.id)}
-                                                                  className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40"
-                                                               >
+                                                               <button type="button" onClick={() => cancelEditingMilestone(currentMilestone.id)} className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40">
                                                                   Cancel
                                                                </button>
                                                             </div>
@@ -8424,98 +8533,94 @@ Do not recommend returning to a completed checkpoint. Do not give a generic summ
                                                       ) : (
                                                          <>
                                                             <div>
-                                                               <label htmlFor={`milestone-work-${selectedMilestone.id}`} className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
-                                                                  Work on this milestone
-                                                               </label>
+                                                               <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+                                                                  <div>
+                                                                     <label htmlFor={`milestone-work-${currentMilestone.id}`} className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
+                                                                        Work area
+                                                                     </label>
+                                                                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Keep the working notes, findings, questions, and decisions for this milestone here. AIDock can use them with the rest of the project.</p>
+                                                                  </div>
+                                                               </div>
                                                                <textarea
-                                                                  id={`milestone-work-${selectedMilestone.id}`}
-                                                                  value={workingValue}
-                                                                  onChange={(event) => scheduleMilestoneWorkingContentSave(activeProject, selectedMilestone, event.target.value)}
-                                                                  rows={10}
+                                                                  id={`milestone-work-${currentMilestone.id}`}
+                                                                  value={workDraft}
+                                                                  onChange={(event) => setMilestoneWorkingDrafts((current) => ({ ...current, [currentMilestone.id]: sanitizeLiveProjectBody(event.target.value) }))}
+                                                                  rows={6}
                                                                   maxLength={PROJECT_SANITIZE_LIMITS.body}
-                                                                  placeholder={`Add the work, notes, draft, or decisions for ${selectedMilestone.title}...`}
-                                                                  className="mt-2 min-h-[220px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-white px-4 py-4 text-sm leading-7 text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
+                                                                  placeholder="Work through this milestone here..."
+                                                                  className="mt-3 min-h-[168px] w-full resize-y rounded-md border border-[var(--border-subtle)] bg-white px-4 py-4 text-sm leading-7 text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-primary)]"
                                                                />
+                                                               <div className="mt-3 flex justify-end">
+                                                                  <button type="button" onClick={() => saveMilestoneWorkArea(activeProject, currentMilestone)} className="bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-cream)] transition-opacity hover:opacity-90">
+                                                                     Save work
+                                                                  </button>
+                                                               </div>
                                                             </div>
 
-                                                            {(selectedMilestone.decisions.length > 0 || selectedMilestone.openQuestions.length > 0 || selectedMilestone.completionCriteria.length > 0) && (
-                                                               <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                                                                  {selectedMilestone.decisions.length > 0 && (
-                                                                     <div className="border-t border-[var(--border-subtle)] pt-4">
-                                                                        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Decisions</p>
-                                                                        <ul className="mt-3 space-y-2">
-                                                                           {selectedMilestone.decisions.map((item, itemIndex) => (
-                                                                              <li key={`Decisions-${itemIndex}`} className="text-sm leading-6 text-[var(--color-text-primary)]">
-                                                                                 {item}
-                                                                              </li>
-                                                                           ))}
-                                                                        </ul>
+                                                            {currentMilestone.completionCriteria.length > 0 && (
+                                                               <div className="mt-6 border-t border-[var(--border-subtle)] pt-5">
+                                                                  <div className="flex items-center justify-between gap-3">
+                                                                     <div>
+                                                                        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Milestone Checkpoints</p>
+                                                                        <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Check each one when the milestone result genuinely satisfies it.</p>
                                                                      </div>
-                                                                  )}
-
-                                                                  {selectedMilestone.openQuestions.length > 0 && (
-                                                                     <div className="border-t border-[var(--border-subtle)] pt-4">
-                                                                        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Open questions</p>
-                                                                        <ul className="mt-3 space-y-2">
-                                                                           {selectedMilestone.openQuestions.map((item, itemIndex) => (
-                                                                              <li key={`Open-questions-${itemIndex}`} className="text-sm leading-6 text-[var(--color-text-primary)]">
-                                                                                 {ensureProjectQuestionMark(item)}
-                                                                              </li>
-                                                                           ))}
-                                                                        </ul>
-                                                                     </div>
-                                                                  )}
-
-                                                                  {selectedMilestone.completionCriteria.length > 0 && (
-                                                                     <div className="border-t border-[var(--border-subtle)] pt-4 lg:col-span-2">
-                                                                        <div className="flex items-center justify-between gap-3">
-                                                                           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Completion criteria</p>
-                                                                           <span className="text-xs text-[var(--color-text-secondary)]">
-                                                                              {selectedMilestone.completedCriteria.length}/{selectedMilestone.completionCriteria.length}
-                                                                           </span>
-                                                                        </div>
-
-                                                                        <ul className="mt-3 space-y-2">
-                                                                           {selectedMilestone.completionCriteria.map((criterion, criterionIndex) => {
-                                                                              const checked = selectedMilestone.completedCriteria.some((completedCriterion) => normalizeProjectMatchValue(completedCriterion) === normalizeProjectMatchValue(criterion));
-
-                                                                              return (
-                                                                                 <li key={`Completion-criteria-${criterionIndex}`}>
-                                                                                    <label
-                                                                                       className={`flex items-start gap-3 border-b border-[var(--border-subtle)] px-0 py-2.5 last:border-b-0 text-sm leading-6 ${isComplete ? "cursor-default" : "cursor-pointer hover:bg-white"}`}
-                                                                                    >
-                                                                                       <input
-                                                                                          type="checkbox"
-                                                                                          checked={checked}
-                                                                                          disabled={isComplete}
-                                                                                          onChange={() => toggleMilestoneCompletionCriterion(activeProject, selectedMilestone.id, criterion)}
-                                                                                          className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-primary)]"
-                                                                                       />
-                                                                                       <span className={checked ? "text-[var(--color-text-secondary)] line-through" : "text-[var(--color-text-primary)]"}>{criterion}</span>
-                                                                                    </label>
-                                                                                 </li>
-                                                                              );
-                                                                           })}
-                                                                        </ul>
-                                                                     </div>
-                                                                  )}
+                                                                     <span className="shrink-0 text-xs text-[var(--color-text-secondary)]">{completedCheckpointCount}/{checkpointCount}</span>
+                                                                  </div>
+                                                                  <ul className="mt-3 space-y-1">
+                                                                     {currentMilestone.completionCriteria.map((criterion, criterionIndex) => {
+                                                                        const checked = currentMilestone.completedCriteria.some((completedCriterion) => normalizeProjectMatchValue(completedCriterion) === normalizeProjectMatchValue(criterion));
+                                                                        const displayCriterion = formatMilestoneCheckpoint(criterion);
+                                                                        return (
+                                                                           <li key={`Completion-criteria-${criterionIndex}`}>
+                                                                              <label className="flex cursor-pointer items-start gap-3 border-b border-[var(--border-subtle)] py-3 last:border-b-0 text-sm leading-6 hover:bg-white">
+                                                                                 <input
+                                                                                    type="checkbox"
+                                                                                    checked={checked}
+                                                                                    onChange={() => toggleMilestoneCompletionCriterion(activeProject, currentMilestone.id, criterion)}
+                                                                                    className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-primary)]"
+                                                                                 />
+                                                                                 <span className={checked ? "text-[var(--color-text-secondary)] line-through" : "text-[var(--color-text-primary)]"}>{displayCriterion}</span>
+                                                                              </label>
+                                                                           </li>
+                                                                        );
+                                                                     })}
+                                                                  </ul>
                                                                </div>
                                                             )}
 
-                                                            <div className="mt-5 flex flex-wrap gap-2 border-t border-[var(--border-subtle)] pt-4">
-                                                               <button
-                                                                  type="button"
-                                                                  onClick={() => beginEditingMilestone(selectedMilestone)}
-                                                                  className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40"
-                                                               >
+                                                            <details className="group mt-6 border-t border-[var(--border-subtle)] pt-5">
+                                                               <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]">
+                                                                  <div>
+                                                                     <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">Work history</p>
+                                                                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+                                                                        {journalEntries.length > 0 ? `${journalEntries.length} saved ${journalEntries.length === 1 ? "update" : "updates"} from you and AIDock.` : "Saved changes from you and AIDock will appear here for reference."}
+                                                                     </p>
+                                                                  </div>
+                                                                  <ChevronDown size={17} className="shrink-0 text-[var(--color-text-secondary)] transition-transform group-open:rotate-180" />
+                                                               </summary>
+
+                                                               {journalEntries.length > 0 && (
+                                                                  <div className="mt-4 space-y-3 border-t border-[var(--border-subtle)] pt-4">
+                                                                     {journalEntries.map((entry) => (
+                                                                        <div key={entry.id} className="border-l-2 border-[var(--border-subtle)] pl-4">
+                                                                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                                                              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">{getJournalLabel(entry.kind)}</p>
+                                                                              <span className="text-[11px] text-[var(--color-text-secondary)]">{entry.source === "aidock" ? "AIDock" : entry.source === "project" ? "Project" : "You"}</span>
+                                                                              <span className="text-[11px] text-[var(--color-text-secondary)]">{new Date(entry.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+                                                                           </div>
+                                                                           <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-[var(--color-text-primary)]">{entry.text}</p>
+                                                                        </div>
+                                                                     ))}
+                                                                  </div>
+                                                               )}
+                                                            </details>
+
+                                                            <div className="mt-6 flex flex-wrap gap-2 border-t border-[var(--border-subtle)] pt-4">
+                                                               <button type="button" onClick={() => beginEditingMilestone(currentMilestone)} className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40">
                                                                   Edit milestone
                                                                </button>
-                                                               <button
-                                                                  type="button"
-                                                                  onClick={() => toggleProjectMilestone(activeProject, selectedMilestone.id)}
-                                                                  className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40"
-                                                               >
-                                                                  {isComplete ? "Reopen milestone" : "Mark complete"}
+                                                               <button type="button" onClick={() => toggleProjectMilestone(activeProject, currentMilestone.id)} className="border border-[var(--border-subtle)] bg-white px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-primary)]/40">
+                                                                  Mark complete
                                                                </button>
                                                             </div>
                                                          </>

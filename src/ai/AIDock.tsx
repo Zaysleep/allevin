@@ -1,7 +1,7 @@
 // ========================================
 // AI Dock
 // Purpose:
-// ALLEVIN MK X Project Lead Dock for
+// ALLEVIN MK XI Project Lead Dock — Build 7 for
 // calm project-aware guidance, natural actions,
 // natural project-aware responses,
 // and source-aware workspace awareness.
@@ -69,6 +69,12 @@ import { recommendWorkflowMove, type WorkflowRecommendation } from "@/lib/integr
 import { buildProjectGuidance, type ProjectGuidanceConversationContext, type ProjectGuidanceResult, type ProjectGuidanceSubject } from "@/lib/projectGuidanceEngine";
 
 import { buildProjectIntelligencePacket, getEmptyProjectIntelligencePacket, type ProjectIntelligencePacket } from "@/lib/projectIntelligenceEngine";
+
+import { buildProjectLeadOpeningLine, handleProjectLeadRuntimePrompt } from "@/lib/projectLeadRuntime";
+
+import { readCanonicalProjectSelection, readCanonicalProjectState, refreshCanonicalProjectState, resolveCanonicalProjectSelection } from "@/lib/projectStateAuthority";
+
+import { readProjectMilestoneWorkJournal } from "@/lib/projectWorkJournal";
 
 // ========================================
 // Message Type
@@ -261,7 +267,7 @@ interface PendingProjectStarter {
 }
 
 interface AllevinInternalContextPacket extends AllevinContextPacket {
-   version: "MK VIII";
+   version: "MK XI";
 
    userIntent: {
       rawPrompt: string;
@@ -538,37 +544,14 @@ function getActiveProjectTrackingContext() {
    if (typeof window === "undefined") return null;
 
    try {
-      const rawSelection = localStorage.getItem(ACTIVE_PROJECT_SELECTION_STORAGE_KEY) || "";
-      const library = JSON.parse(localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY) || "[]");
+      const canonicalState = readCanonicalProjectState();
+      const projectId = sanitizePlainText(canonicalState.identity.projectId || "", 180);
+      const projectTitle = sanitizePlainText(canonicalState.identity.title || "", 180);
+      const tracking = canonicalState.project.tracking;
+
+      if (!canonicalState.hasProject || !projectId || !tracking || !Array.isArray(tracking.milestones)) return null;
+
       const storedMap = JSON.parse(localStorage.getItem(PROJECT_TRACKING_STORAGE_KEY) || "{}");
-
-      if (!storedMap || typeof storedMap !== "object" || Array.isArray(storedMap)) return null;
-
-      let selectedId = "";
-      let selectedTitle = "";
-
-      try {
-         const parsed = JSON.parse(rawSelection);
-         selectedId = sanitizePlainText(parsed?.projectId || parsed?.id || "", 180);
-         selectedTitle = sanitizePlainText(parsed?.title || parsed?.projectTitle || "", 180);
-      } catch {
-         selectedId = sanitizePlainText(rawSelection, 180);
-         selectedTitle = sanitizePlainText(rawSelection, 180);
-      }
-
-      const projects = Array.isArray(library) ? library : [];
-      const normalizedTitle = normalizeProjectStarterPrompt(selectedTitle);
-      const selectedProject =
-         projects.find((project: any) => selectedId && sanitizePlainText(project?.id || "", 180) === selectedId) ||
-         projects.find((project: any) => normalizedTitle && normalizeProjectStarterPrompt(project?.title || "") === normalizedTitle) ||
-         projects.find((project: any) => selectedId && normalizeProjectStarterPrompt(project?.title || "") === normalizeProjectStarterPrompt(selectedId));
-
-      const projectId = sanitizePlainText(selectedProject?.id || selectedId, 180);
-      const projectTitle = sanitizePlainText(selectedProject?.title || selectedTitle, 180);
-      const tracking = projectId ? storedMap[projectId] : undefined;
-
-      if (!projectId || !tracking || !Array.isArray(tracking.milestones)) return null;
-
       const scopedTracking = {
          ...tracking,
          milestones: tracking.milestones.map((milestone: any) => ({
@@ -581,7 +564,7 @@ function getActiveProjectTrackingContext() {
       return {
          projectId,
          projectTitle,
-         storedMap,
+         storedMap: storedMap && typeof storedMap === "object" && !Array.isArray(storedMap) ? storedMap : {},
          tracking: scopedTracking,
       };
    } catch {
@@ -617,9 +600,11 @@ function completeActiveProjectMilestoneFromPrompt(prompt: string, conversation: 
             : milestone,
       );
 
+   const authoritativeMilestoneId = sanitizePlainText(tracking.activeMilestoneId || "", 180);
+   const explicitIndex = ordered.findIndex((milestone: any) => milestone && milestone.id === authoritativeMilestoneId && milestone.status !== "complete" && milestone.completed !== true);
    const activeIndex = ordered.findIndex((milestone: any) => milestone && milestone.status === "active" && milestone.completed !== true);
    const fallbackIndex = ordered.findIndex((milestone: any) => milestone && milestone.status !== "complete" && milestone.completed !== true);
-   const completedIndex = activeIndex >= 0 ? activeIndex : fallbackIndex;
+   const completedIndex = explicitIndex >= 0 ? explicitIndex : activeIndex >= 0 ? activeIndex : fallbackIndex;
    if (completedIndex < 0) return null;
 
    const activeMilestone = ordered[completedIndex];
@@ -675,10 +660,12 @@ function completeActiveProjectMilestoneFromPrompt(prompt: string, conversation: 
       };
    });
 
-   const nextTitle = sanitizePlainText(milestones.find((milestone: any) => milestone?.status === "active")?.title || "", 300);
+   const nextMilestone = milestones.find((milestone: any) => milestone?.status === "active") || null;
+   const nextTitle = sanitizePlainText(nextMilestone?.title || "", 300);
 
    storedMap[projectId] = {
       ...tracking,
+      activeMilestoneId: sanitizePlainText(nextMilestone?.id || "", 180),
       milestones,
       nextStep: nextTitle,
       updatedAt: now,
@@ -688,6 +675,7 @@ function completeActiveProjectMilestoneFromPrompt(prompt: string, conversation: 
    window.dispatchEvent(new CustomEvent("allevin-project-tracking-update", { detail: { projectId } }));
    window.dispatchEvent(new CustomEvent("allevin-project-library-update"));
    window.dispatchEvent(new CustomEvent("allevin-project-memory-update"));
+   refreshCanonicalProjectState({ emit: true });
 
    return {
       completed: true,
@@ -773,9 +761,11 @@ function recordProjectProgressUpdateFromPrompt(prompt: string): ProjectProgressU
 
    const { projectId, projectTitle, storedMap, tracking } = context;
    const ordered = [...tracking.milestones].sort((left: any, right: any) => Number(left?.order || 0) - Number(right?.order || 0));
+   const authoritativeMilestoneId = sanitizePlainText(tracking.activeMilestoneId || "", 180);
+   const explicitIndex = ordered.findIndex((milestone: any) => milestone && milestone.id === authoritativeMilestoneId && milestone.status !== "complete" && milestone.completed !== true);
    const activeIndex = ordered.findIndex((milestone: any) => milestone && milestone.status === "active" && milestone.completed !== true);
    const fallbackIndex = ordered.findIndex((milestone: any) => milestone && milestone.status !== "complete" && milestone.completed !== true);
-   const targetIndex = activeIndex >= 0 ? activeIndex : fallbackIndex;
+   const targetIndex = explicitIndex >= 0 ? explicitIndex : activeIndex >= 0 ? activeIndex : fallbackIndex;
    if (targetIndex < 0) return null;
 
    const cleanUpdate = sanitizePlainText(prompt, 8000);
@@ -832,6 +822,7 @@ function recordProjectProgressUpdateFromPrompt(prompt: string): ProjectProgressU
    window.dispatchEvent(new CustomEvent("allevin-project-tracking-update", { detail: { projectId } }));
    window.dispatchEvent(new CustomEvent("allevin-project-library-update"));
    window.dispatchEvent(new CustomEvent("allevin-project-memory-update"));
+   refreshCanonicalProjectState({ emit: true });
 
    return {
       projectId,
@@ -863,8 +854,6 @@ const CANVAS_STORAGE_KEY = "allevin-adaptive-work-canvas";
 const PROJECT_LIBRARY_STORAGE_KEY = "allevin-project-library";
 
 const PROJECT_TRACKING_STORAGE_KEY = "allevin-project-tracking-map";
-
-const ACTIVE_PROJECT_SELECTION_STORAGE_KEY = "allevin-active-project-selection-mkviii";
 
 const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
 
@@ -2340,7 +2329,7 @@ async function buildProjectStarterDraft(prompt: string): Promise<ProjectStarterD
          title,
          projectType: guide.projectType,
          brief,
-         summary: [guide.goal, ...guide.confirmedDecisions.slice(0, 2), ...guide.successCriteria.slice(0, 1)].filter(Boolean).join(" "),
+         summary: [guide.goal, guide.successCriteria[0]].filter(Boolean).join(" "),
          body: renderProjectDraftGuide(guide) || buildProjectStarterBody(title, guide.projectType, brief, guide.recommendedStartingPoint),
          immediateNextAction: guide.recommendedStartingPoint,
          createdAt: Date.now(),
@@ -2355,7 +2344,7 @@ async function buildProjectStarterDraft(prompt: string): Promise<ProjectStarterD
          title,
          projectType: guide.projectType,
          brief,
-         summary: [guide.goal, ...guide.confirmedDecisions.slice(0, 2), ...guide.successCriteria.slice(0, 1)].filter(Boolean).join(" "),
+         summary: [guide.goal, guide.successCriteria[0]].filter(Boolean).join(" "),
          body: renderProjectDraftGuide(guide) || buildProjectStarterBody(title, guide.projectType, brief, guide.recommendedStartingPoint),
          immediateNextAction: guide.recommendedStartingPoint,
          createdAt: Date.now(),
@@ -4151,7 +4140,14 @@ function deleteDirectCalendarEvent(event: PendingDirectCalendarEvent) {
 
 function looksLikeCalendarRescheduleRequest(prompt: string) {
    const lower = normalizeUserIntentPrompt(prompt);
-   return /\b(?:move|reschedule|shift|change)\b/.test(lower) && /\b(?:session|event|calendar|work block|it|that)\b/.test(lower);
+   const explicitVerb = /\b(?:move|reschedule|shift)\b/.test(lower);
+   const explicitChangeCommand = /^(?:please\s+)?change\b/.test(lower) && /\b(?:session|event|calendar|work block|time|day|date)\b/.test(lower);
+   const target = /\b(?:session|event|calendar|work block|it|that)\b/.test(lower);
+
+   // A conversational question such as "Does that change what we should do next?"
+   // is project reasoning, not a Calendar mutation.
+   if (/^(?:does|would|could|should|will)\b/.test(lower)) return false;
+   return target && (explicitVerb || explicitChangeCommand);
 }
 
 function looksLikeCalendarDeleteRequest(prompt: string) {
@@ -4690,80 +4686,24 @@ function readProjectLibraryItemsForAIDockSelection() {
 }
 
 function readActiveProjectSelectionRecordForAIDock(): AIDockActiveProjectSelectionRecord | null {
-   if (typeof window === "undefined") {
-      return null;
-   }
+   const selection = readCanonicalProjectSelection();
 
-   const stored = localStorage.getItem(ACTIVE_PROJECT_SELECTION_STORAGE_KEY);
-
-   if (!stored) {
-      return null;
-   }
-
-   try {
-      const parsed = JSON.parse(stored);
-      const projectId = compactText(typeof parsed === "string" ? parsed : parsed?.projectId || parsed?.id);
-      const title = compactText(typeof parsed === "string" ? parsed : parsed?.title || parsed?.projectTitle);
-      const updatedAt = typeof parsed?.updatedAt === "number" && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : 0;
-
-      return projectId || title
-         ? {
-              projectId,
-              title,
-              updatedAt,
-           }
-         : null;
-   } catch {
-      const raw = compactText(stored);
-      return raw
-         ? {
-              projectId: raw,
-              title: raw,
-              updatedAt: 0,
-           }
-         : null;
-   }
+   return selection
+      ? {
+           projectId: selection.projectId,
+           title: selection.title,
+           updatedAt: selection.updatedAt,
+        }
+      : null;
 }
 
 function resolveSelectedProjectLibraryItemForAIDock() {
-   const selection = readActiveProjectSelectionRecordForAIDock();
    const projects = readProjectLibraryItemsForAIDockSelection();
-
-   if (!selection || !projects.length) {
-      return {
-         project: null as any,
-         selectionChanged: false,
-      };
-   }
-
-   const selectedTitleKey = getNormalizedTitleKey(selection.title);
-   const selected = projects.find((project: any) => selection.projectId && compactText(project?.id) === selection.projectId) || projects.find((project: any) => selectedTitleKey && getNormalizedTitleKey(project?.title) === selectedTitleKey) || null;
-
-   if (!selected) {
-      return {
-         project: null as any,
-         selectionChanged: false,
-      };
-   }
-
-   const canonicalProjectId = compactText(selected.id || selection.projectId);
-   const canonicalTitle = compactText(selected.title || selection.title);
-   const selectionChanged = canonicalProjectId !== selection.projectId || canonicalTitle !== selection.title || !selection.updatedAt;
-
-   if (selectionChanged && canonicalProjectId && canonicalTitle) {
-      localStorage.setItem(
-         ACTIVE_PROJECT_SELECTION_STORAGE_KEY,
-         JSON.stringify({
-            projectId: canonicalProjectId,
-            title: canonicalTitle,
-            updatedAt: Date.now(),
-         }),
-      );
-   }
+   const resolution = resolveCanonicalProjectSelection(projects);
 
    return {
-      project: selected,
-      selectionChanged,
+      project: resolution.project,
+      selectionChanged: false,
    };
 }
 
@@ -5672,7 +5612,7 @@ async function buildProjectMaterialsHelperResponse(prompt: string, packet: Allev
             summaries: materialAwareness.packet.summaries,
             usefulSignals: materialAwareness.packet.usefulSignals,
          },
-         userInstruction: `Answer like ALLEVIN MK X in ${responseModeProfile.label} mode. ${responseModeProfile.deliveryRule} Answer the user's exact material question before restating any project guidance. For comparisons, clearly explain agreement, differences, and what the current milestone should use. Treat materialGrounding.selectedMaterials and the material-specific grounded answer as authoritative for source claims. Use only those selected materials as evidence. Distinguish direct material facts from ALLEVIN interpretation. If the grounding packet contains a contradiction, name the disagreement and say what needs confirmation instead of choosing a side. Do not add a visible Used line; AIDock appends it after the answer. Keep the project recommendation only as the practical implication of the evidence; do not let it replace the material answer. Do not sound like an analytics report. Do not invent a project domain, character, object, feature, task, material, or calendar fact that is not in the supplied context. Avoid motivational filler, repeated conclusions, and visible reasoning labels.`,
+         userInstruction: `Answer like ALLEVIN MK XI in ${responseModeProfile.label} mode. ${responseModeProfile.deliveryRule} Answer the user's exact material question before restating any project guidance. For comparisons, clearly explain agreement, differences, and what the current milestone should use. Treat materialGrounding.selectedMaterials and the material-specific grounded answer as authoritative for source claims. Use only those selected materials as evidence. Distinguish direct material facts from ALLEVIN interpretation. If the grounding packet contains a contradiction, name the disagreement and say what needs confirmation instead of choosing a side. Do not add a visible Used line; AIDock appends it after the answer. Keep the project recommendation only as the practical implication of the evidence; do not let it replace the material answer. Do not sound like an analytics report. Do not invent a project domain, character, object, feature, task, material, or calendar fact that is not in the supplied context. Avoid motivational filler, repeated conclusions, and visible reasoning labels.`,
       });
 
       const candidate = cleanConversationalMaterialResponse(response.summary || response.focus || response.nextStep || "");
@@ -6229,7 +6169,15 @@ function looksLikeLiveOrUnavailableToolQuestion(prompt: string) {
 function looksLikeWeatherQuestion(prompt: string) {
    const lower = normalizeUserIntentPrompt(prompt);
 
-   const directWeather = lower === "weather" || lower.includes("weather") || lower.includes("temperature") || lower.includes("raining") || lower.includes("rain today") || lower.includes("is it hot") || lower.includes("is it cold");
+   // "Temperature" is common project language for hardware, cooking, materials,
+   // lab work, and environmental-control projects. Route it to Weather only when
+   // the user is actually asking about outside/current conditions.
+   const directWeather =
+      lower === "weather" ||
+      /\bweather\b/.test(lower) ||
+      /\b(?:is it|will it be|outside|outdoor|current)\b[\s\S]{0,40}\b(?:raining|rain|hot|cold|temperature)\b/.test(lower) ||
+      /\b(?:temperature|forecast)\b[\s\S]{0,30}\b(?:outside|today|tomorrow|right now|currently)\b/.test(lower) ||
+      lower.includes("rain today");
 
    const planningWeather =
       (lower.includes("errand") || lower.includes("errands") || lower.includes("outside") || lower.includes("outdoor") || lower.includes("walk")) &&
@@ -8070,12 +8018,13 @@ export default function ALLEVIN() {
       conversationHydratingRef.current = true;
       activeConversationProjectRef.current = cleanTitle;
       projectConversationRef.current = thread;
+      const projectOpening = cleanTitle !== "General workspace" ? buildProjectLeadOpeningLine() : "";
       const nextMessages: Message[] = restoredMessages.length
          ? restoredMessages
          : [
               {
                  role: "assistant",
-                 content: getGeneratedWelcomeGreeting(),
+                 content: projectOpening || getGeneratedWelcomeGreeting(),
               },
            ];
       messagesRef.current = nextMessages;
@@ -8213,6 +8162,10 @@ export default function ALLEVIN() {
 
       window.addEventListener("allevin-active-project-selection-change", handleActiveProjectSelectionChange);
 
+      window.addEventListener("allevin-project-state-update", handleProjectLibraryUpdate);
+
+      window.addEventListener("allevin-project-lead-memory-update", handleProjectLibraryUpdate);
+
       window.addEventListener("allevin-send-to-canvas", handleProjectLibraryUpdate);
 
       return () => {
@@ -8221,6 +8174,10 @@ export default function ALLEVIN() {
          window.removeEventListener("allevin-project-library-update", handleProjectLibraryUpdate);
 
          window.removeEventListener("allevin-active-project-selection-change", handleActiveProjectSelectionChange);
+
+         window.removeEventListener("allevin-project-state-update", handleProjectLibraryUpdate);
+
+         window.removeEventListener("allevin-project-lead-memory-update", handleProjectLibraryUpdate);
 
          window.removeEventListener("allevin-send-to-canvas", handleProjectLibraryUpdate);
       };
@@ -9208,6 +9165,8 @@ export default function ALLEVIN() {
 
       const awareness = getActiveProjectAwareness();
 
+      const canonicalState = readCanonicalProjectState();
+
       const memoryProfile = getProjectMemoryProfile();
 
       const projects = getAllLiveProjectLibraryItems();
@@ -9227,12 +9186,12 @@ export default function ALLEVIN() {
       // An explicit Projects selection outranks recency-based Canvas, timeline,
       // material, and thread signals. This keeps Home, the Dock, the response
       // packet, and material lookup on one project authority.
-      const projectTitle = selectedProjectTitle || (awareness.hasActiveProject ? awarenessTitle : compactText(memoryProfile.title));
+      const projectTitle = canonicalState.hasProject ? compactText(canonicalState.identity.title) : selectedProjectTitle || (awareness.hasActiveProject ? awarenessTitle : compactText(memoryProfile.title));
 
-      const selectedProjectBody = sanitizeLongText(selectedProject?.notes?.[0]?.body || selectedProject?.notes?.[0]?.summary || selectedProject?.latestSummary || "", SANITIZE_LIMITS.projectBody);
+      const selectedProjectBody = sanitizeLongText(canonicalState.hasProject ? canonicalState.project.body : selectedProject?.notes?.[0]?.body || selectedProject?.notes?.[0]?.summary || selectedProject?.latestSummary || "", SANITIZE_LIMITS.projectBody);
       const fallbackProjectBody = sanitizeLongText(selectedProjectBody || latestProject?.notes?.[0]?.body || latestProject?.notes?.[0]?.summary || latestProject?.latestSummary || memoryProfile.summary || "", SANITIZE_LIMITS.projectBody);
       const fallbackParsedProject = parseProjectDocument(fallbackProjectBody);
-      const selectedCanvasContent = selectedProject && !isCurrentCanvasAlignedWithSelectedProject() ? "" : sanitizeLongText(memoryProfile.canvasContent || getCurrentCanvasContent(), SANITIZE_LIMITS.projectBody);
+      const selectedCanvasContent = canonicalState.hasProject ? sanitizeLongText(canonicalState.project.canvasContent || "", SANITIZE_LIMITS.projectBody) : selectedProject && !isCurrentCanvasAlignedWithSelectedProject() ? "" : sanitizeLongText(memoryProfile.canvasContent || getCurrentCanvasContent(), SANITIZE_LIMITS.projectBody);
       const selectedTrackingContext = getActiveProjectTrackingContext();
       const selectedTrackingMatches = Boolean(selectedProject && selectedTrackingContext?.projectId && compactText(selectedProject.id) === compactText(selectedTrackingContext.projectId));
       const selectedMilestoneWorkspaces = selectedTrackingMatches
@@ -9264,20 +9223,28 @@ export default function ALLEVIN() {
            })
          : getEmptyProjectIntelligencePacket();
 
-      const parsedProject = awarenessMatchesSelection ? awareness.projectDocument : fallbackParsedProject;
-      const projectIntelligence = awarenessMatchesSelection ? awareness.projectIntelligence : fallbackProjectIntelligence;
+      const parsedProject = canonicalState.hasProject ? canonicalState.project.projectDocument : awarenessMatchesSelection ? awareness.projectDocument : fallbackParsedProject;
+      const projectIntelligence = canonicalState.hasProject ? canonicalState.projectIntelligence : awarenessMatchesSelection ? awareness.projectIntelligence : fallbackProjectIntelligence;
       const selectedTrackingNextAction = selectedTrackingMatches
-         ? compactText(selectedTrackingContext?.tracking?.milestones?.find((milestone: any) => milestone?.status === "active" && milestone?.completed !== true)?.title || selectedTrackingContext?.tracking?.nextStep)
+         ? compactText(
+              selectedTrackingContext?.tracking?.milestones?.find((milestone: any) => milestone?.id === selectedTrackingContext?.tracking?.activeMilestoneId && milestone?.completed !== true)?.title ||
+                 selectedTrackingContext?.tracking?.milestones?.find((milestone: any) => milestone?.status === "active" && milestone?.completed !== true)?.title ||
+                 selectedTrackingContext?.tracking?.nextStep,
+           )
          : "";
-      const recommendedNextAction = awarenessMatchesSelection
-         ? getUnifiedProjectNextAction(awareness, selectedMaterialNextSteps)
-         : selectedTrackingNextAction || compactText(projectIntelligence.projectUnderstanding.recommendedMove) || compactText(parsedProject.immediateNextStep) || selectedMaterialNextSteps[0] || "Choose the first unfinished action in the active project.";
+      const recommendedNextAction = canonicalState.hasProject
+         ? compactText(canonicalState.recommendation.nextMove) || selectedTrackingNextAction || compactText(projectIntelligence.projectUnderstanding.recommendedMove)
+         : awarenessMatchesSelection
+           ? getUnifiedProjectNextAction(awareness, selectedMaterialNextSteps)
+           : selectedTrackingNextAction || compactText(projectIntelligence.projectUnderstanding.recommendedMove) || compactText(parsedProject.immediateNextStep) || selectedMaterialNextSteps[0] || "Choose the first unfinished action in the active project.";
 
       const projectType = compactText(projectIntelligence.reasoningProfile || projectIntelligence.projectType || parsedProject.projectType || memoryProfile.type || "general");
 
-      const projectLocation = selectedProjectTitle
+      const projectLocation = canonicalState.hasProject
          ? "Projects"
-         : awarenessMatchesSelection
+         : selectedProjectTitle
+           ? "Projects"
+           : awarenessMatchesSelection
            ? awareness.lastKnownLocation === "canvas"
               ? "Canvas"
               : awareness.lastKnownLocation === "integrations" || awareness.source === "projects"
@@ -9285,15 +9252,22 @@ export default function ALLEVIN() {
                 : memoryProfile.location || getCurrentProjectLocationLabel()
            : memoryProfile.location || "None";
 
-      const projectStatus = awarenessMatchesSelection ? compactText(awareness.status || awareness.currentStage) : projectTitle ? "active" : compactText(memoryProfile.status || "none");
-      const projectBody = awarenessMatchesSelection ? sanitizeLongText(awareness.projectBody || "", SANITIZE_LIMITS.projectBody) : fallbackProjectBody;
-      const canvasContent = awarenessMatchesSelection ? sanitizeLongText(awareness.canvasContent || "", SANITIZE_LIMITS.projectBody) : selectedCanvasContent;
+      const projectStatus = canonicalState.hasProject ? compactText(canonicalState.project.tracking?.status || "active") : awarenessMatchesSelection ? compactText(awareness.status || awareness.currentStage) : projectTitle ? "active" : compactText(memoryProfile.status || "none");
+      const projectBody = canonicalState.hasProject ? sanitizeLongText(canonicalState.project.body || "", SANITIZE_LIMITS.projectBody) : awarenessMatchesSelection ? sanitizeLongText(awareness.projectBody || "", SANITIZE_LIMITS.projectBody) : fallbackProjectBody;
+      const canvasContent = canonicalState.hasProject ? sanitizeLongText(canonicalState.project.canvasContent || "", SANITIZE_LIMITS.projectBody) : awarenessMatchesSelection ? sanitizeLongText(awareness.canvasContent || "", SANITIZE_LIMITS.projectBody) : selectedCanvasContent;
 
       const conversationTitle = projectTitle || "General workspace";
       const storedConversation = isAIDockConversationThreadForProject(projectConversationRef.current, conversationTitle) ? projectConversationRef.current : readAIDockConversationThread(conversationTitle);
       const promptAwareConversation = prompt ? recordAIDockConversationUserPrompt(storedConversation, prompt) : storedConversation;
       const conversation = buildAIDockLLMConversationContext(promptAwareConversation, prompt);
+      const canonicalMilestoneForGrounding =
+         canonicalState.hasProject && canonicalState.activeMilestone
+            ? projectIntelligence.projectUnderstanding.milestones.find((milestone) => milestone.id === canonicalState.activeMilestone?.id) ||
+              projectIntelligence.projectUnderstanding.milestones.find((milestone) => getNormalizedTitleKey(milestone.title) === getNormalizedTitleKey(canonicalState.activeMilestone?.title))
+            : null;
+
       const activeMilestoneForGrounding =
+         canonicalMilestoneForGrounding ||
          projectIntelligence.projectUnderstanding.milestones.find((milestone) => milestone.id === projectIntelligence.projectUnderstanding.activeMilestoneId) ||
          projectIntelligence.projectUnderstanding.milestones.find((milestone) => milestone.status === "active");
       const materialGrounding = buildAIDockMaterialGrounding({
@@ -9323,7 +9297,7 @@ export default function ALLEVIN() {
          compactText(projectIntelligence.projectUnderstanding.recommendedMove);
       const calendarIntelligence = buildAIDockCalendarIntelligence({
          prompt,
-         projectId: compactText(selectedProject?.id || selectedTrackingContext?.projectId || ""),
+         projectId: compactText(canonicalState.identity.projectId || selectedProject?.id || selectedTrackingContext?.projectId || ""),
          projectTitle,
          activeMilestoneTitle: activeMilestoneForGrounding?.title,
          recommendation: calendarRecommendation,
@@ -9333,7 +9307,7 @@ export default function ALLEVIN() {
       });
 
       return {
-         version: "MK VIII",
+         version: "MK XI",
 
          userIntent: {
             rawPrompt: prompt,
@@ -9360,8 +9334,8 @@ export default function ALLEVIN() {
             implementationPreferences: projectTitle ? (parsedProject.implementationPreferences || []).slice(0, 20) : [],
 
             canvasContent: projectTitle ? canvasContent : "",
-            canvasUpdatedAt: awarenessMatchesSelection ? awareness.canvasUpdatedAt || 0 : 0,
-            projectUpdatedAt: awarenessMatchesSelection ? awareness.projectUpdatedAt || 0 : Number(selectedProject?.updatedAt || selectedProject?.createdAt || 0),
+            canvasUpdatedAt: canonicalState.hasProject ? canonicalState.project.canvasUpdatedAt : awarenessMatchesSelection ? awareness.canvasUpdatedAt || 0 : 0,
+            projectUpdatedAt: canonicalState.hasProject ? canonicalState.project.projectUpdatedAt : awarenessMatchesSelection ? awareness.projectUpdatedAt || 0 : Number(selectedProject?.updatedAt || selectedProject?.createdAt || 0),
 
             latestProjectNote: projectTitle ? compactText(selectedProject?.notes?.[0]?.summary || selectedProject?.latestSummary || memoryProfile.latestNote || "") : "",
             recommendedNextAction,
@@ -9410,7 +9384,7 @@ export default function ALLEVIN() {
 
          responseRules: {
             tone: `ALLEVIN: calm, clear, useful, concise, project-aware, and adapted to ${cognition?.label || "Balanced"} cognition.`,
-            format: "Ground the answer first, then apply response style. Keep facts and project priorities stable across styles.",
+            format: "Ground the answer first, then apply response style. Keep facts and project priorities stable across styles. The current milestone is today’s focus, but every milestone workspace is durable project memory: use earlier milestone work, decisions, questions, checkpoints, materials, and outcomes when they inform the current or future milestone. Do not reset the project’s reasoning at milestone boundaries.",
             avoid: [
                "Do not mention raw storage, implementation details, or confidence scores.",
                "Do not say to open Canvas if the project is already in the project.",
@@ -9418,7 +9392,8 @@ export default function ALLEVIN() {
                "Do not mention Tasks or Board as user-facing destinations.",
                "Use only materialGrounding.selectedMaterials when materials affect the answer.",
                "Keep direct material facts separate from ALLEVIN interpretation and surface contradictions instead of silently choosing a source.",
-               "Do not let project type or response style override explicit project state, Canvas progress, roadmap, or relevant material evidence.",
+               "Do not let project type or response style override explicit project state, Canvas progress, milestone workspaces, or relevant material evidence.",
+               "When the user references an earlier or future milestone, use that milestone’s saved work and project history directly; do not force the answer back to the current milestone unless the user is asking what to do now.",
                "Do not invent domain-specific objects, people, features, scenes, relationships, shelves, or tasks that are not supported by context.",
                "Do not paste full project materials into responses unless the user explicitly asks for full content.",
                "Do not over-explain unless the user asks for detail.",
@@ -11513,7 +11488,7 @@ ${projectLines.join("\n")}${extraCount > 0 ? `\n\nPlus ${extraCount} more tucked
       }
 
       if (lower.includes("mk iii") || lower.includes("personality") || lower.includes("source-aware") || lower.includes("next-step") || lower.includes("test build")) {
-         return "testing and improving ALLEVIN MK IX";
+         return "testing and improving ALLEVIN MK XI";
       }
 
       return "the current project";
@@ -13230,6 +13205,1247 @@ I could not turn this recommendation into a clean action yet.
       return guidance;
    }
 
+   // ========================================
+   // MK XI Build 8 — Evidence-grounded cross-milestone synthesis
+   // Purpose:
+   // The current milestone is the user's workbench, not the boundary of ALLEVIN's
+   // memory. Build 7 grounds synthesis in the canonical tracking record itself,
+   // so saved Work Area text and milestone-specific journal updates cannot be lost
+   // inside a derived intelligence summary before ALLEVIN reasons across versions.
+   // ========================================
+   function looksLikeCrossMilestoneSynthesisPrompt(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+      const milestoneReferences = lower.match(/\bmilestone\s+\d{1,2}\b/g) || [];
+      const referencesCurrent = /\b(?:current milestone|current focus|what we(?:'re| are) working on now|this milestone)\b/i.test(lower);
+      const asksForTransfer = /\b(?:affect|influence|apply|carry forward|carry over|use|based on|inform|connect|change|shape|guide|learned|established|lesson|implication|build on)\b/i.test(lower);
+
+      return asksForTransfer && (milestoneReferences.length > 1 || (milestoneReferences.length >= 1 && referencesCurrent));
+   }
+
+   function isCrossMilestoneQuestionLike(value?: string) {
+      const text = compactText(value);
+      if (!text) return false;
+      return /\?$/.test(text) || /^(?:what|which|who|where|when|why|how|is|are|do|does|did|can|could|should|would|will|has|have)\b/i.test(text);
+   }
+
+   function isTentativeCrossMilestoneStatement(value?: string) {
+      const text = normalizeUserIntentPrompt(value);
+      if (!text) return true;
+      return /\b(?:maybe|might|perhaps|possibly|considering|thinking about|not sure|unsure|still need|need to decide|needs to decide|trying to decide|could use|could be|may use|may be)\b/i.test(text);
+   }
+
+   function splitCrossMilestoneEvidenceStatements(value?: string) {
+      const body = sanitizePlainText(value, 8000);
+      if (!body) return [] as string[];
+
+      const items = body
+         .split(/\n+|(?<=[.!?])\s+/)
+         .map((item) => compactText(item).replace(/^[\-•]+\s*/, "").trim())
+         .filter(Boolean);
+
+      return [...new Map(items.map((item) => [normalizeUserIntentPrompt(item), item])).values()].filter(Boolean);
+   }
+
+   function getEstablishedCrossMilestoneWorkStatements(value?: string) {
+      return splitCrossMilestoneEvidenceStatements(value)
+         .filter((item) => !isCrossMilestoneQuestionLike(item))
+         .filter((item) => !isTentativeCrossMilestoneStatement(item));
+   }
+
+   function getCanonicalCrossMilestoneContext(prompt: string) {
+      const state = readCanonicalProjectState();
+      const tracking = state.project.tracking;
+      const milestones = [...(tracking?.milestones || [])].sort((left: any, right: any) => Number(left?.order || 0) - Number(right?.order || 0));
+      const normalizedPrompt = normalizeUserIntentPrompt(prompt);
+      const numberMatch = normalizedPrompt.match(/\bmilestone\s+(\d{1,2})\b/);
+      const referencedIndex = numberMatch ? Number(numberMatch[1]) - 1 : -1;
+      const referencedMilestone = referencedIndex >= 0 && referencedIndex < milestones.length ? milestones[referencedIndex] : null;
+      const activeMilestone =
+         milestones.find((milestone: any) => milestone.id === state.activeMilestone?.id) ||
+         milestones.find((milestone: any) => milestone.id === tracking?.activeMilestoneId) ||
+         milestones.find((milestone: any) => milestone.status === "active" && milestone.completed !== true) ||
+         null;
+
+      const milestoneRecords = milestones.map((milestone: any, index: number) => {
+         const journal = readProjectMilestoneWorkJournal(state.identity.projectId, state.identity.title, compactText(milestone.id), compactText(milestone.title));
+         const decisions = Array.isArray(milestone.decisions) ? milestone.decisions.map((item: string) => compactText(item)).filter(Boolean) : [];
+         const completedCriteria = Array.isArray(milestone.completedCriteria)
+            ? milestone.completedCriteria.map((item: string) => compactText(item)).filter((item: string) => Boolean(item) && !isCrossMilestoneQuestionLike(item))
+            : [];
+         const journalEvidence = journal
+            .filter((entry) => entry.kind === "decision" || entry.kind === "resolved" || entry.kind === "update" || entry.kind === "note" || entry.kind === "blocker")
+            .map((entry) => ({ label: entry.source === "aidock" ? "AIDock update" : "Saved update", text: compactText(entry.text) }))
+            .filter((item) => item.text);
+
+         // MK XI B8: treat the Work Area as first-class project knowledge, but
+         // split it into individual statements before synthesis. This prevents a
+         // whole paragraph from being treated as one opaque evidence blob and lets
+         // AIDock visibly carry concrete facts (dimensions, ranges, decisions, etc.)
+         // into later milestones. Tentative/question-shaped work remains context.
+         const establishedWork = getEstablishedCrossMilestoneWorkStatements(milestone.workingContent);
+         const openWork = splitCrossMilestoneEvidenceStatements(milestone.workingContent).filter(
+            (item) => !establishedWork.some((established) => normalizeUserIntentPrompt(established) === normalizeUserIntentPrompt(item)),
+         );
+         const evidence = [
+            ...establishedWork.map((text) => ({ label: "Established Work Area", text })),
+            ...decisions.map((text: string) => ({ label: "Decision", text })),
+            ...completedCriteria.map((text: string) => ({ label: "Completed result", text })),
+            ...journalEvidence,
+            ...openWork.map((text) => ({ label: "Open Work Area context", text })),
+         ];
+
+         return {
+            number: index + 1,
+            milestone,
+            evidence,
+            journal,
+         };
+      });
+
+      const referencedRecord = referencedMilestone ? milestoneRecords.find((record) => record.milestone.id === referencedMilestone.id) || null : null;
+      const activeRecord = activeMilestone ? milestoneRecords.find((record) => record.milestone.id === activeMilestone.id) || null : null;
+
+      return { state, milestones, milestoneRecords, referencedIndex, referencedMilestone, activeMilestone, referencedRecord, activeRecord };
+   }
+
+   function buildLocalCrossMilestoneFallback(prompt: string, packet: AllevinInternalContextPacket) {
+      const canonical = getCanonicalCrossMilestoneContext(prompt);
+      const referenced = canonical.referencedRecord;
+      const active = canonical.activeRecord;
+
+      if (!referenced || !active) return "";
+
+      const establishedEvidence = referenced.evidence
+         .filter((item) => item.label !== "Open Work Area context")
+         .flatMap((item) => splitCrossMilestoneEvidenceStatements(item.text))
+         .filter(Boolean);
+      const allEvidence = referenced.evidence.flatMap((item) => splitCrossMilestoneEvidenceStatements(item.text)).filter(Boolean);
+      const evidence = establishedEvidence.length ? establishedEvidence : allEvidence;
+
+      if (!evidence.length) {
+         return `Milestone ${referenced.number} is ${referenced.milestone.title}, but I don’t have a saved result from it yet. I wouldn’t pretend it established a constraint for ${active.milestone.title}; we need an actual saved result before that earlier milestone can meaningfully shape this one.`;
+      }
+
+      const carried = evidence.slice(0, 3).map((item) => item.replace(/[.!?]+$/, "").trim()).filter(Boolean);
+      const carriedText = carried.length === 1 ? carried[0] : carried.join("; ");
+      return `Milestone ${referenced.number} gives us concrete constraints to carry forward: ${carriedText}. For ${active.milestone.title}, those become selection criteria now. I’d eliminate any option that conflicts with them before comparing the remaining trade-offs, rather than treating this milestone as a fresh start.`;
+   }
+
+   function getCrossMilestoneGroundingScore(response: string, evidence: string[]) {
+      const normalizedResponse = normalizeUserIntentPrompt(response);
+      if (!normalizedResponse) return -100;
+
+      const responseTokens = new Set(normalizedResponse.split(/\s+/).filter(Boolean));
+      const evidenceText = evidence.flatMap((item) => splitCrossMilestoneEvidenceStatements(item));
+      if (!evidenceText.length) return 0;
+
+      // Numeric anchors are especially valuable because they represent concrete
+      // project facts such as dimensions, budgets, dates, quantities, and ranges.
+      const numericAnchors = new Set(
+         evidenceText.flatMap((item) => normalizeUserIntentPrompt(item).split(/\s+/)).filter((token) => /\d/.test(token)),
+      );
+      let numericMatches = 0;
+      numericAnchors.forEach((token) => {
+         if (responseTokens.has(token)) numericMatches += 1;
+      });
+
+      const stop = new Set([
+         "about", "after", "again", "against", "before", "being", "current", "from", "into", "milestone", "project", "should", "that", "their", "there", "these", "this", "those", "what", "when", "where", "which", "with", "would",
+         "requirements", "requirement", "compare", "compared", "option", "options", "selection", "select", "design", "work", "working", "saved", "established", "current", "later", "next",
+      ]);
+      const distinctiveTokens = new Set(
+         evidenceText
+            .flatMap((item) => normalizeUserIntentPrompt(item).split(/\s+/))
+            .filter((token) => token.length >= 5 && !stop.has(token) && !/\d/.test(token)),
+      );
+      let distinctiveMatches = 0;
+      distinctiveTokens.forEach((token) => {
+         if (responseTokens.has(token)) distinctiveMatches += 1;
+      });
+
+      const genericOnly = /\b(?:confirmed requirements|compare (?:the )?options|current milestone|later work|next milestone)\b/i.test(response) && numericMatches === 0 && distinctiveMatches < 2;
+      return numericMatches * 6 + distinctiveMatches * 2 - (genericOnly ? 8 : 0);
+   }
+
+   function crossMilestoneResponseUsesEvidence(response: string, evidence: string[]) {
+      if (!evidence.length) return true;
+
+      const evidenceText = evidence.flatMap((item) => splitCrossMilestoneEvidenceStatements(item));
+      const numericAnchors = new Set(
+         evidenceText.flatMap((item) => normalizeUserIntentPrompt(item).split(/\s+/)).filter((token) => /\d/.test(token)),
+      );
+      const score = getCrossMilestoneGroundingScore(response, evidenceText);
+
+      // When the prior milestone contains concrete numeric evidence, require the
+      // answer to carry at least one of those numbers forward. Otherwise require
+      // multiple distinctive evidence tokens. This rejects polished but generic
+      // answers that merely say "compare against requirements."
+      if (numericAnchors.size) {
+         const responseTokens = new Set(normalizeUserIntentPrompt(response).split(/\s+/).filter(Boolean));
+         return [...numericAnchors].some((token) => responseTokens.has(token)) && score >= 4;
+      }
+      return score >= 4;
+   }
+
+   function selectBestCrossMilestoneLLMCandidate(response: any, evidence: string[]) {
+      const rawCandidates = [
+         response?.summary,
+         response?.usefulContext,
+         response?.focus,
+         response?.nextStep,
+         response?.summary && response?.nextStep ? `${response.summary} ${response.nextStep}` : "",
+         response?.usefulContext && response?.nextStep ? `${response.usefulContext} ${response.nextStep}` : "",
+      ];
+
+      const candidates = [...new Map(
+         rawCandidates
+            .map((value) => cleanFinalAIDockResponse(stripRoboticResponseLabels(sanitizeAssistantOutput(value))))
+            .filter(Boolean)
+            .map((value) => [normalizeUserIntentPrompt(value), value]),
+      ).values()];
+
+      return candidates
+         .map((candidate) => ({ candidate, score: getCrossMilestoneGroundingScore(candidate, evidence) }))
+         .sort((left, right) => right.score - left.score || right.candidate.length - left.candidate.length)[0]?.candidate || "";
+   }
+
+
+   // ========================================
+   // ALLEVIN MK XI B10 — Proposal judgment + conversational alternatives
+   // Purpose:
+   // Treat tentative user ideas as proposals to evaluate, not instructions to
+   // endorse. A senior project lead should test a proposal against accumulated
+   // project evidence, challenge it when needed, and carry that proposal into
+   // natural follow-ups such as "What would you recommend instead and why?"
+   //
+   // Important:
+   // - Tentative proposals are not silently promoted to confirmed decisions.
+   // - Current milestone = today's workbench.
+   // - Entire project record = evidence available for judgment.
+   // ========================================
+   // ========================================
+   // ALLEVIN MK XI B17 — Current-project constraint reasoning
+   // Purpose:
+   // Questions about the constraints, requirements, or project facts that should
+   // influence the CURRENT milestone are project-understanding questions, not
+   // "what is my next checkpoint?" questions. Resolve them before the older
+   // Project Lead Runtime can collapse the answer into a checkpoint readback.
+   //
+   // This route is domain-neutral. It works for software, research, home,
+   // hardware, writing, planning, and other project types.
+   // ========================================
+   function looksLikeCurrentProjectConstraintInfluenceQuestion(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+      if (!lower) return false;
+
+      const asksAboutConstraints =
+         /\b(?:constraint|constraints|requirement|requirements|limits?|guardrails?|keep in mind|important facts?|project facts?|project context)\b/.test(lower);
+      const asksAboutInfluence =
+         /\b(?:influence|affect|shape|guide|matter|important|consider|account for|build|approach|current milestone|current work)\b/.test(lower);
+
+      return (
+         (asksAboutConstraints && asksAboutInfluence) ||
+         /\bwhat (?:from|about) (?:this|the) project should (?:i|we) keep in mind\b/.test(lower) ||
+         /\bwhat should influence how (?:i|we) (?:build|approach|handle) (?:the )?(?:current milestone|current work)\b/.test(lower)
+      );
+   }
+
+   // ========================================
+   // ALLEVIN MK XI B18 — Preserve explicit ramble constraints
+   // Purpose:
+   // The visible project card is intentionally concise, but the original project
+   // brief may contain important implementation boundaries that still need to
+   // influence later milestones. Recover only explicit constraint-like statements
+   // from the original brief for local reasoning/fallback.
+   //
+   // This is domain-neutral: stack choices, budgets, deadlines, V1 boundaries,
+   // exclusions, existing resources, compatibility requirements, and stated
+   // preferences all use the same extraction path.
+   // ========================================
+   function extractExplicitProjectBoundariesFromBrief(value?: string) {
+      const clean = sanitizePlainText(value || "", 14000)
+         .replace(/\r/g, "\n")
+         .replace(/\n+/g, "\n")
+         .trim();
+
+      if (!clean) return [];
+
+      const statements = clean
+         .split(/\n+|[.!?]\s+/)
+         .map((statement) => compactText(statement).replace(/^[\-*•\d.)\s]+/, "").trim())
+         .filter((statement) => statement.length >= 8);
+
+      const explicitBoundary = (statement: string) =>
+         /\b(?:must|must not|can'?t|cannot|should|should not|need(?:s)? to|do not want|don'?t want|would rather|rather reuse|prefer|already have|already own|already use|already built|first version|version one|v1|few weekends?|within \d|budget|deadline|by [a-z]+|without|does not need to|do not need to|not need to|building .{0,80}\bwith\b|built .{0,80}\bwith\b|using [a-z0-9]|stack\b|keep .{0,40}\bsmall|stay .{0,40}\bsmall)\b/i.test(statement);
+
+      const result: string[] = [];
+      const seen = new Set<string>();
+
+      for (const statement of statements) {
+         if (!explicitBoundary(statement)) continue;
+         const key = normalizeUserIntentPrompt(statement);
+         if (!key || seen.has(key)) continue;
+         seen.add(key);
+         result.push(statement.replace(/[;,:]+$/, "").trim());
+         if (result.length >= 10) break;
+      }
+
+      return result;
+   }
+
+   function getCurrentProjectConstraintFacts(packet: AllevinInternalContextPacket) {
+      const understanding = packet.projectIntelligence?.projectUnderstanding;
+      const canonical = readCanonicalProjectState();
+
+      const constraints = [
+         ...(packet.currentProject.constraints || []),
+         ...(understanding?.constraints || []),
+      ]
+         .map((item) => compactText(item))
+         .filter(Boolean);
+
+      const implementationPreferences = (packet.currentProject.implementationPreferences || [])
+         .map((item) => compactText(item))
+         .filter(Boolean);
+
+      // MK XI B17 fix:
+      // readCanonicalProjectState() returns decisions at the top level.
+      // The `.state` wrapper exists only on getCanonicalCrossMilestoneContext(),
+      // not on the canonical authority result itself.
+      const confirmedDecisions = (canonical.decisions?.confirmed || [])
+         .map((decision) => compactText(decision.statement))
+         .filter(Boolean);
+
+      const sourceBoundaries = extractExplicitProjectBoundariesFromBrief(
+         canonical.project?.sourceBrief,
+      );
+
+      return {
+         constraints: Array.from(new Set(constraints)).slice(0, 16),
+         implementationPreferences: Array.from(new Set(implementationPreferences)).slice(0, 12),
+         sourceBoundaries: Array.from(new Set(sourceBoundaries)).slice(0, 10),
+         confirmedDecisions: Array.from(new Set(confirmedDecisions)).slice(0, 12),
+      };
+   }
+
+   function buildLocalCurrentProjectConstraintFallback(prompt: string, packet: AllevinInternalContextPacket) {
+      const facts = getCurrentProjectConstraintFacts(packet);
+      const activeMilestone =
+         packet.projectIntelligence?.projectUnderstanding?.milestones?.find(
+            (milestone) => milestone.id === packet.projectIntelligence?.projectUnderstanding?.activeMilestoneId,
+         ) ||
+         packet.projectIntelligence?.projectUnderstanding?.milestones?.find((milestone) => milestone.status === "active");
+      const milestoneTitle = compactText(activeMilestone?.title) || compactText(packet.currentProject.recommendedNextAction) || "the current milestone";
+
+      const lines = [
+         ...facts.constraints.map((item) => `Constraint: ${item}`),
+         ...facts.implementationPreferences.map((item) => `Implementation preference: ${item}`),
+         ...facts.sourceBoundaries.map((item) => `Project boundary: ${item}`),
+         ...facts.confirmedDecisions.map((item) => `Confirmed decision: ${item}`),
+      ]
+         .filter((line, index, array) => {
+            const key = normalizeUserIntentPrompt(line.replace(/^[^:]+:\s*/, ""));
+            return key && array.findIndex((candidate) => normalizeUserIntentPrompt(candidate.replace(/^[^:]+:\s*/, "")) === key) === index;
+         })
+         .slice(0, 6);
+
+      if (!lines.length) {
+         return `I can see that you’re asking what should constrain ${milestoneTitle}, but I don’t have enough explicit project constraints to give you a reliable list. I’d use the saved project description and confirmed decisions before treating the next checkpoint as the answer.`;
+      }
+
+      return `The strongest project constraints I can verify for ${milestoneTitle} are:\n${lines.map((line) => `- ${line}`).join("\n")}\n\nUse those as decision boundaries for the current milestone rather than treating the checkpoint itself as the full project context.`;
+   }
+
+   async function buildCurrentProjectConstraintResponse(prompt: string) {
+      const packet = buildAllevinInternalContextPacket(prompt);
+      const facts = getCurrentProjectConstraintFacts(packet);
+      const understanding = packet.projectIntelligence?.projectUnderstanding;
+      const activeMilestone =
+         understanding?.milestones?.find((milestone) => milestone.id === understanding.activeMilestoneId) ||
+         understanding?.milestones?.find((milestone) => milestone.status === "active");
+      const milestoneTitle = compactText(activeMilestone?.title) || compactText(packet.currentProject.recommendedNextAction) || "the current milestone";
+      const responseMode = normalizeAIDockResponseMode(getActiveCognitionResponseMode());
+      const responseModeProfile = getAIDockResponseModeProfile(responseMode);
+
+      const constraintText = facts.constraints.length
+         ? facts.constraints.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         : "No separate explicit constraints were parsed.";
+      const preferenceText = facts.implementationPreferences.length
+         ? facts.implementationPreferences.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         : "No separate implementation preferences were parsed.";
+      const boundaryText = facts.sourceBoundaries.length
+         ? facts.sourceBoundaries.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         : "No additional explicit boundaries were recovered from the original project brief.";
+      const decisionText = facts.confirmedDecisions.length
+         ? facts.confirmedDecisions.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         : "No separate confirmed decisions were recorded.";
+
+      try {
+         const response = await requestAllevinLLM({
+            mode: "aidock-guidance",
+            source: "aidock",
+            title: compactText(packet.currentProject.title) || "Active project",
+            focus: prompt,
+            groundedResponse: [
+               facts.constraints.length ? `Explicit constraints:\n${constraintText}` : "",
+               facts.implementationPreferences.length ? `Implementation preferences:\n${preferenceText}` : "",
+               facts.sourceBoundaries.length ? `Original-brief project boundaries:\n${boundaryText}` : "",
+               facts.confirmedDecisions.length ? `Confirmed decisions:\n${decisionText}` : "",
+            ]
+               .filter(Boolean)
+               .join("\n\n"),
+            usefulContext: [
+               packet.currentProject.goal ? `Project goal: ${packet.currentProject.goal}` : "",
+               `Current milestone: ${milestoneTitle}`,
+               packet.currentProject.body ? `Saved project description:\n${sanitizePlainText(packet.currentProject.body, 7000)}` : "",
+               `Explicit constraints:\n${constraintText}`,
+               `Implementation preferences:\n${preferenceText}`,
+               `Original-brief project boundaries:\n${boundaryText}`,
+               `Confirmed decisions:\n${decisionText}`,
+            ]
+               .filter(Boolean)
+               .join("\n\n"),
+            rawContent: sanitizePlainText(packet.currentProject.body || "", 12000),
+            nextStep: "",
+            contextPacket: packet,
+            projectUnderstanding: understanding,
+            conversation: {
+               projectTitle: compactText(packet.currentProject.title),
+               lastUserPrompt: prompt,
+               currentTopic: milestoneTitle,
+               activeReference: milestoneTitle,
+               continuityIntent: "continue",
+               recentMessages: [{ role: "user", content: prompt }],
+            },
+            responseMode,
+            responseStyle: responseModeProfile.responseStyle,
+            userInstruction: `
+You are ALLEVIN MK XI acting as a senior project lead.
+
+The user is asking which PROJECT CONSTRAINTS, requirements, existing assets, confirmed choices, implementation preferences, or scope boundaries should influence the CURRENT milestone.
+
+User question:
+${prompt}
+
+Current milestone:
+${milestoneTitle}
+
+Rules:
+- Answer the constraint/requirements question directly. Do not replace it with "next checkpoint."
+- Identify the 3–6 strongest project-specific constraints or boundaries that materially affect the current milestone.
+- Use the saved project description as evidence when it contains explicit scope, stack, existing assets, exclusions, timing limits, budget, compatibility requirements, or implementation preferences.
+- Distinguish confirmed project facts/decisions from goals and success criteria.
+- "What Good Looks Like", success criteria, completion criteria, and milestone checkpoints are TARGETS unless the project explicitly records them as completed. Never say they are already true merely because they are listed.
+- Explain briefly how the strongest constraints change how the current milestone should be built or evaluated.
+- Do not invent constraints or claim work is already complete.
+- Do not narrate milestone/build order unless sequencing itself is one of the constraints.
+- Keep the answer concise and project-specific.
+            `.trim(),
+            projectStage: "mk-xi-project-context",
+            currentLocation: "AIDock",
+            priority: "high",
+            maxWords: responseModeProfile.mode === "focused" ? 150 : responseModeProfile.mode === "creative" ? 230 : 190,
+         });
+
+         const candidate = [
+            sanitizeAssistantOutput(response.focus),
+            sanitizeAssistantOutput(response.usefulContext),
+            sanitizeAssistantOutput(response.nextStep),
+         ]
+            .map((value) => cleanFinalAIDockResponse(stripRoboticResponseLabels(value)))
+            .filter(Boolean)
+            .filter((value, index, array) => array.findIndex((candidate) => normalizeUserIntentPrompt(candidate) === normalizeUserIntentPrompt(value)) === index)
+            .join(" ");
+
+         const collapsedToCheckpoint =
+            /\byou(?:'re| are) currently working on\b/i.test(candidate) &&
+            /\bnext checkpoint\b/i.test(candidate);
+
+         if (!response.ok || response.usedFallback || !candidate || collapsedToCheckpoint) {
+            return buildLocalCurrentProjectConstraintFallback(prompt, packet);
+         }
+
+         return candidate;
+      } catch {
+         return buildLocalCurrentProjectConstraintFallback(prompt, packet);
+      }
+   }
+
+   function looksLikeTentativeProjectProposal(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+      if (!lower) return false;
+
+      return (
+         /\b(?:i think (?:we|i) should|maybe (?:we|i) should|perhaps (?:we|i) should|what if (?:we|i)|how about (?:we|i)|i(?:'m| am) thinking (?:about )?|i was thinking (?:about )?|i(?:'m| am) leaning toward|we could|i could)\b/.test(lower) ||
+         /\bdo you think (?:we|i) should\b/.test(lower)
+      );
+   }
+
+   function looksLikeProjectAlternativeFollowup(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+      if (!lower) return false;
+
+      return (
+         /\bwhat (?:would|do) you recommend instead\b/.test(lower) ||
+         /\bwhat would you do instead\b/.test(lower) ||
+         /\bwhat should (?:we|i) (?:use|do|choose|pick) instead\b/.test(lower) ||
+         /\bwhat(?:'s| is) a better (?:option|approach|choice|way)\b/.test(lower) ||
+         /\bwhat would be better\b/.test(lower) ||
+         /\brecommend (?:a|an) (?:better|different|alternative)\b/.test(lower)
+      );
+   }
+
+   // ========================================
+   // ALLEVIN MK XI B13 — Recommendation negotiation
+   // Purpose:
+   // New information such as ownership, budget, availability, preference, or
+   // another practical constraint can legitimately change a recommendation.
+   // These follow-ups stay attached to the proposal/recommendation conversation
+   // instead of dropping into the older "did the milestone change?" shortcut.
+   // ========================================
+   function looksLikeProjectRecommendationReconsideration(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+      if (!lower) return false;
+
+      return (
+         /\bdoes (?:that|this) change your recommendation\b/.test(lower) ||
+         /\bwould (?:that|this) change your recommendation\b/.test(lower) ||
+         /\bdoes (?:that|this) change what you recommend\b/.test(lower) ||
+         /\bwould you recommend something different (?:now|then)?\b/.test(lower) ||
+         /\bdoes (?:that|this) make you (?:change|revise|rethink) (?:your )?recommendation\b/.test(lower) ||
+         /\bshould (?:that|this) change (?:your|the) recommendation\b/.test(lower)
+      );
+   }
+
+   function looksLikeCommittedDecisionImpactFollowup(prompt: string) {
+      const lower = normalizeUserIntentPrompt(prompt);
+      if (!lower) return false;
+
+      return (
+         /\bgiven (?:that|this|the) decision\b/.test(lower) ||
+         /\bbased on (?:that|this|the) decision\b/.test(lower) ||
+         /\bnow that we(?:'ve| have) decided\b/.test(lower) ||
+         /\bnow that (?:that|this) is decided\b/.test(lower) ||
+         /\bwith (?:that|this) decided\b/.test(lower) ||
+         /\bwith (?:that|this) as (?:the|our) decision\b/.test(lower)
+      );
+   }
+
+   function findRecentTentativeProjectProposal(messages: Message[]) {
+      return [...messages]
+         .reverse()
+         .filter((message) => message.role === "user")
+         .map((message) => sanitizePlainText(message.content, 8000))
+         .find((message) => looksLikeTentativeProjectProposal(message)) || "";
+   }
+
+   function getProjectProposalJudgmentContext(prompt: string) {
+      const packet = buildAllevinInternalContextPacket(prompt);
+      const canonical = getCanonicalCrossMilestoneContext(prompt);
+      const activeMilestone = canonical.activeMilestone;
+
+      const milestoneEvidence = canonical.milestoneRecords.flatMap((record) =>
+         record.evidence
+            .filter((item) => item.label !== "Open Work Area context")
+            .flatMap((item) => splitCrossMilestoneEvidenceStatements(item.text))
+            .filter(Boolean)
+            .map((item) => `Milestone ${record.number}: ${item}`),
+      );
+
+      const openMilestoneContext = canonical.milestoneRecords.flatMap((record) =>
+         record.evidence
+            .filter((item) => item.label === "Open Work Area context")
+            .flatMap((item) => splitCrossMilestoneEvidenceStatements(item.text))
+            .filter(Boolean)
+            .map((item) => `Milestone ${record.number} open context: ${item}`),
+      );
+
+      const confirmedDecisions = canonical.state.decisions.confirmed
+         .map((decision) => compactText(decision.statement))
+         .filter(Boolean)
+         .map((item) => `Confirmed decision: ${item}`);
+
+      const currentCheckpoints = Array.isArray((activeMilestone as any)?.completionCriteria)
+         ? (activeMilestone as any).completionCriteria.map((item: string) => compactText(item)).filter(Boolean)
+         : [];
+
+      const materialSignals = [
+         ...(packet.projectMaterials.selectedMaterialInsights || []),
+         ...(packet.projectMaterials.usefulSignals || []),
+         ...(packet.projectMaterials.recentMaterialInsights || []),
+      ]
+         .map((item) => compactText(item))
+         .filter(Boolean)
+         .slice(0, 12)
+         .map((item) => `Material context: ${item}`);
+
+      const groundedEvidence = [...milestoneEvidence, ...confirmedDecisions, ...materialSignals];
+      const evidenceForScoring = groundedEvidence.map((item) => item.replace(/^(?:Milestone \d+|Confirmed decision|Material context):\s*/i, ""));
+
+      return {
+         packet,
+         canonical,
+         activeMilestone,
+         groundedEvidence,
+         evidenceForScoring,
+         openMilestoneContext,
+         currentCheckpoints,
+      };
+   }
+
+   // ========================================
+   // ALLEVIN MK XI B16 — Resilient reconsideration fallback
+   // Purpose:
+   // The server/model remains the preferred senior-judgment path. If that path
+   // falls back or a candidate is rejected, ALLEVIN should still make a useful,
+   // generalized project-lead recommendation instead of merely telling the user
+   // to reconsider the information themselves.
+   //
+   // Existing-resource handling is domain-neutral:
+   // - "I already own two bookcases"
+   // - "We already have Supabase auth"
+   // - "I already collected 200 responses"
+   // - "We already have two temperature sensors"
+   //
+   // Reuse is a provisional recommendation, not an automatic confirmed decision.
+   // ========================================
+   function extractExistingResourceFromReconsideration(prompt?: string) {
+      const clean = compactText(prompt);
+      if (!clean) return "";
+
+      const withoutLeadIn = clean
+         .replace(/^(?:actually|also|and|but|in fact|one more thing)[,:\s]+/i, "")
+         .trim();
+
+      // Natural English often puts the asset BEFORE "I already have":
+      // "the Supabase authentication I already have is working well"
+      // "the two sensors we already own are calibrated"
+      const preposedResource = withoutLeadIn.match(
+         /^(?:the\s+)?(.{2,180}?)\s+(?:i|we)\s+already\s+(?:have|own|use)\b/i,
+      )?.[1];
+      if (preposedResource) {
+         const resource = compactText(preposedResource).replace(/^(?:the|our|my)\s+/i, "").trim();
+         if (resource) return resource;
+      }
+
+      const patterns = [
+         /\b(?:i|we)\s+already\s+(?:own|have|use|have access to|have available)\s+([^.!?]+?)(?=(?:\s*,?\s+(?:does|would|should)\s+(?:that|this)\s+(?:change|affect|alter|revise))|[.!?]|$)/i,
+         /\b(?:i've|we've|i have|we have)\s+already\s+(?:got|bought|built|set up|collected|created|installed)\s+([^.!?]+?)(?=(?:\s*,?\s+(?:does|would|should)\s+(?:that|this)\s+(?:change|affect|alter|revise))|[.!?]|$)/i,
+      ];
+
+      for (const pattern of patterns) {
+         const match = withoutLeadIn.match(pattern);
+         const resource = compactText(match?.[1]);
+         if (resource) return resource;
+      }
+
+      return "";
+   }
+
+   function buildLocalProjectProposalJudgmentFallback(
+      proposal: string,
+      asksAlternative: boolean,
+      evidence: string[],
+      currentMilestoneTitle: string,
+      options?: {
+         asksReconsideration?: boolean;
+         currentPrompt?: string;
+      },
+   ) {
+      const concrete = evidence
+         .flatMap((item) => splitCrossMilestoneEvidenceStatements(item))
+         .map((item) => compactText(item).replace(/[.!?;:]+$/, "").trim())
+         .filter(Boolean)
+         .slice(0, 3);
+
+      const evidenceText = concrete.length ? concrete.join("; ") : "the requirements and decisions already saved in the project";
+      const currentPrompt = compactText(options?.currentPrompt);
+
+      if (options?.asksReconsideration) {
+         const existingResource = extractExistingResourceFromReconsideration(currentPrompt);
+
+         if (existingResource) {
+            return `Yes — that changes the recommendation. Since ${existingResource} is already available to the project, I’d treat it as the default starting point before adding or replacing anything. Reusing an existing viable resource can avoid unnecessary cost and complexity, as long as it still fits the established constraints: ${evidenceText}. I would keep the earlier recommendation only for a specific gap the existing resource cannot satisfy. Next, evaluate whether it covers the current milestone’s actual need and identify only the remaining gap, if there is one.`;
+         }
+
+         return `That new information is enough to re-evaluate the earlier recommendation. I’d revise the recommendation only where the new information materially changes the trade-off, while keeping the established constraints fixed: ${evidenceText}. Treat the new information — ${currentPrompt || "the information you just added"} — as part of the decision context, not as a reason to restart the milestone.`;
+      }
+
+      if (asksAlternative) {
+         return `I wouldn’t commit to an alternative without a grounded comparison. The constraints I can verify are ${evidenceText}. Use those to judge a concrete alternative against ${currentMilestoneTitle || "the current milestone"} before treating it as the new direction.`;
+      }
+
+      return `I wouldn’t call that the right move yet. Treat “${compactText(proposal)}” as an option to test against ${evidenceText}. If it creates a conflict with those constraints, change the approach before recording it as a project decision.`;
+   }
+
+   function getProjectJudgmentGroundingScore(response: string, evidence: string[]) {
+      return getCrossMilestoneGroundingScore(response, evidence);
+   }
+
+   // ========================================
+   // ALLEVIN MK XI B12 — Judgment-specific grounding boundary
+   // Purpose:
+   // Cross-milestone transfer and proposal judgment need different validation.
+   //
+   // Cross-milestone transfer intentionally requires concrete earlier evidence
+   // (including numeric anchors when they exist) so ALLEVIN cannot answer with a
+   // generic "use the requirements" response.
+   //
+   // Proposal judgment is different: a strong alternative can be grounded in the
+   // project without repeating every literal number. Validate it against a wider
+   // set of project/proposal anchors while still rejecting generic advice.
+   // ========================================
+   function projectJudgmentResponseUsesContext(
+      response: string,
+      evidence: string[],
+      proposal: string,
+      currentMilestoneTitle: string,
+      currentPrompt = "",
+   ) {
+      const normalizedResponse = normalizeUserIntentPrompt(response);
+      if (!normalizedResponse) return false;
+
+      const stop = new Set([
+         "about",
+         "after",
+         "again",
+         "against",
+         "alternative",
+         "alternatives",
+         "because",
+         "before",
+         "better",
+         "choose",
+         "chosen",
+         "compare",
+         "compared",
+         "current",
+         "instead",
+         "milestone",
+         "option",
+         "options",
+         "project",
+         "recommend",
+         "recommended",
+         "requirements",
+         "requirement",
+         "select",
+         "selection",
+         "should",
+         "that",
+         "their",
+         "there",
+         "these",
+         "this",
+         "those",
+         "what",
+         "when",
+         "where",
+         "which",
+         "with",
+         "would",
+      ]);
+
+      const sourceText = [
+         ...evidence.flatMap((item) => splitCrossMilestoneEvidenceStatements(item)),
+         compactText(proposal),
+         compactText(currentMilestoneTitle),
+         // MK XI B15:
+         // Recommendation reconsideration introduces legitimate new project
+         // context in the current message. Include it in the grounding boundary
+         // so a response can be accepted for correctly using newly supplied
+         // ownership, cost, availability, compatibility, preference, timing, or
+         // other practical constraints instead of being forced to echo the old
+         // proposal.
+         compactText(currentPrompt),
+      ]
+         .filter(Boolean)
+         .join(" ");
+
+      const anchors = new Set(
+         normalizeUserIntentPrompt(sourceText)
+            .split(/\s+/)
+            .filter((token) => token.length >= 4 && !stop.has(token)),
+      );
+
+      const responseTokens = new Set(normalizedResponse.split(/\s+/).filter(Boolean));
+      let matchedAnchors = 0;
+      anchors.forEach((token) => {
+         if (responseTokens.has(token)) matchedAnchors += 1;
+      });
+
+      // Generic hand-backs are not senior project-lead judgment even when they
+      // happen to reuse a milestone noun or two.
+      const passiveHandBack =
+         /\b(?:compare (?:the )?(?:options|alternatives)|consider (?:the )?(?:requirements|constraints)|judge (?:the )?(?:options|alternatives)|do more research)\b/i.test(response) &&
+         !/\b(?:i(?:'d| would) (?:use|choose|recommend|prefer|favor)|i recommend|go with|use a|choose a|prefer a|favor a)\b/i.test(response);
+
+      return matchedAnchors >= 2 && !passiveHandBack;
+   }
+
+   function selectBestProjectJudgmentLLMCandidate(response: any, evidence: string[], asksAlternative: boolean) {
+      const rawCandidates = [
+         response?.summary,
+         response?.usefulContext,
+         response?.focus,
+         response?.nextStep,
+         response?.summary && response?.nextStep ? `${response.summary} ${response.nextStep}` : "",
+         response?.usefulContext && response?.nextStep ? `${response.usefulContext} ${response.nextStep}` : "",
+         response?.summary && response?.usefulContext ? `${response.summary} ${response.usefulContext}` : "",
+      ];
+
+      const candidates = [...new Map(
+         rawCandidates
+            .map((value) => cleanFinalAIDockResponse(stripRoboticResponseLabels(sanitizeAssistantOutput(value))))
+            .filter(Boolean)
+            .map((value) => [normalizeUserIntentPrompt(value), value]),
+      ).values()];
+
+      return candidates
+         .map((candidate) => {
+            const lower = normalizeUserIntentPrompt(candidate);
+            const reflexiveApproval =
+               /\b(?:that is the right call|that'?s the right call|go ahead|sounds good|great idea|good call)\b/.test(lower) &&
+               !/\b(?:but|however|tradeoff|trade off|risk|constraint|because|against|concern|downside)\b/.test(lower);
+            const alternativeBonus = asksAlternative && /\b(?:instead|recommend|better|prefer|favor|choose|use)\b/.test(lower) ? 4 : 0;
+
+            return {
+               candidate,
+               score: getProjectJudgmentGroundingScore(candidate, evidence) + alternativeBonus - (reflexiveApproval ? 12 : 0),
+            };
+         })
+         .sort((left, right) => right.score - left.score || right.candidate.length - left.candidate.length)[0]?.candidate || "";
+   }
+
+   function composeProjectProposalJudgmentResponse(response: any) {
+      const parts = [response?.focus, response?.usefulContext, response?.nextStep]
+         .map((value) => cleanFinalAIDockResponse(stripRoboticResponseLabels(sanitizeAssistantOutput(value))))
+         .filter(Boolean);
+
+      const seen = new Set<string>();
+      const unique = parts.filter((part) => {
+         const key = normalizeUserIntentPrompt(part);
+         if (!key || seen.has(key)) return false;
+         seen.add(key);
+         return true;
+      });
+
+      return unique.join("\n\n");
+   }
+
+   async function buildProjectProposalJudgmentResponse(prompt: string, proposal: string, priorAssistant = "") {
+      const asksAlternative = looksLikeProjectAlternativeFollowup(prompt);
+      const asksReconsideration = looksLikeProjectRecommendationReconsideration(prompt);
+      const context = getProjectProposalJudgmentContext(prompt);
+      const packet = context.packet;
+      const projectTitle = compactText(packet.currentProject.title) || "Active project";
+      const currentMilestoneTitle = compactText(context.activeMilestone?.title) || packet.currentProject.recommendedNextAction || "the current milestone";
+      const responseMode = normalizeAIDockResponseMode(getActiveCognitionResponseMode());
+      const responseModeProfile = getAIDockResponseModeProfile(responseMode);
+
+      const evidenceText = context.groundedEvidence.length
+         ? context.groundedEvidence.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         : "No established project evidence has been saved yet.";
+      const openContextText = context.openMilestoneContext.length
+         ? context.openMilestoneContext.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         : "None.";
+      const checkpointText = context.currentCheckpoints.length
+         ? context.currentCheckpoints.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         : "No explicit checkpoints are recorded for the current milestone.";
+      const localFallback = buildLocalProjectProposalJudgmentFallback(
+         proposal,
+         asksAlternative,
+         context.evidenceForScoring,
+         currentMilestoneTitle,
+         {
+            asksReconsideration,
+            currentPrompt: prompt,
+         },
+      );
+
+      try {
+         const response = await requestAllevinLLM({
+            mode: "aidock-guidance",
+            source: "aidock",
+            title: projectTitle,
+            focus: asksAlternative
+               ? `Recommend a stronger alternative to this proposal: ${proposal}`
+               : asksReconsideration
+                 ? `Re-evaluate the current recommendation after the user's new information. Original proposal: ${proposal}`
+                 : `Evaluate this project proposal: ${proposal}`,
+            groundedResponse: context.groundedEvidence.length ? evidenceText : "",
+            usefulContext: [
+               packet.currentProject.goal ? `Project goal: ${packet.currentProject.goal}` : "",
+               `Current milestone: ${currentMilestoneTitle}`,
+               `Current milestone completion criteria (targets; not completed unless explicitly recorded):\n${checkpointText}`,
+               `Established project evidence:\n${evidenceText}`,
+               `Open/tentative project context:\n${openContextText}`,
+               priorAssistant ? `Previous ALLEVIN response:\n${sanitizePlainText(priorAssistant, 3000)}` : "",
+            ]
+               .filter(Boolean)
+               .join("\n\n"),
+            nextStep: "",
+            rawContent: `Proposal under review: ${proposal}`,
+            contextPacket: packet,
+            conversation: {
+               projectTitle,
+               lastUserPrompt: prompt,
+               lastAssistantResponse: priorAssistant,
+               currentTopic: currentMilestoneTitle,
+               activeReference: proposal,
+               continuityIntent: asksAlternative || asksReconsideration ? "alternate-method" : "none",
+               recentMessages: asksAlternative || asksReconsideration
+                  ? [
+                       { role: "user", content: proposal },
+                       ...(priorAssistant ? [{ role: "assistant" as const, content: priorAssistant }] : []),
+                       { role: "user", content: prompt },
+                    ]
+                  : [{ role: "user", content: prompt }],
+            },
+            responseMode,
+            responseStyle: responseModeProfile.responseStyle,
+            userInstruction: `
+You are ALLEVIN MK XI acting as a senior project lead.
+
+Current user message:
+${prompt}
+
+Proposal being evaluated:
+${proposal}
+
+Current milestone:
+${currentMilestoneTitle}
+
+Established project evidence:
+${evidenceText}
+
+Current milestone completion criteria (targets; not completed unless explicitly recorded):
+${checkpointText}
+
+Behavior rules:
+- Treat tentative language such as "I think we should", "maybe", "what if", or "I'm leaning toward" as a PROPOSAL, not a confirmed decision.
+- Do not agree merely because the user suggested the idea.
+- Evaluate the proposal against the project's saved evidence and relevant stable domain knowledge.
+- Saved project evidence is fact. General domain knowledge may support reasoning and recommendations, but it must not be presented as a saved project fact.
+- If the proposal conflicts with a requirement, creates avoidable risk, or is weaker than another approach, say so clearly and explain why.
+- If the proposal is genuinely strong, say why using concrete project evidence rather than generic praise.
+- For an alternative follow-up, name a concrete alternative, compare it with the original proposal, and explain the trade-off.
+- If the user adds new information and asks whether it changes your recommendation, explicitly evaluate that new information against your previous recommendation. State whether the recommendation changes, then give the revised recommendation. Do not answer by saying only that the milestone or checkpoint stays the same.
+- Practical constraints introduced in conversation (for example already owning something, availability, cost, space, preference, or compatibility) can legitimately change the recommendation even when they do not change the milestone itself.
+- Carry forward earlier milestone facts when they matter. Do not reset reasoning at milestone boundaries.
+- Do not fall back to roadmap/build-order narration unless sequencing itself is the user's question.
+- Do not save or imply that this proposal is a confirmed decision. The user must explicitly commit before it becomes one.
+- Success criteria, "What Good Looks Like", completion criteria, and milestone checkpoints are TARGET STATES unless explicit evidence marks them complete. Never describe them as already achieved merely because they are listed.
+- Do not claim safety, accessibility, reliability, testing, approval, or other controls are already in place unless the project record explicitly confirms that.
+- Keep the answer calm, specific, and useful. A senior project lead may disagree.
+
+${
+   asksAlternative
+      ? "The user is asking for an alternative. Give one specific recommendation and why it is better for this project."
+      : asksReconsideration
+        ? "The user has introduced new information and is asking whether it changes your prior recommendation. Re-evaluate the prior recommendation using that new information, say clearly whether your recommendation changes, and give the updated direction."
+        : "The user is proposing an approach. Assess it before recommending whether to keep, modify, or reject it."
+}
+            `.trim(),
+            // MK XI B11: the server route recognizes this stage and uses a
+            // dedicated proposal-judgment prompt instead of generic AIDock guidance.
+            projectStage: "mk-xi-project-judgment",
+            currentLocation: "AIDock",
+            priority: "high",
+            maxWords: responseModeProfile.mode === "focused" ? 130 : responseModeProfile.mode === "creative" ? 220 : 180,
+         });
+
+         const candidate = composeProjectProposalJudgmentResponse(response);
+
+         // MK XI B12:
+         // Do not reuse the cross-milestone numeric-anchor gate here. That gate
+         // correctly proves historical transfer, but it can reject a genuinely
+         // grounded recommendation simply because the model says "thermal
+         // stability" instead of repeating "65–80°F". Judgment is accepted when
+         // it stays tied to multiple concrete project/proposal anchors and does
+         // not hand the decision back with generic comparison language.
+         const grounded = projectJudgmentResponseUsesContext(
+            candidate,
+            context.evidenceForScoring,
+            proposal,
+            currentMilestoneTitle,
+            prompt,
+         );
+         const recommendationIsConcrete =
+            !(asksAlternative || asksReconsideration) ||
+            /\b(?:recommend|instead|prefer|favor|use|choose|go with|keep|change|revise|i(?:'d| would))\b/i.test(candidate);
+         const reflexiveApproval =
+            /\b(?:that is the right call|that'?s the right call|go ahead|sounds good|great idea|good call)\b/i.test(candidate) &&
+            !/\b(?:but|however|trade-?off|risk|constraint|because|against|concern|downside)\b/i.test(candidate);
+
+         // A provider/client fallback is not a senior judgment. Keep the local
+         // conservative response rather than presenting fallback text as advice.
+         if (!response.ok || response.usedFallback || !candidate || !grounded || !recommendationIsConcrete || reflexiveApproval) return localFallback;
+         return candidate;
+      } catch {
+         return localFallback;
+      }
+   }
+
+   // ========================================
+   // ALLEVIN MK XI B13 — Confirmed decision -> downstream adaptation
+   // Purpose:
+   // Once the user explicitly commits, that choice becomes a fixed project input
+   // for later reasoning. Questions like "Given that decision, what changes?"
+   // should adapt the current milestone around the confirmed choice rather than
+   // merely reciting the next checkpoint.
+   // ========================================
+   async function buildCommittedDecisionImpactResponse(prompt: string, priorAssistant = "") {
+      if (!looksLikeCommittedDecisionImpactFollowup(prompt)) return "";
+
+      const context = getProjectProposalJudgmentContext(prompt);
+      const packet = context.packet;
+      const projectTitle = compactText(packet.currentProject.title) || "Active project";
+      const currentMilestoneTitle =
+         compactText(context.activeMilestone?.title) ||
+         packet.currentProject.recommendedNextAction ||
+         "the current milestone";
+      const confirmed = [...(context.canonical.state.decisions.confirmed || [])]
+         .sort((left, right) => (right.updatedAt || right.createdAt || 0) - (left.updatedAt || left.createdAt || 0));
+      const latestDecision = compactText(confirmed[0]?.statement);
+      if (!latestDecision) return "";
+
+      const responseMode = normalizeAIDockResponseMode(getActiveCognitionResponseMode());
+      const responseModeProfile = getAIDockResponseModeProfile(responseMode);
+      const evidenceText = context.groundedEvidence.length
+         ? context.groundedEvidence.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         : "No additional established project evidence is recorded.";
+      const checkpointText = context.currentCheckpoints.length
+         ? context.currentCheckpoints.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         : "No explicit checkpoints are recorded for the current milestone.";
+
+      const fallback =
+         `The confirmed decision is ${latestDecision}. Keep ${currentMilestoneTitle} as the workbench, but treat that decision as fixed input: adjust the remaining choices so they support it instead of reopening it.`;
+
+      try {
+         const response = await requestAllevinLLM({
+            mode: "aidock-guidance",
+            source: "aidock",
+            title: projectTitle,
+            focus: `Explain how this confirmed decision should change the current milestone: ${latestDecision}`,
+            groundedResponse: `Confirmed decision: ${latestDecision}\n${evidenceText}`,
+            usefulContext: [
+               packet.currentProject.goal ? `Project goal: ${packet.currentProject.goal}` : "",
+               `Current milestone: ${currentMilestoneTitle}`,
+               `Confirmed decision: ${latestDecision}`,
+               `Current milestone completion criteria (targets; not completed unless explicitly recorded):\n${checkpointText}`,
+               `Established project evidence:\n${evidenceText}`,
+               priorAssistant ? `Previous ALLEVIN response:\n${sanitizePlainText(priorAssistant, 3000)}` : "",
+            ]
+               .filter(Boolean)
+               .join("\n\n"),
+            nextStep: "",
+            rawContent: `Confirmed project decision: ${latestDecision}`,
+            contextPacket: packet,
+            conversation: {
+               projectTitle,
+               lastUserPrompt: prompt,
+               lastAssistantResponse: priorAssistant,
+               currentTopic: currentMilestoneTitle,
+               activeReference: latestDecision,
+               continuityIntent: "continue",
+               recentMessages: [
+                  ...(priorAssistant ? [{ role: "assistant" as const, content: priorAssistant }] : []),
+                  { role: "user", content: prompt },
+               ],
+            },
+            responseMode,
+            responseStyle: responseModeProfile.responseStyle,
+            userInstruction: `
+You are ALLEVIN MK XI acting as a senior project lead.
+
+User question:
+${prompt}
+
+CONFIRMED project decision:
+${latestDecision}
+
+Current milestone:
+${currentMilestoneTitle}
+
+Established project evidence:
+${evidenceText}
+
+Current milestone completion criteria (targets; not completed unless explicitly recorded):
+${checkpointText}
+
+Required behavior:
+- The decision above is confirmed. Do not treat it as a proposal and do not reopen it unless the user asks you to.
+- Explain how that confirmed choice changes, constrains, simplifies, or reprioritizes the remaining work in the CURRENT milestone.
+- Carry relevant earlier project evidence forward.
+- Give 1 to 3 concrete downstream adaptations and one useful next move.
+- If some part of the milestone does not need to change, say so briefly and focus on what actually changes.
+- Do not fall back to Build 1/Build 2 sequencing or merely recite the next checkpoint.
+- Do not invent that a checkpoint is complete.
+- Success criteria, "What Good Looks Like", completion criteria, and milestone checkpoints are targets unless explicit evidence records completion. Never turn a target into a current fact.
+- Do not claim safety, accessibility, reliability, testing, approval, or other controls are already in place unless the project record explicitly confirms that.
+- Stable general domain knowledge may support the recommendation, but distinguish it naturally from saved project facts.
+- Keep the answer calm, specific, and practical.
+            `.trim(),
+            projectStage: "mk-xi-project-judgment",
+            currentLocation: "AIDock",
+            priority: "high",
+            maxWords: responseModeProfile.mode === "focused" ? 140 : responseModeProfile.mode === "creative" ? 230 : 190,
+         });
+
+         const candidate = composeProjectProposalJudgmentResponse(response);
+         const grounded = projectJudgmentResponseUsesContext(
+            candidate,
+            context.evidenceForScoring,
+            latestDecision,
+            currentMilestoneTitle,
+            prompt,
+         );
+
+         if (!response.ok || response.usedFallback || !candidate || !grounded) return fallback;
+         return candidate;
+      } catch {
+         return fallback;
+      }
+   }
+
+   async function buildCrossMilestoneProjectLeadResponse(prompt: string) {
+      if (!looksLikeCrossMilestoneSynthesisPrompt(prompt)) return "";
+
+      const packet = buildAllevinInternalContextPacket(prompt);
+      if (!packet.currentProject.title) return "";
+
+      const canonical = getCanonicalCrossMilestoneContext(prompt);
+      const activeMilestone = canonical.activeMilestone;
+      const referencedRecord = canonical.referencedRecord;
+      const responseMode = normalizeAIDockResponseMode(getActiveCognitionResponseMode());
+      const responseModeProfile = getAIDockResponseModeProfile(responseMode);
+      const projectTitle = compactText(packet.currentProject.title) || "Active project";
+      const storedConversation = isAIDockConversationThreadForProject(projectConversationRef.current, projectTitle) ? projectConversationRef.current : readAIDockConversationThread(projectTitle);
+      const promptAwareConversation = recordAIDockConversationUserPrompt(storedConversation, prompt);
+      const conversationContext = buildAIDockLLMConversationContext(promptAwareConversation, prompt);
+      const recentConversation = (conversationContext.recentMessages || []).map((message) => `${message.role === "user" ? "User" : "ALLEVIN"}: ${compactText(message.content)}`).join("\n");
+
+      const milestoneContext = canonical.milestoneRecords
+         .map((record) => {
+            const milestone: any = record.milestone;
+            const completionCriteria = Array.isArray(milestone.completionCriteria) ? milestone.completionCriteria.filter(Boolean) : [];
+            const openQuestions = Array.isArray(milestone.openQuestions) ? milestone.openQuestions.filter(Boolean) : [];
+            const dependencies = Array.isArray(milestone.dependencies) ? milestone.dependencies.filter(Boolean) : [];
+            const evidenceLines = record.evidence.length ? record.evidence.map((item) => `${item.label}: ${item.text}`).join("\n") : "Saved evidence: none recorded";
+
+            return [
+               `Milestone ${record.number}: ${compactText(milestone.title)}`,
+               milestone.id === activeMilestone?.id ? "Status: CURRENT WORKBENCH" : `Status: ${compactText(milestone.status) || "saved"}`,
+               milestone.goal ? `Goal: ${compactText(milestone.goal)}` : "",
+               evidenceLines,
+               completionCriteria.length ? `Milestone checkpoints: ${completionCriteria.map((item: string) => compactText(item)).join(" | ")}` : "",
+               openQuestions.length ? `Open questions: ${openQuestions.map((item: string) => compactText(item)).join(" | ")}` : "",
+               dependencies.length ? `Dependencies: ${dependencies.map((item: string) => compactText(item)).join(" | ")}` : "",
+            ]
+               .filter(Boolean)
+               .join("\n");
+         })
+         .join("\n\n");
+
+      const referencedEvidence =
+         referencedRecord?.evidence
+            .filter((item) => item.label !== "Open Work Area context")
+            .flatMap((item) => splitCrossMilestoneEvidenceStatements(item.text))
+            .filter(Boolean) || [];
+      const referencedOpenContext =
+         referencedRecord?.evidence
+            .filter((item) => item.label === "Open Work Area context")
+            .flatMap((item) => splitCrossMilestoneEvidenceStatements(item.text))
+            .filter(Boolean) || [];
+      const referencedEvidenceText = referencedEvidence.length ? referencedEvidence.map((item, index) => `${index + 1}. ${item}`).join("\n") : "No saved established evidence recorded.";
+      const referencedOpenContextText = referencedOpenContext.length ? referencedOpenContext.map((item, index) => `${index + 1}. ${item}`).join("\n") : "None.";
+      const localFallback = buildLocalCrossMilestoneFallback(prompt, packet);
+
+      try {
+         const response = await requestAllevinLLM({
+            // Cross-milestone transfer is reasoning over supplied project evidence,
+            // not the generic project-guidance template. aidock-guidance gives the
+            // model room to synthesize while the evidence validator below prevents
+            // it from drifting into a generic roadmap answer.
+            mode: "aidock-guidance",
+            source: "aidock",
+            title: projectTitle,
+            focus: prompt,
+            groundedResponse: referencedEvidence.length ? `Referenced milestone evidence:\n${referencedEvidenceText}` : "",
+            usefulContext: [
+               packet.currentProject.goal ? `Project goal: ${packet.currentProject.goal}` : "",
+               activeMilestone?.title ? `Current milestone: ${activeMilestone.title}` : "",
+               referencedRecord ? `Referenced milestone: Milestone ${referencedRecord.number} — ${referencedRecord.milestone.title}` : "",
+               `Referenced milestone saved evidence:\n${referencedEvidenceText}`,
+               `Referenced milestone open/tentative context:\n${referencedOpenContextText}`,
+               `Full milestone record:\n${milestoneContext}`,
+            ]
+               .filter(Boolean)
+               .join("\n\n"),
+            nextStep: "",
+            rawContent: recentConversation,
+            contextPacket: packet,
+            conversation: {
+               ...conversationContext,
+               lastUserPrompt: prompt,
+               currentTopic: activeMilestone?.title || conversationContext.currentTopic,
+            },
+            responseMode,
+            responseStyle: responseModeProfile.responseStyle,
+            userInstruction: `
+You are ALLEVIN MK XI's senior project-lead reasoning layer.
+
+User question:
+${prompt}
+
+The user is asking how one project iteration should inform another. The CURRENT milestone is the workbench in front of the user. The ENTIRE canonical milestone record is accumulated project knowledge.
+
+Referenced milestone evidence:
+${referencedEvidenceText}
+
+Required behavior:
+- Start from the referenced milestone's actual saved evidence above. If it contains a concrete fact, dimension, constraint, decision, outcome, or observation, explicitly use that evidence in your answer.
+- Explain how that evidence changes, constrains, rules out, prioritizes, or validates choices in the current milestone.
+- Do not answer with generic sequencing such as "compare against confirmed requirements" unless you name the specific saved requirement you mean.
+- Work Area content saved by the user is project evidence. A declarative saved statement may be carried forward; a question or tentative statement must remain open.
+- Do not claim a checkpoint question is an established answer merely because it is checked.
+- If there is no real saved evidence in the referenced milestone, say so clearly instead of inventing a lesson.
+- Distinguish saved facts from your recommendation. You may make a senior project-lead inference, but label it naturally as your recommendation rather than pretending it was already decided.
+- Prefer 1 to 3 concrete implications over a roadmap summary.
+- Do not merely repeat the current milestone title or next checkpoint.
+- Do not use project-management jargon such as blocker, state authority, runtime, packet, confidence, or scoring.
+- Keep the tone calm, capable, and collaborative.
+- Preserve the active response style (${responseModeProfile.label}) without changing the underlying facts.
+- Do not invent facts.
+            `.trim(),
+            projectStage: packet.currentProject.currentState || packet.projectIntelligence.projectUnderstanding.momentum,
+            currentLocation: packet.currentProject.location || "Projects",
+            priority: focusMode === "deep" ? "high" : "medium",
+            maxWords: responseModeProfile.maxWords,
+         });
+
+         if (!response.ok || response.usedFallback) return localFallback;
+
+         // MK XI B8: structured LLM responses can put the useful evidence-grounded
+         // synthesis in summary/usefulContext while leaving focus as a generic
+         // project sentence. Score every returned field and choose the one that is
+         // most visibly grounded in the referenced milestone instead of blindly
+         // preferring response.focus.
+         const candidate = selectBestCrossMilestoneLLMCandidate(response, referencedEvidence);
+         if (!candidate) return localFallback;
+
+         // A successful model call can still drift into generic sequencing. When
+         // real evidence exists, require the answer to visibly carry that evidence
+         // forward; otherwise use the deterministic evidence-grounded fallback.
+         if (referencedEvidence.length && !crossMilestoneResponseUsesEvidence(candidate, referencedEvidence)) return localFallback;
+
+         return candidate;
+      } catch {
+         return localFallback;
+      }
+   }
+
    function hasExplicitProjectContextLanguage(prompt: string) {
       const lower = normalizeUserIntentPrompt(prompt);
 
@@ -13705,7 +14921,7 @@ I could not turn this recommendation into a clean action yet.
          return "";
       }
 
-      // ALLEVIN MK X Build 2:
+      // ALLEVIN MK XI Build 2:
       // Project Guidance resolves the project judgment once. Every response mode
       // receives this same contract before any conversational delivery is applied.
       return cleanFinalAIDockResponse(grounded);
@@ -14399,7 +15615,7 @@ I could not turn this recommendation into a clean action yet.
                materialGrounding: responseJudgment.materialGrounding,
             },
             userInstruction: `
-You are the conversational delivery layer for ALLEVIN MK X Build 3.
+You are the conversational delivery layer for ALLEVIN MK XI Build 3.
 
 The shared response judgment below is authoritative. It was created before any response mode was applied. Do not replace its answer, recommendation, rationale, caution, milestone, materials, calendar facts, or uncertainty. Your job is only to deliver that same judgment naturally.
 
@@ -14433,8 +15649,8 @@ Requirements:
 - If continuityIntent is reject, do not recommend the rejected item again unless new project evidence makes it necessary and you explain why.
 - If continuityIntent is accept, keep that direction stable in later turns unless the user changes it.
 - Apply corrections to the current conversation and do not repeat the contradicted conversational assumption. Do not claim the correction changed saved project data unless a separate confirmed project update occurred.
-- Do not restate the project goal, full roadmap, or current milestone unless it directly helps answer this question.
-- Use only the grounded fields that answer this intent. Do not append a general roadmap, risk, next step, or project summary merely because it exists in context.
+- Do not restate the project goal, full milestone sequence, or current milestone unless it directly helps answer this question.
+- Use only the grounded fields that answer this intent. Do not append a general milestone sequence, risk, next step, or project summary merely because it exists in context.
 - Facts, priorities, assumptions, risks, decisions, completion readiness, and next actions must sound meaningfully different because they answer different questions.
 - For a one-line follow-up such as "Why?", "What does it unlock?", or "What happens after that?", answer the remembered subject directly instead of restarting the project analysis.
 - When the user asks for another way, another approach, or another method without changing the priority, preserve the exact recommendation and deliverable. Change only the method used to reach it.
@@ -14585,7 +15801,7 @@ ${getCognitionPromptInstruction()}
             userInstruction: `
 User question: ${prompt}
 
-Use ALLEVIN MK X style, but treat this as a general knowledge answer, not project guidance.
+Use ALLEVIN MK XI style, but treat this as a general knowledge answer, not project guidance.
 Active response mode: ${responseModeProfile.label}. ${responseModeProfile.deliveryRule}
 
 Rules:
@@ -14677,7 +15893,7 @@ Rules:
          contextPacket: buildAllevinInternalContextPacket(prompt),
          responseMode: responseModeProfile.mode,
          responseStyle: responseModeProfile.responseStyle,
-         userInstruction: `${prompt}\n\nUse ALLEVIN MK X natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, clear, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, including project materials when relevant, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. Active response mode: ${responseModeProfile.label}. ${responseModeProfile.deliveryRule} Because beta feedback showed the AI can feel unnecessary when it sounds generic, prioritize concrete guidance tied to the active project, Canvas text, calendar, and project materials. For event-planning projects, reason from the saved objective, attendees, timing, resources, dependencies, responsibilities, and execution flow. Do not invent event details that are not in the project. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Use natural ChatGPT-style depth. Keep simple answers brief, but allow several paragraphs when the user asks for explanation, analysis, writing, comparison, project strategy, or material interpretation.`,
+         userInstruction: `${prompt}\n\nUse ALLEVIN MK XI natural response style. Answer normal general knowledge questions clearly using general model knowledge when no live tool is required. For simple factual questions, answer directly first and keep personality minimal. Do not open with jokes, metaphors, celebrity-style commentary, or playful framing. For creative guidance questions, light personality is fine as long as the advice is specific. For recommendation questions, give useful recommendations directly without filler. Follow this internal structure without labels when helpful: opening line, context sentence, explanation sentence, optional practical closing. ${getCognitionPromptInstruction()} Sound human, calm, clear, and specific. If the question connects naturally to the active project, briefly connect it back; if not, answer directly without forcing project context. Do not add a forced next action, research suggestion, project recommendation, or "consider..." sentence to simple factual questions. Do not tell the user to research, watch, explore, or look into anything unless they ask for sources, deeper study, or recommendations. Do not use visible labels or phrases like "Next:", "Next step:", "Your next step is", "Focus move:", "Planning move:", "Suggested block:", or "Calendar block:" in normal guidance. Keep approval prompts clear when approval is needed. Do not use motivational, theatrical, generic, or hype-heavy phrasing. Use the context packet as workspace context, including project materials when relevant, but do not let the current project override an unrelated general knowledge question. currentProject is important only when the user asks about work, projects, planning, writing, design, or continuation. Avoid vague advice like "keep writing", "continue refining", "brainstorm more", or "schedule some writing sessions" unless you attach a specific project-aware action. Active response mode: ${responseModeProfile.label}. ${responseModeProfile.deliveryRule} Because beta feedback showed the AI can feel unnecessary when it sounds generic, prioritize concrete guidance tied to the active project, Canvas text, calendar, and project materials. For event-planning projects, reason from the saved objective, attendees, timing, resources, dependencies, responsibilities, and execution flow. Do not invent event details that are not in the project. Do not claim live/current information, weather, news, prices, maps, or traffic unless a connected tool result is provided. Do not mention confidence, source ranking, system state, thread IDs, signal counts, internal scoring, raw storage, Tasks, or Board. Use natural ChatGPT-style depth. Keep simple answers brief, but allow several paragraphs when the user asks for explanation, analysis, writing, comparison, project strategy, or material interpretation.`,
          projectStage: context.stageLabel,
          currentLocation: context.locationLabel,
          priority: focusMode === "deep" ? "high" : "medium",
@@ -16321,25 +17537,16 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
    }
 
    function buildProjectStarterProposalResponse(draft: ProjectStarterDraft) {
-      const intake = buildProjectStarterIntake(draft.brief);
-      const confirmedCount = intake.confirmedDecisions.length;
-      const openCount = intake.openQuestions.length;
-      const constraintCount = intake.constraints.length;
-
       return [
-         `I’d start this as ${draft.title}.`,
+         `I’d set this up as ${draft.title}.`,
          "",
          draft.summary,
          "",
-         `I organized it as a ${getProjectStarterTypeLabel(draft.projectType).toLowerCase()} project with ${confirmedCount} confirmed decision${confirmedCount === 1 ? "" : "s"}, ${openCount} open question${
-            openCount === 1 ? "" : "s"
-         }, and ${constraintCount} constraint${constraintCount === 1 ? "" : "s"}.`,
+         `Start here: ${draft.immediateNextAction}`,
          "",
-         `The first useful move is to ${draft.immediateNextAction.charAt(0).toLowerCase()}${draft.immediateNextAction.slice(1)}`,
+         "I’ve organized the goal, milestones, and the few decisions that still need your input so you don’t have to manage the project structure yourself.",
          "",
-         "I prepared a structured project guide instead of copying the full description into Canvas.",
-         "",
-         "Say “open it in the project” to use it, or tell me what to change.",
+         "Say “open it in the project” to use it, or tell me what you want changed.",
       ].join("\n");
    }
 
@@ -16348,7 +17555,7 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
          title: draft.title,
          body: draft.body,
          sourceTitle: draft.title,
-         sourceContent: draft.body,
+         sourceContent: draft.brief || draft.body,
          workingSummary: draft.summary,
          source: "manual",
          destination: "canvas",
@@ -16374,6 +17581,7 @@ Calendar: ${packet.calendar.nextEventSummary || "No upcoming events"}`;
                   body: draft.body,
                   sourceTitle: draft.title,
                   sourceContent: draft.body,
+                  sourceBrief: draft.brief,
                   workingSummary: draft.summary,
                   workflowId: savedProject.workflowId,
                   originBoardItemId: savedProject.originBoardItemId,
@@ -16672,6 +17880,178 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
          return;
       }
 
+      // ========================================
+      // ALLEVIN MK XI B9 — Cross-milestone reasoning has routing priority
+      // Purpose:
+      // When the user explicitly asks how an earlier milestone should influence
+      // the current one, that is a longitudinal project-lead question. It must be
+      // answered from the accumulated milestone record before any current-focus
+      // readback or generic project recommendation can intercept the prompt.
+      //
+      // This keeps the current milestone as the workbench while allowing ALLEVIN
+      // to carry real evidence from earlier iterations forward into today's work.
+      // ========================================
+      if (looksLikeCrossMilestoneSynthesisPrompt(currentInput)) {
+         setLlmBusy(true);
+
+         try {
+            const packet = buildAllevinInternalContextPacket(currentInput);
+            const crossMilestoneResponse =
+               (await buildCrossMilestoneProjectLeadResponse(currentInput)) ||
+               buildLocalCrossMilestoneFallback(currentInput, packet);
+
+            const responseContent = cleanFinalAIDockResponse(
+               crossMilestoneResponse ||
+                  "I can see that you are asking one milestone to inform another, but I could not resolve the earlier milestone evidence cleanly. I would rather stop there than give you a generic project answer.",
+            );
+
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content: responseContent,
+               },
+            ]);
+
+            refreshThreadSoon();
+            return;
+         } finally {
+            setLlmBusy(false);
+         }
+      }
+
+      // ========================================
+      // ALLEVIN MK XI B10 — Proposal judgment before generic project guidance
+      // Tentative ideas are evaluated before the normal runtime/guidance stack,
+      // and recommendation follow-ups stay attached to the proposal from the
+      // previous turn instead of dropping into legacy milestone sequencing.
+      // ========================================
+      const previousMessages = [...messagesRef.current];
+      const previousAssistant = [...previousMessages].reverse().find((message) => message.role === "assistant")?.content || "";
+      const previousUser = [...previousMessages].reverse().find((message) => message.role === "user")?.content || "";
+      const recentProposal = looksLikeTentativeProjectProposal(previousUser)
+         ? sanitizePlainText(previousUser, 8000)
+         : findRecentTentativeProjectProposal(previousMessages);
+
+      const shouldEvaluateCurrentProposal =
+         looksLikeTentativeProjectProposal(currentInput) &&
+         !looksLikeDirectCalendarScheduleRequest(currentInput) &&
+         !looksLikeCalendarScheduleQuestion(currentInput);
+      const shouldAnswerProposalAlternative =
+         looksLikeProjectAlternativeFollowup(currentInput) &&
+         Boolean(recentProposal) &&
+         !looksLikeDirectCalendarScheduleRequest(currentInput) &&
+         !looksLikeCalendarScheduleQuestion(currentInput);
+      const shouldReconsiderProposalRecommendation =
+         looksLikeProjectRecommendationReconsideration(currentInput) &&
+         Boolean(recentProposal) &&
+         !looksLikeDirectCalendarScheduleRequest(currentInput) &&
+         !looksLikeCalendarScheduleQuestion(currentInput);
+
+      if (shouldEvaluateCurrentProposal || shouldAnswerProposalAlternative || shouldReconsiderProposalRecommendation) {
+         const proposal = shouldEvaluateCurrentProposal ? sanitizePlainText(currentInput, 8000) : recentProposal;
+         setLlmBusy(true);
+
+         try {
+            const responseContent = cleanFinalAIDockResponse(
+               await buildProjectProposalJudgmentResponse(currentInput, proposal, previousAssistant),
+            );
+
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content:
+                     responseContent ||
+                     "I can treat that as a proposal and evaluate it against the project, but I could not shape the judgment cleanly. I would not record it as a decision yet.",
+               },
+            ]);
+
+            refreshThreadSoon();
+            return;
+         } finally {
+            setLlmBusy(false);
+         }
+      }
+
+      // MK XI B13 — A confirmed decision is authoritative project context.
+      // Adapt the current milestone around it before the older checkpoint-oriented
+      // runtime can reduce the question to a generic "next checkpoint" response.
+      if (looksLikeCommittedDecisionImpactFollowup(currentInput)) {
+         setLlmBusy(true);
+
+         try {
+            const decisionImpact = await buildCommittedDecisionImpactResponse(currentInput, previousAssistant);
+            if (decisionImpact) {
+               setMessages((prev) => [
+                  ...prev,
+                  {
+                     role: "assistant" as const,
+                     content: cleanFinalAIDockResponse(decisionImpact),
+                  },
+               ]);
+               refreshThreadSoon();
+               return;
+            }
+         } finally {
+            setLlmBusy(false);
+         }
+      }
+
+      // MK XI B17 — Project constraints / requirements are a project-understanding
+      // question, not a checkpoint readback. Resolve them before the legacy runtime.
+      if (looksLikeCurrentProjectConstraintInfluenceQuestion(currentInput)) {
+         setLlmBusy(true);
+
+         try {
+            const constraintResponse = await buildCurrentProjectConstraintResponse(currentInput);
+            setMessages((prev) => [
+               ...prev,
+               {
+                  role: "assistant" as const,
+                  content: cleanFinalAIDockResponse(constraintResponse),
+               },
+            ]);
+            refreshThreadSoon();
+            return;
+         } finally {
+            setLlmBusy(false);
+         }
+      }
+
+      // ========================================
+      // ALLEVIN MK XI — Persistent Project Lead Runtime
+      // Decision memory, progress capture, senior judgment, portfolio rundown,
+      // and project/calendar coordination resolve before legacy guidance routes.
+      // ========================================
+      const projectLeadRuntime = handleProjectLeadRuntimePrompt(currentInput, {
+         lastAssistantResponse: previousAssistant,
+         lastUserPrompt: previousUser,
+         lastRecommendation: projectConversationRef.current?.lastRecommendation || "",
+      });
+
+      if (projectLeadRuntime.handled) {
+         if (projectLeadRuntime.stateChanged) {
+            setProjectContextRevision((revision) => revision + 1);
+         }
+
+         setMessages((prev) => [
+            ...prev,
+            {
+               role: "assistant" as const,
+               content: cleanFinalAIDockResponse(projectLeadRuntime.response),
+            },
+         ]);
+         refreshThreadSoon();
+         return;
+      }
+
+      // MK XI B9:
+      // Cross-milestone synthesis is intentionally handled before the Project
+      // Lead Runtime above. Do not add a second downstream route here; keeping a
+      // single priority path prevents generic current-milestone guidance from
+      // winning over longitudinal reasoning.
+
       recordProjectProgressUpdateFromPrompt(currentInput);
 
       if (looksLikeCurrentProjectIdentityQuestion(currentInput)) {
@@ -16686,7 +18066,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
          return;
       }
 
-      // ALLEVIN MK X Build 6 — Calendar actions resolve before general chat.
+      // ALLEVIN MK XI Build 6 — Calendar actions resolve before general chat.
       // A preview may be approved, revised, or canceled, but never applied
       // silently. Project and milestone context stay attached to the pending
       // action while the user decides. The ref is authoritative so a short
@@ -17681,7 +19061,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                   </div>
 
                   <div className="text-left">
-                     <p className="text-sm font-semibold">ALLEVIN MK X</p>
+                     <p className="text-sm font-semibold">ALLEVIN MK XI</p>
 
                      <p className="max-w-[180px] truncate text-sm text-[var(--color-text-secondary)] sm:max-w-[220px]">{visibleActiveProjectTitle}</p>
                   </div>
@@ -17777,7 +19157,7 @@ ${milestoneCompletion.missingCriteria.map((criterion, index) => `${index + 1}. $
                            </div>
 
                            <div className="min-w-0">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN MK X</p>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">ALLEVIN MK XI</p>
 
                               <h2 data-editorial-title="true" className="mt-1 truncate text-xl leading-tight">
                                  {visibleActiveProjectTitle}

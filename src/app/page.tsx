@@ -26,11 +26,13 @@ import { getAllevinDisplayName, hasAllevinUserProfile, saveAllevinUserProfile, r
 
 import { getActiveProjectAwareness } from "@/components/MemoryEngine";
 
+import { readCanonicalProjectState } from "@/lib/projectStateAuthority";
+
 // ========================================
-// ALLEVIN MK X Product Shell
+// ALLEVIN MK XI Product Shell
 // Purpose:
 // Beginner-friendly project workspace layout.
-// MK X keeps the product centered on three ideas:
+// MK XI keeps the product centered on three ideas:
 // Projects hold the work and materials, Calendar protects time,
 // and the Dock helps each project reach its finished outcome.
 // ========================================
@@ -115,7 +117,7 @@ const CALENDAR_EVENTS_STORAGE_KEY = "allevin-calendar-events-mki";
 const ACTIVE_PROJECT_SELECTION_STORAGE_KEY = "allevin-active-project-selection-mkviii";
 
 // ========================================
-// MK VIII — Page Shell Sanitization
+// MK XI — Page Shell Sanitization
 // Home reads stored Projects and Calendar data.
 // Treat stored text as untrusted before displaying it.
 // ========================================
@@ -299,6 +301,16 @@ function getHomeCalendarGlance() {
       return "Calendar shows events, deadlines, and focused work blocks after you add them.";
    }
 
+   const canonicalState = readCanonicalProjectState();
+
+   if (canonicalState.hasProject) {
+      const nextProjectSession = canonicalState.calendar.nextProjectSession;
+
+      if (nextProjectSession) {
+         return formatHomeCalendarEvent(nextProjectSession);
+      }
+   }
+
    const events = safeParseStorage<HomeCalendarEvent[]>(CALENDAR_EVENTS_STORAGE_KEY, []);
    const now = Date.now();
 
@@ -333,16 +345,9 @@ function getHomeCalendarGlance() {
 }
 
 function getGeneratedHomeGreeting() {
-   const greetings = [
-      "ALLEVIN keeps your projects, Working Notes, materials, and schedule in one place.",
-      "Start with a project, keep the working notes and materials together, and use the Dock to decide what matters next.",
-      "Choose a project, update its Working Notes and progress points, add materials, or schedule the next focused block of time.",
-      "Each project has one home. Projects stores the work, Canvas helps you shape it, and Calendar shows scheduled time.",
-      "Keep it simple: choose a project, write in Canvas, save helpful materials, and schedule what needs time.",
-   ];
-
-   return sanitizePageText(pickRandomItem(greetings), PAGE_SANITIZE_LIMITS.suggestion);
+   return "Here’s what matters right now.";
 }
+
 function safeParseStorage<T>(key: string, fallback: T): T {
    if (typeof window === "undefined") {
       return fallback;
@@ -493,6 +498,16 @@ function getLastWorkedOnProject() {
          title: "",
          body: "",
          source: "",
+      };
+   }
+
+   const canonicalState = readCanonicalProjectState();
+
+   if (canonicalState.hasProject) {
+      return {
+         title: canonicalState.identity.title,
+         body: sanitizePageText(canonicalState.project.body || canonicalState.project.summary, PAGE_SANITIZE_LIMITS.preview),
+         source: "Projects",
       };
    }
 
@@ -683,6 +698,16 @@ function getHomeSuggestion(project: { title: string; body: string; source: strin
       return "Create a project and describe what you are trying to accomplish. ALLEVIN will turn that into editable Working Notes, progress points, and a clear starting move.";
    }
 
+   const canonicalState = readCanonicalProjectState();
+
+   if (canonicalState.hasProject && normalizeHomeProjectTitle(canonicalState.identity.title) === normalizeHomeProjectTitle(project.title)) {
+      const nextMove = sanitizePageText(canonicalState.recommendation.nextMove, PAGE_SANITIZE_LIMITS.suggestion);
+
+      if (nextMove) {
+         return nextMove;
+      }
+   }
+
    try {
       const awareness = getActiveProjectAwareness();
       const awarenessTitle = sanitizePageTitle(awareness.title);
@@ -691,11 +716,6 @@ function getHomeSuggestion(project: { title: string; body: string; source: strin
 
       if (understanding) {
          const recommendedMove = sanitizePageText(understanding.recommendedMove, PAGE_SANITIZE_LIMITS.suggestion);
-         const whyNow = sanitizePageText(understanding.whyNow, PAGE_SANITIZE_LIMITS.suggestion);
-
-         if (recommendedMove && whyNow) {
-            return sanitizePageText(`${recommendedMove}. ${whyNow}`, PAGE_SANITIZE_LIMITS.suggestion);
-         }
 
          if (recommendedMove) {
             return recommendedMove;
@@ -752,6 +772,8 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
 
    const [homeSuggestion, setHomeSuggestion] = useState("");
 
+   const [currentMilestoneTitle, setCurrentMilestoneTitle] = useState("");
+
    const [calendarGlance, setCalendarGlance] = useState("");
 
    const [displayName, setDisplayName] = useState("there");
@@ -789,6 +811,9 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
          const nextSuggestionKey = getHomeProjectKey(nextProject);
 
          setLastProject(nextProject);
+
+         const canonicalState = readCanonicalProjectState();
+         setCurrentMilestoneTitle(canonicalState.hasProject && canonicalState.activeMilestone ? sanitizePageTitle(canonicalState.activeMilestone.title) : "");
 
          setCalendarGlance(getHomeCalendarGlance());
 
@@ -835,6 +860,8 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
 
       window.addEventListener("allevin-active-project-selection-change", refreshHomeContext);
 
+      window.addEventListener("allevin-project-state-update", refreshHomeContext);
+
       window.addEventListener("allevin-project-progress-update", refreshHomeContext);
 
       window.addEventListener("allevin-project-materials-update", refreshHomeContext);
@@ -869,6 +896,8 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
          window.removeEventListener("allevin-project-library-update", refreshHomeContext);
 
          window.removeEventListener("allevin-active-project-selection-change", refreshHomeContext);
+
+         window.removeEventListener("allevin-project-state-update", refreshHomeContext);
 
          window.removeEventListener("allevin-project-progress-update", refreshHomeContext);
 
@@ -918,6 +947,8 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
          body: "",
          source: "",
       });
+
+      setCurrentMilestoneTitle("");
 
       setCalendarGlance(getHomeCalendarGlance());
 
@@ -996,288 +1027,69 @@ function HomeStart({ setActiveModule }: { setActiveModule: (moduleId: ProductMod
       );
    }
 
-   const steps = [
-      {
-         number: "1",
-         label: "Tell ALLEVIN the goal",
-         description: "Create a project, give it a title, and describe what you are trying to accomplish.",
-         module: "integrations" as ProductModuleId,
-      },
-      {
-         number: "2",
-         label: "Adjust the progress points",
-         description: "Review the Working Notes, milestones, open questions, and starting point ALLEVIN generates. Change anything that does not match your intent.",
-         module: "integrations" as ProductModuleId,
-      },
-      {
-         number: "3",
-         label: "Work with the Dock",
-         description: "Ask naturally, make decisions, and continue the conversation until the active milestone is complete.",
-         module: "integrations" as ProductModuleId,
-      },
-      {
-         number: "4",
-         label: "Protect the time",
-         description: "Use Calendar for deadlines and focused work blocks that help the next move actually happen.",
-         module: "calendar" as ProductModuleId,
-      },
-   ];
-
    return (
-      <section
-         id="overview"
-         className="
-            scroll-mt-24
-            pb-6
-            lg:scroll-mt-28
-         "
-      >
-         <div className="mx-auto w-full max-w-[1480px] space-y-6 sm:space-y-7">
-            {/* Studio introduction */}
-
+      <section id="overview" className="scroll-mt-24 pb-6 lg:scroll-mt-28">
+         <div className="mx-auto w-full max-w-[1240px] space-y-5 sm:space-y-6">
             <header className="px-1 pt-0 sm:px-2 sm:pt-1">
-               <h1
-                  data-editorial-title="true"
-                  className="
-                     mt-3
-                     max-w-4xl
-                     text-4xl
-                     leading-[1.02]
-                     sm:text-5xl
-                     lg:text-6xl
-                  "
-               >
+               <h1 data-editorial-title="true" className="mt-3 max-w-4xl text-4xl leading-[1.02] sm:text-5xl lg:text-6xl">
                   {greeting}, {displayName}.
                </h1>
-
-               <p className="mt-3 max-w-3xl text-base leading-7 text-[var(--color-text-secondary)] sm:text-lg">{homeGreeting}</p>
+               <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--color-text-secondary)] sm:text-lg">{homeGreeting}</p>
             </header>
 
-            {/* Active project desk */}
-
-            <section
-               className="
-                  studio-paper
-                  overflow-hidden
-               "
-            >
-               <div className="grid min-w-0 grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.75fr)]">
-                  <div className="min-w-0 p-5 sm:p-7 lg:px-9 lg:pb-9 lg:pt-7">
-                     <div className="flex flex-wrap items-center gap-3">
-                        <span className="studio-eyebrow">Active Project</span>
-                     </div>
-
-                     <h2
-                        data-editorial-title="true"
-                        className="
-                           mt-4
-                           max-w-4xl
-                           text-3xl
-                           leading-tight
-                           sm:text-4xl
-                           lg:text-[2.8rem]
-                        "
-                     >
+            <section className="studio-paper overflow-hidden">
+               <div className="grid min-w-0 grid-cols-1 lg:grid-cols-[minmax(0,1.55fr)_minmax(280px,0.7fr)]">
+                  <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+                     <p className="studio-eyebrow">Active project</p>
+                     <h2 data-editorial-title="true" className="mt-3 max-w-4xl text-3xl leading-tight sm:text-4xl lg:text-[2.65rem]">
                         {lastProject.title || "Your next project starts here."}
                      </h2>
 
-                     <div className="mt-7">
-                        <div className="studio-panel">
-                           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Your next move</p>
-
-                           <p className="mt-3 max-w-3xl text-base leading-7 text-[var(--color-text-primary)]">{homeSuggestion}</p>
+                     {currentMilestoneTitle && (
+                        <div className="mt-6 border-t border-[var(--border-subtle)] pt-5">
+                           <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Current milestone</p>
+                           <p className="mt-2 text-base font-semibold leading-6 text-[var(--color-text-primary)]">{currentMilestoneTitle}</p>
                         </div>
+                     )}
+
+                     <div className="mt-5 rounded-[var(--radius-lg)] bg-[var(--color-bg-soft)] p-4 sm:p-5">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Next</p>
+                        <p className="mt-2 max-w-3xl text-base leading-7 text-[var(--color-text-primary)]">{homeSuggestion}</p>
                      </div>
 
-                     <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
+                     <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
                         <button onClick={() => setActiveModule("integrations")} className="studio-button-primary w-full sm:w-auto sm:min-w-[148px]">
-                           Open Projects
+                           Open Project
                         </button>
-
-                        <button
-                           onClick={handleTesterWorkspaceReset}
-                           className="
-                              inline-flex
-                              min-h-10
-                              items-center
-                              justify-center
-                              rounded-[var(--radius-md)]
-                              px-3
-                              py-2
-                              text-sm
-                              font-medium
-                              text-[var(--color-text-secondary)]
-                              hover:bg-[var(--color-bg-soft)]
-                              sm:ml-auto
-                           "
-                        >
-                           Reset test workspace
+                        <button onClick={() => setActiveModule("calendar")} className="studio-button-secondary w-full justify-center sm:w-auto">
+                           Open Calendar
                         </button>
                      </div>
-                     {resetNotice && <p className="mt-4 text-sm text-[var(--color-text-secondary)]">{resetNotice}</p>}
                   </div>
 
-                  <aside
-                     className="
-                        border-t
-                        border-[var(--border-subtle)]
-                        bg-[var(--color-bg-soft)]
-                        p-5
-                        sm:p-7
-                        xl:border-l
-                        xl:border-t-0
-                        lg:p-8
-                     "
-                  >
-                     <p className="studio-eyebrow">Schedule at a glance</p>
-
-                     <p className="mt-4 text-base leading-7 text-[var(--color-text-primary)]">{calendarGlance}</p>
-
-                     <button
-                        onClick={() => setActiveModule("calendar")}
-                        className="
-                           mt-6
-                           inline-flex
-                           items-center
-                           gap-2
-                           text-sm
-                           font-semibold
-                           text-[var(--color-primary)]
-                           hover:opacity-80
-                        "
-                     >
-                        Open Calendar →
+                  <aside className="border-t border-[var(--border-subtle)] bg-[var(--color-bg-soft)] p-5 sm:p-7 lg:border-l lg:border-t-0 lg:p-8">
+                     <p className="studio-eyebrow">Schedule</p>
+                     <p className="mt-3 text-sm leading-6 text-[var(--color-text-primary)] sm:text-base">{calendarGlance}</p>
+                     <button onClick={() => setActiveModule("calendar")} className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-[var(--color-primary)] hover:opacity-80">
+                        View schedule →
                      </button>
                   </aside>
                </div>
             </section>
 
-            {/* MK X project flow */}
-
-            <section>
-               <div className="mb-4 px-1 sm:px-2">
-                  <h2 data-editorial-title="true" className="text-3xl sm:text-4xl">
-                     From goal to finished work.
-                  </h2>
-               </div>
-
-               <div
-                  className="
-                     overflow-hidden
-                     rounded-[var(--radius-xl)]
-                     border
-                     border-[var(--border-subtle)]
-                     bg-[var(--color-bg-soft)]
-                  "
+            <div className="flex justify-end px-1">
+               <button
+                  onClick={handleTesterWorkspaceReset}
+                  className="rounded-[var(--radius-md)] px-3 py-2 text-xs font-medium text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-soft)] hover:text-[var(--color-text-secondary)]"
                >
-                  <div className="grid min-w-0 grid-cols-1 xl:grid-cols-[minmax(0,0.72fr)_minmax(0,1.9fr)]">
-                     <div
-                        className="
-                           border-b
-                           border-[var(--border-subtle)]
-                           p-5
-                           sm:p-6
-                           xl:border-b-0
-                           xl:border-r
-                        "
-                     >
-                        <p className="studio-eyebrow">How ALLEVIN works</p>
-
-                        <h3 data-editorial-title="true" className="mt-3 text-2xl leading-tight sm:text-3xl">
-                           Start with the goal. Keep moving until it is finished.
-                        </h3>
-
-                        <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">
-                           ALLEVIN turns your description into a project foundation, helps you adjust the progress points, stays with you through the active milestone, and uses Calendar to protect the time.
-                        </p>
-                     </div>
-
-                     <div className="p-5 sm:p-6">
-                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                           {steps.map((step) => (
-                              <button
-                                 key={step.label}
-                                 type="button"
-                                 onClick={() => setActiveModule(step.module)}
-                                 className="
-                                    group
-                                    flex
-                                    h-full
-                                    min-w-0
-                                    flex-col
-                                    self-stretch
-                                    rounded-[var(--radius-lg)]
-                                    border
-                                    border-[var(--border-subtle)]
-                                    bg-[var(--color-surface)]
-                                    p-4
-                                    text-left
-                                    transition-colors
-                                    hover:bg-white
-                                 "
-                              >
-                                 <div className="flex w-full items-center justify-between gap-3">
-                                    <span
-                                       className="
-                                          flex
-                                          h-8
-                                          w-8
-                                          shrink-0
-                                          items-center
-                                          justify-center
-                                          rounded-full
-                                          border
-                                          border-[var(--border-subtle)]
-                                          bg-[var(--color-bg-soft)]
-                                          text-sm
-                                          font-semibold
-                                          text-[var(--color-primary)]
-                                       "
-                                    >
-                                       {step.number}
-                                    </span>
-
-                                    <span className="text-base text-[var(--color-text-tertiary)] transition-transform group-hover:translate-x-1">→</span>
-                                 </div>
-
-                                 <p className="mt-4 text-sm font-semibold text-[var(--color-text-primary)]">{step.label}</p>
-
-                                 <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{step.description}</p>
-                              </button>
-                           ))}
-                        </div>
-
-                        <div className="mt-6 border-t border-[var(--border-subtle)] pt-5">
-                           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">Try asking</p>
-
-                           <div className="mt-3 flex flex-wrap gap-2">
-                              {["What should I work on next?", "What am I overlooking?", "Why should I do that first?", "Is this project ready?", "What should I schedule next?"].map((prompt) => (
-                                 <span
-                                    key={prompt}
-                                    className="
-                                       rounded-full
-                                       border
-                                       border-[var(--border-subtle)]
-                                       bg-[var(--color-surface)]
-                                       px-3
-                                       py-2
-                                       text-xs
-                                       font-medium
-                                       text-[var(--color-text-primary)]
-                                    "
-                                 >
-                                    “{prompt}”
-                                 </span>
-                              ))}
-                           </div>
-                        </div>
-                     </div>
-                  </div>
-               </div>
-            </section>
+                  Reset test workspace
+               </button>
+            </div>
+            {resetNotice && <p className="px-1 text-right text-xs text-[var(--color-text-secondary)]">{resetNotice}</p>}
          </div>
       </section>
    );
+
 }
 
 // ========================================

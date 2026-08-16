@@ -458,12 +458,12 @@ function getSectionAfterLabel(text: string, label: string) {
 const PROJECT_DOCUMENT_SECTION_ALIASES = {
    projectType: ["Project Type", "Type"],
    currentState: ["Current State", "Current Status", "Status"],
-   goal: ["Goal", "Project Goal", "Primary Goal", "Main Goal", "MK II Goal", "MK III Goal", "MK IV Goal", "MK V Goal", "MK VI Goal", "MK VII Goal"],
-   needsToAdd: ["What I Need to Add", "What Needs Attention", "Needs To Add", "Remaining Work", "Still Needed", "Evidence Needed", "Open Questions", "Dependencies", "What I Need to Learn"],
-   immediateNextStep: ["Next Immediate Step", "Immediate Next Step", "Next Step", "Next Action"],
-   buildOrder: ["Recommended Build Order", "Build Order", "Roadmap", "Steps", "Milestones"],
-   completionCriteria: ["Completion Criteria", "Success Criteria", "What Success Looks Like", "Definition of Done", "Finished Outcome", "Required Outcome", "Deliverable", "Verification"],
-   constraints: ["Constraints", "Important Design Rules", "Design Rules", "Development Rules", "Important Rules"],
+   goal: ["Goal", "Project Goal", "What You're Building", "What You Are Building", "Primary Goal", "Main Goal", "MK II Goal", "MK III Goal", "MK IV Goal", "MK V Goal", "MK VI Goal", "MK VII Goal"],
+   needsToAdd: ["Things to Decide", "Still to Decide", "What I Need to Add", "What Needs Attention", "Needs To Add", "Remaining Work", "Still Needed", "Evidence Needed", "Open Questions", "Dependencies", "What I Need to Learn"],
+   immediateNextStep: ["Start Here", "Start", "Next Immediate Step", "Immediate Next Step", "Next Step", "Next Action"],
+   buildOrder: ["Milestones", "Plan", "Recommended Build Order", "Build Order", "Roadmap", "Steps"],
+   completionCriteria: ["What Good Looks Like", "Completion Criteria", "Success Criteria", "What Success Looks Like", "Definition of Done", "Finished Outcome", "Required Outcome", "Deliverable", "Verification"],
+   constraints: ["Keep in Mind", "Constraints", "Important Design Rules", "Design Rules", "Development Rules", "Important Rules"],
    implementationPreferences: ["Preferred Implementation", "Preferred Implementation Style", "Implementation Preferences", "Development Preferences", "Build Preferences", "Architecture / Technical Context"],
 } as const;
 

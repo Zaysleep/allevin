@@ -2,6 +2,8 @@ import { parseProjectDocument, readProjectMemory, type ParsedProjectDocument } f
 
 import { buildProjectIntelligencePacket, getEmptyProjectIntelligencePacket, type ProjectIntelligencePacket, type ProjectMaterialInput, type ProjectUnderstanding } from "@/lib/projectIntelligenceEngine";
 
+import { readCanonicalProjectSelection, readCanonicalProjectState } from "@/lib/projectStateAuthority";
+
 // ========================================
 // Memory Engine
 // Purpose:
@@ -145,7 +147,7 @@ export interface WorkflowTimelineEvent {
 }
 
 // ========================================
-// ALLEVIN MK VIII Active Project and Legacy Thread Awareness
+// ALLEVIN MK XI Active Project and Legacy Thread Awareness
 // ========================================
 
 export interface ActiveThreadState {
@@ -395,8 +397,6 @@ const DELETED_PROJECT_KEYS_STORAGE_KEY = "allevin-project-deleted-keys";
 const CANVAS_STORAGE_KEY = "allevin-adaptive-work-canvas";
 
 const PROJECT_LIBRARY_STORAGE_KEY = "allevin-project-library";
-
-const ACTIVE_PROJECT_SELECTION_STORAGE_KEY = "allevin-active-project-selection-mkviii";
 
 const PROJECT_MATERIALS_STORAGE_KEY = "allevin-project-materials-mkvi";
 
@@ -3365,31 +3365,20 @@ function getSourceAwareCalendarCandidates(): SourceAwareActiveProject[] {
 }
 
 function readActiveProjectSelectionForMemory() {
-   const selection = readObjectStorageSafe<{
-      projectId?: string;
-      title?: string;
-      updatedAt?: number;
-   }>(ACTIVE_PROJECT_SELECTION_STORAGE_KEY);
+   const selection = readCanonicalProjectSelection();
 
    if (!selection) {
       return null;
    }
 
-   const projectId = sanitizeMemoryEngineId(selection.projectId);
-   const title = sanitizeMemoryEngineTitle(selection.title);
-
-   if (!projectId && !title) {
-      return null;
-   }
-
    return {
-      projectId,
-      title,
-      updatedAt: typeof selection.updatedAt === "number" && Number.isFinite(selection.updatedAt) ? selection.updatedAt : 0,
+      projectId: sanitizeMemoryEngineId(selection.projectId),
+      title: sanitizeMemoryEngineTitle(selection.title),
+      updatedAt: selection.updatedAt,
    };
 }
 
-// ALLEVIN MK VIII active-project authority:
+// ALLEVIN MK XI active-project authority:
 // The project selected in Projects outranks recency-based Canvas, material,
 // calendar, and thread candidates until the user selects another project.
 function getPersistedSelectedProjectCandidate(projectCandidates: SourceAwareActiveProject[]) {
@@ -3436,6 +3425,31 @@ function getSourceAwareActiveProjectFromThreads(threads: ThreadMemoryObject[] = 
 }
 
 export function getSourceAwareActiveProject() {
+   const canonicalState = readCanonicalProjectState();
+
+   if (canonicalState.hasProject) {
+      return {
+         source: "projects" as const,
+         title: canonicalState.identity.title,
+         body: canonicalState.project.body,
+         summary: canonicalState.project.summary || canonicalState.project.body,
+         workflowId: canonicalState.identity.workflowId || undefined,
+         originBoardItemId: canonicalState.identity.originBoardItemId || undefined,
+         lastKnownLocation: "integrations" as const,
+         currentStage: "reviewing" as const,
+         status: "active" as const,
+         recommendedNextAction: canonicalState.recommendation.nextMove,
+         score: 10000,
+         reason: "MK XI Unified Project State selected this project as the canonical active-project authority.",
+         updatedAt: canonicalState.recentActivity.updatedAt || canonicalState.generatedAt,
+         projectBody: canonicalState.project.body,
+         projectDocument: canonicalState.project.projectDocument,
+         projectUpdatedAt: canonicalState.project.projectUpdatedAt,
+         canvasContent: canonicalState.project.canvasContent,
+         canvasUpdatedAt: canonicalState.project.canvasUpdatedAt,
+      } satisfies SourceAwareActiveProject;
+   }
+
    const existingThreads = getThreadMemory();
 
    const generatedThreads = buildThreadMemoryFromEvents();
@@ -3446,6 +3460,30 @@ export function getSourceAwareActiveProject() {
 }
 
 export function getActiveProjectAwareness(): ActiveProjectAwareness {
+   const canonicalState = readCanonicalProjectState();
+
+   if (canonicalState.hasProject) {
+      return {
+         hasActiveProject: true,
+         source: "projects",
+         title: canonicalState.identity.title,
+         projectBody: canonicalState.project.body,
+         projectDocument: canonicalState.project.projectDocument,
+         canvasContent: canonicalState.project.canvasContent,
+         canvasUpdatedAt: canonicalState.project.canvasUpdatedAt,
+         projectUpdatedAt: canonicalState.project.projectUpdatedAt,
+         workflowId: canonicalState.identity.workflowId || undefined,
+         originBoardItemId: canonicalState.identity.originBoardItemId || undefined,
+         lastKnownLocation: "integrations",
+         currentStage: "reviewing",
+         status: "active",
+         latestMovement: canonicalState.recentActivity.latestMovement || "Unified project state is current",
+         recommendedNextAction: canonicalState.recommendation.nextMove,
+         updatedAt: canonicalState.recentActivity.updatedAt || canonicalState.generatedAt,
+         projectIntelligence: canonicalState.projectIntelligence,
+      };
+   }
+
    const activeProject = getSourceAwareActiveProject();
 
    if (!activeProject) {
@@ -3558,7 +3596,7 @@ export function getProjectIntelligencePacket() {
    return getActiveProjectAwareness().projectIntelligence;
 }
 
-// MK VIII canonical read for Project workspace, AIDock, and future knowledge tools.
+// MK XI canonical read for Project workspace, AIDock, Home, Calendar intelligence, and future knowledge tools.
 export function getProjectUnderstanding(): ProjectUnderstanding {
    return getActiveProjectAwareness().projectIntelligence.projectUnderstanding;
 }

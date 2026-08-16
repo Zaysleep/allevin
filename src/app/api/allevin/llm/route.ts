@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK X OpenAI Response Layer
+// ALLEVIN MK XI OpenAI Response Layer
 // Path:
 // src/app/api/allevin/llm/route.ts
 //
@@ -45,7 +45,15 @@ type AllevinLLMRequestWithContext = Omit<AllevinLLMRequest, "mode"> & {
 };
 
 function isProjectIntakeRequest(request?: { mode?: AllevinLLMMode; projectStage?: string }) {
-   return request?.mode === "project-guidance" && request.projectStage === "mk-ix-project-intake";
+   return request?.mode === "project-guidance" && (request.projectStage === "mk-xi-project-intake" || request.projectStage === "mk-ix-project-intake");
+}
+
+function isProjectJudgmentRequest(request?: { mode?: AllevinLLMMode; projectStage?: string }) {
+   return request?.mode === "aidock-guidance" && request.projectStage === "mk-xi-project-judgment";
+}
+
+function isProjectContextReasoningRequest(request?: { mode?: AllevinLLMMode; projectStage?: string }) {
+   return request?.mode === "aidock-guidance" && request.projectStage === "mk-xi-project-context";
 }
 
 function isMaterialAwareGuidanceRequest(request?: { source?: string; projectStage?: string }) {
@@ -536,6 +544,7 @@ function sanitizeAIDockMaterialGrounding(value?: AllevinLLMRequest["materialGrou
    };
 }
 
+
 function sanitizeAIDockCalendarEvent(value?: NonNullable<AllevinLLMRequest["calendarIntelligence"]>["todayEvents"][number]) {
    if (!value) return undefined;
 
@@ -572,7 +581,10 @@ function sanitizeAIDockCalendarSessionPlan(value?: NonNullable<AllevinLLMRequest
       sessionGoal: sanitizeRouteNextStep(value.sessionGoal),
       expectedResult: sanitizeRouteSummary(value.expectedResult),
       durationMinutes: typeof value.durationMinutes === "number" && Number.isFinite(value.durationMinutes) ? Math.max(15, Math.min(180, Math.round(value.durationMinutes))) : 45,
-      recommendedDurationMinutes: typeof value.recommendedDurationMinutes === "number" && Number.isFinite(value.recommendedDurationMinutes) ? Math.max(15, Math.min(180, Math.round(value.recommendedDurationMinutes))) : 45,
+      recommendedDurationMinutes:
+         typeof value.recommendedDurationMinutes === "number" && Number.isFinite(value.recommendedDurationMinutes)
+            ? Math.max(15, Math.min(180, Math.round(value.recommendedDurationMinutes)))
+            : 45,
       needsMultipleSessions: value.needsMultipleSessions === true,
       reason: sanitizeRouteSummary(value.reason),
       completionCriteria: sanitizeRouteStringArray(value.completionCriteria, 8, ROUTE_SANITIZE_LIMITS.material),
@@ -933,8 +945,12 @@ function buildOpenAIMessages(request: AllevinLLMRequestWithContext) {
       request.mode === "material-interpretation"
          ? "You are ALLEVIN MK IX's controlled material interpretation layer. Return only valid JSON. Be specific, helpful, natural, and lightly witty. Do not pretend. Do not use robotic analysis language."
          : isProjectIntakeRequest(request)
-           ? "You are ALLEVIN MK IX's controlled project-intake reasoning layer. Return only valid JSON. Read the whole project before planning, preserve certainty, derive dependencies, and use the project's own language."
-           : "You are ALLEVIN MK IX's controlled internal guidance layer. Return only valid JSON. Never claim to perform actions. Be concise, calm, lightly witty, project-aware, and material-aware. Avoid vague advice, export language, hype, roleplay, and repeated theme words. Only use schedule language when the user asks what to schedule.";
+           ? "You are ALLEVIN MK XI's controlled project-intake reasoning layer. Return only valid JSON. Read the whole project before planning, preserve certainty, derive dependencies, and use the project's own language."
+           : isProjectJudgmentRequest(request)
+             ? "You are ALLEVIN MK XI's controlled senior project-lead judgment layer. Return only valid JSON. Evaluate proposals instead of echoing them. Use saved project evidence as fact and stable general domain knowledge for clearly framed reasoning and recommendations. Challenge weak proposals, name a concrete better alternative when asked, and never invent project facts or silently confirm a tentative idea."
+             : isProjectContextReasoningRequest(request)
+               ? "You are ALLEVIN MK XI's controlled project-context reasoning layer. Return only valid JSON. Identify the explicit constraints, requirements, decisions, existing assets, implementation preferences, and scope boundaries that materially shape the current milestone. Never turn success criteria or completion criteria into claims that work is already complete."
+               : "You are ALLEVIN MK IX's controlled internal guidance layer. Return only valid JSON. Never claim to perform actions. Be concise, calm, lightly witty, project-aware, and material-aware. Avoid vague advice, export language, hype, roleplay, and repeated theme words. Only use schedule language when the user asks what to schedule.";
 
    const userText = request.mode === "material-interpretation" ? buildMaterialInterpretationPrompt(request) : buildPrompt(request);
 
@@ -1162,9 +1178,9 @@ function buildProjectIntakePrompt(request: AllevinLLMRequestWithContext) {
    const additionalInstruction = sanitizeRouteText(request.userInstruction, ROUTE_SANITIZE_LIMITS.prompt);
 
    return `
-You are ALLEVIN MK IX's project-intake reasoning layer.
+You are ALLEVIN MK XI's project-intake reasoning layer.
 
-Your job is to understand the project the user is actually trying to complete, preserve the useful evidence in the ramble, and turn it into a grounded project guide with a complete dependency sequence.
+Your job is to understand the project the user is actually trying to complete, preserve the useful evidence in the ramble, and build a complete internal understanding while returning a calm, readable project plan.
 
 PROJECT TITLE:
 ${title}
@@ -1217,30 +1233,30 @@ Interpretation rules:
 - For lending, borrowing, checkout, or shared-resource projects, use this natural dependency order when supported: host approval, accepted-item scope, safety and condition rules, borrowing and damage policy, ongoing manager, tracking method, first collection, small test, then revision before expansion.
 - For place-based physical or creative work, order the plan naturally: confirm site ownership and approval, inspect the site, confirm insurance or safety rules, decide how input will be gathered, approve the design or lead, finalize budget and materials, complete the work, inspect it, and assign maintenance when supported.
 - Reject abstract milestone wording such as “confirm outside requirements,” “resolve operating design decisions,” “design the project’s structure and workflow,” or “test in real conditions” when the description provides concrete nouns.
-- Every supported dependency-ledger facet must be represented. Do not omit privacy, communication, resources, testing, ownership, or maintenance when the ramble makes them material.
-- Use eight to ten milestones for a complex hybrid project. Use six or seven only when fewer dependencies are genuinely supported.
-- Rank possible first actions by how many downstream decisions they unlock. Prefer an inventory, source map, requirements table, or baseline when it informs scope, permissions, testing, and production at once. A permission-only action should come first only when it truly blocks every other useful step.
+- Preserve every supported dependency internally, but combine closely related work into readable milestones instead of exposing a planning ledger to the user. Do not omit privacy, communication, resources, testing, ownership, or maintenance when the ramble makes them material.
+- Prefer four to seven milestones. Use eight only when the project truly has eight distinct pieces of work that the user needs to see separately. Never add milestones just to make the plan look comprehensive.
+- Rank possible first actions by how much useful uncertainty they remove. Prefer a simple real-world action the user can understand immediately. Use an inventory, source map, table, or baseline only when that artifact genuinely fits the project.
 - The first action must create a concrete decision, artifact, evidence set, or professional confirmation that the next milestone can use.
-- Write START as one direct sentence, normally 15–35 words. Prefer a real action such as contacting the site owner, requesting an inspection, or creating an inventory. Do not expose internal phrases such as “what it must prove,” “requirements brief,” “dependency,” “irreversible commitments,” or “use it to complete milestone one.”
+- Write START as one direct sentence, normally 12–30 words. Name the real action in everyday language. Do not expose internal phrases such as “what it must prove,” “requirements brief,” “dependency,” “irreversible commitments,” or “use it to complete milestone one.”
 - Do not invent completed work, approvals, owners, requirements, or facts.
 - Do not expose generic internal phrases such as "smallest complete user flow," "workflow, capacity, and ownership," "tools, equipment, and materials," "earliest dependency," "realistic user scenarios," or "minimum acceptable quality" unless the user's own project genuinely requires that exact language.
 - Keep sentences natural, direct, and user-friendly.
 
 Completeness targets when the ramble supports them:
 - SUCCESS: two to four observable outcomes
-- CURRENT FACTS: four to eight material facts
-- CONFIRMED DECISIONS: four to eight firm commitments
-- OPEN QUESTIONS: five to ten natural complete questions
-- CONSTRAINTS: four to eight hard limits or exclusions
-- ALLEVIN'S GUIDE: four to seven project-lead insights
-- MILESTONES: six to ten dependency-ordered milestones, normally eight to ten for a hybrid project
+- CURRENT FACTS: keep enough internal facts to preserve the user’s context, normally three to six
+- CONFIRMED DECISIONS: only explicit commitments; do not manufacture a target count
+- OPEN QUESTIONS: zero to four questions that materially affect the current or next milestone
+- CONSTRAINTS: zero to four real limits or exclusions
+- ALLEVIN'S GUIDE: two to four concise project-lead insights
+- MILESTONES: four to seven readable milestones; eight only when genuinely necessary
 
 Return ONLY valid JSON with exactly these top-level keys:
 {
   "title": "${title}",
   "focus": "GOAL:\\nOne direct goal sentence\\nSUCCESS:\\n- Observable outcome\\n- Observable outcome",
   "usefulContext": "CURRENT FACTS:\\n- Grounded fact\\nCONFIRMED DECISIONS:\\n- Firm commitment\\nOPEN QUESTIONS:\\n- Natural complete question\\nCONSTRAINTS:\\n- Hard limit or exclusion\\nALLEVIN'S GUIDE:\\n- Senior-level project guidance",
-  "nextStep": "MILESTONES:\\n1. Dependency-ordered milestone\\n2. Dependency-ordered milestone\\n3. Continue for six to ten milestones\\nSTART:\\nOne concrete first action",
+  "nextStep": "MILESTONES:\\n1. Dependency-ordered milestone\\n2. Dependency-ordered milestone\\n3. Continue for four to seven milestones\\nSTART:\\nOne concrete first action",
   "summary": "One-sentence project readback",
   "confidence": 0
 }
@@ -1352,9 +1368,196 @@ ${
    `.trim();
 }
 
+// ========================================
+// ALLEVIN MK XI B14 — Constraint-consistent senior judgment
+// Reconsideration must use new information, test the recommendation against
+// every explicit constraint, and prefer viable existing assets before adding
+// unnecessary purchases or project complexity.
+// ========================================
+function buildProjectContextReasoningPrompt(request: AllevinLLMRequestWithContext) {
+   const responseMode = resolveAIDockResponseMode(request);
+   const responseModeRules = getAIDockResponseModeRules(responseMode);
+   const projectTitle = sanitizeRouteTitle(request.contextPacket?.currentProject?.title || request.title || "Active project");
+   const userQuestion = sanitizeRouteText(
+      request.conversation?.lastUserPrompt || request.contextPacket?.userIntent?.rawPrompt || request.focus || request.userInstruction,
+      ROUTE_SANITIZE_LIMITS.prompt,
+   );
+   const understanding = request.projectUnderstanding || request.contextPacket?.projectUnderstanding;
+   const activeMilestoneTitle = sanitizeRouteTitle(
+      understanding?.activeMilestone?.title ||
+      request.contextPacket?.currentProject?.recommendedNextAction ||
+      request.conversation?.currentTopic ||
+      "Current milestone",
+   );
+   const currentProject = request.contextPacket?.currentProject;
+   const constraints = sanitizeRouteStringArray(currentProject?.constraints, 20, ROUTE_SANITIZE_LIMITS.material);
+   const implementationPreferences = sanitizeRouteStringArray(currentProject?.implementationPreferences, 20, ROUTE_SANITIZE_LIMITS.material);
+   const confirmedDecisions = sanitizeRouteDecisions(understanding?.confirmedDecisions);
+   const projectBody = sanitizeRouteText(request.rawContent || currentProject?.body, ROUTE_SANITIZE_LIMITS.materialFullText);
+   const grounded = sanitizeRouteText(request.groundedResponse, ROUTE_SANITIZE_LIMITS.context);
+   const usefulContext = sanitizeRouteText(request.usefulContext, ROUTE_SANITIZE_LIMITS.context);
+   const additionalInstruction = sanitizeRouteText(request.userInstruction, ROUTE_SANITIZE_LIMITS.prompt);
+
+   return `
+You are ALLEVIN MK XI's project-context reasoning layer.
+
+PROJECT:
+${projectTitle}
+
+USER QUESTION:
+${userQuestion}
+
+CURRENT MILESTONE:
+${activeMilestoneTitle}
+
+SAVED PROJECT DESCRIPTION:
+${projectBody || "No saved project description was supplied."}
+
+EXPLICIT CONSTRAINTS:
+${JSON.stringify(constraints, null, 2)}
+
+IMPLEMENTATION PREFERENCES:
+${JSON.stringify(implementationPreferences, null, 2)}
+
+CONFIRMED DECISIONS:
+${JSON.stringify(confirmedDecisions, null, 2)}
+
+ADDITIONAL GROUNDED CONTEXT:
+${grounded}
+
+CURRENT PROJECT / MILESTONE CONTEXT:
+${usefulContext}
+
+PROJECT UNDERSTANDING:
+${JSON.stringify(understanding || {}, null, 2)}
+
+ADDITIONAL INSTRUCTION:
+${limitText(additionalInstruction, 7000)}
+
+Reasoning rules:
+- Answer the user's project-context question directly. Do not replace it with a checkpoint readback.
+- Identify the 3–6 strongest explicit constraints, requirements, scope boundaries, existing assets, confirmed decisions, or implementation preferences that materially affect the CURRENT milestone.
+- Preserve the user's specific stack, existing working systems, exclusions, timing limits, budget, compatibility requirements, and first-version boundaries when they are present.
+- Existing assets are project facts when explicitly stated. Reuse preferences are implementation preferences unless the user has explicitly committed.
+- Treat success criteria, "What Good Looks Like", completion criteria, milestone checkpoints, and target outcomes as TARGETS. They are NOT proof that the work is already usable, ready, safe, accessible, reliable, tested, approved, or complete.
+- Never say "already", "confirmed", "in place", "complete", "ready", or equivalent about a target unless explicit evidence records that state.
+- Do not invent project-specific facts or requirements.
+- Stable general domain knowledge may explain why an explicit constraint matters, but do not turn that reasoning into a saved project fact.
+- Explain briefly how each high-impact constraint changes how the current milestone should be built, selected, or evaluated.
+- Do not narrate milestone sequence unless sequencing is itself a material constraint.
+- Do not merely say "next checkpoint."
+
+${responseModeRules}
+
+Return ONLY valid JSON with:
+- title: project title
+- focus: direct answer naming the strongest constraints/boundaries
+- usefulContext: concise explanation of how they affect the current milestone
+- nextStep: one concrete action that respects those constraints
+- summary: one concise recap
+- confidence: number from 0 to 100
+   `.trim();
+}
+
+function buildProjectJudgmentPrompt(request: AllevinLLMRequestWithContext) {
+   const responseMode = resolveAIDockResponseMode(request);
+   const responseModeRules = getAIDockResponseModeRules(responseMode);
+   const projectTitle = sanitizeRouteTitle(request.contextPacket?.currentProject?.title || request.title || "Active project");
+   const userQuestion = sanitizeRouteText(
+      request.conversation?.lastUserPrompt || request.contextPacket?.userIntent?.rawPrompt || request.focus || request.userInstruction,
+      ROUTE_SANITIZE_LIMITS.prompt,
+   );
+   const proposal = sanitizeRouteText(request.conversation?.activeReference || request.rawContent || request.focus, ROUTE_SANITIZE_LIMITS.context);
+   const establishedEvidence = sanitizeRouteText(request.groundedResponse, ROUTE_SANITIZE_LIMITS.context);
+   const suppliedContext = sanitizeRouteText(request.usefulContext, ROUTE_SANITIZE_LIMITS.context);
+   const contextPacketText = stringifyContextPacket(request.contextPacket);
+   const conversationText = sanitizeRouteText(JSON.stringify(request.conversation || request.contextPacket?.conversation || {}, null, 2), ROUTE_SANITIZE_LIMITS.context);
+   const additionalInstruction = sanitizeRouteText(request.userInstruction, ROUTE_SANITIZE_LIMITS.prompt);
+   const asksForAlternative = request.conversation?.continuityIntent === "alternate-method" || /\b(?:recommend|instead|better|alternative|what would you do|what should (?:we|i) use)\b/i.test(userQuestion);
+   const asksForReconsideration = /\b(?:does|would|should) (?:that|this) (?:change|alter|revise|affect) (?:your|the) recommendation\b/i.test(userQuestion) || /\bdoes (?:that|this) change what you recommend\b/i.test(userQuestion);
+
+   return `
+You are ALLEVIN MK XI's senior project-lead judgment layer.
+
+Your job is to evaluate a user's proposed direction against the accumulated project record and make a useful recommendation. This is not a generic roadmap response.
+
+PROJECT:
+${projectTitle}
+
+USER QUESTION:
+${userQuestion}
+
+PROPOSAL UNDER REVIEW:
+${proposal || "No explicit proposal text was supplied."}
+
+ESTABLISHED PROJECT EVIDENCE:
+${establishedEvidence || "No separate evidence block was supplied. Use the project context packet carefully."}
+
+CURRENT PROJECT / MILESTONE CONTEXT:
+${suppliedContext}
+
+PROJECT CONTEXT PACKET:
+${limitText(contextPacketText, 5000)}
+
+PROJECT-SCOPED CONVERSATION:
+${conversationText}
+
+ADDITIONAL JUDGMENT INSTRUCTION:
+${limitText(additionalInstruction, 7000)}
+
+Reasoning rules:
+- Treat saved project evidence, explicit user decisions, and confirmed constraints as project facts.
+- Treat tentative user ideas as proposals, not commitments.
+- Evaluate the proposal; do not mirror the user's preference just because they suggested it.
+- You MAY use stable general domain knowledge to reason about trade-offs and to recommend an approach. Present that as professional reasoning/recommendation, not as a fact already established by this project.
+- Do not invent project-specific measurements, test results, material properties, budgets, dates, approvals, or live/current facts that were not supplied.
+- When the available evidence is sufficient for a practical recommendation, make one. Do not hand the decision back with only "compare the options" or "consider the requirements."
+- If an exact answer genuinely depends on missing information, say what is missing, but still give the strongest provisional recommendation the evidence supports.
+- Challenge a weak proposal when its trade-offs conflict with the project constraints or create avoidable risk.
+- Before returning the answer, silently check the recommendation against EVERY explicit project constraint supplied in the evidence/context. If the recommendation would violate even one explicit constraint, revise it before responding. Never describe a constraint-violating option as compliant.
+- Distinguish physical/logical consequences from wording tricks: for example, an option that inherently requires mounting, anchoring, drilling, permanent modification, a forbidden dependency, an unavailable resource, or exceeding a stated limit still conflicts with a constraint even if the response does not explicitly name the prohibited action.
+- When the user reveals that they ALREADY OWN or ALREADY HAVE a potentially viable asset, explicitly evaluate reusing that asset before recommending a new purchase or replacement. Prefer reuse when it satisfies the project constraints and avoids unnecessary cost, complexity, or risk; recommend buying something new only when there is a concrete reason the existing asset is insufficient.
+- Do not be contrarian for effect. If the proposal is strong, support it and explain why.
+- Keep the current milestone as the workbench, while using earlier milestone evidence whenever it changes today's decision.
+- Do not narrate build order or milestone sequencing unless sequence is directly relevant to the user's question.
+- Never silently promote the proposal to a confirmed decision.
+- Treat success criteria, "What Good Looks Like", completion criteria, milestone checkpoints, and target outcomes as TARGETS, not evidence that work is already complete.
+- Never claim a target is already usable, ready, safe, accessible, reliable, tested, approved, or in place unless explicit project evidence confirms it.
+- Never infer that safety, accessibility, reliability, privacy, testing, approval, or other controls exist merely because a later milestone or success criterion mentions them.
+- For safety-sensitive technical choices, prefer controlled, testable, reversible guidance and name the relevant caution without becoming alarmist.
+
+${asksForReconsideration
+   ? `RECOMMENDATION RECONSIDERATION:
+The user supplied new information and asked whether it changes your recommendation. Identify the NEW information from the current user message first. Re-evaluate the previous recommendation against that new information and the existing project constraints. State clearly whether your recommendation changes. If the user already owns a viable option, evaluate that option before inventing or purchasing a third solution. Do not recommend an option that conflicts with any explicit constraint. Give one updated recommendation and one practical next action.`
+   : asksForAlternative
+     ? `ALTERNATIVE REQUEST:
+The user asked for an alternative. Name ONE concrete alternative in the first sentence. Compare it directly with the original proposal, explain why it fits the saved project constraints better, and give one practical next action. A response that only says to compare alternatives is a failure.`
+     : `PROPOSAL REVIEW:
+State whether you would keep, modify, or reject the proposal. Explain the trade-off using the saved project constraints and give one practical next action.`}
+
+${responseModeRules}
+
+Return ONLY valid JSON with:
+- title: project title
+- focus: the direct judgment or concrete recommendation; answer in the first sentence
+- usefulContext: the evidence-based reasoning and important trade-off
+- nextStep: one concrete action that follows from the judgment
+- summary: one concise recap of the recommendation
+- confidence: number from 0 to 100
+   `.trim();
+}
+
 function buildPrompt(request: AllevinLLMRequestWithContext) {
    if (isProjectIntakeRequest(request)) {
       return buildProjectIntakePrompt(request);
+   }
+
+   if (isProjectJudgmentRequest(request)) {
+      return buildProjectJudgmentPrompt(request);
+   }
+
+   if (isProjectContextReasoningRequest(request)) {
+      return buildProjectContextReasoningPrompt(request);
    }
 
    if (request.mode === "project-guidance" && cleanText(request.groundedResponse || request.contextPacket?.responseRules?.groundedResponse || request.focus)) {
@@ -1872,9 +2075,11 @@ export async function POST(request: Request) {
                ? Math.max(1500, Math.min(2400, Math.round((payload.maxWords || 1100) * 1.75)))
                : payload.mode === "project-guidance"
                  ? Math.max(520, Math.min(1200, Math.round((payload.maxWords || 520) * 1.65)))
-                 : payload.mode === "material-interpretation"
-                   ? 620
-                   : 420,
+                 : isProjectJudgmentRequest(payload)
+                   ? Math.max(520, Math.min(820, Math.round((payload.maxWords || 180) * 2.2)))
+                   : payload.mode === "material-interpretation"
+                     ? 620
+                     : 420,
             response_format: { type: "json_object" },
             messages: buildOpenAIMessages(payload),
          }),
