@@ -72,6 +72,8 @@ import { buildProjectIntelligencePacket, getEmptyProjectIntelligencePacket, type
 
 import { buildProjectLeadOpeningLine, handleProjectLeadRuntimePrompt } from "@/lib/projectLeadRuntime";
 
+import { readProjectLeadDecisions } from "@/lib/projectLeadMemory";
+
 import { readCanonicalProjectSelection, readCanonicalProjectState, refreshCanonicalProjectState, resolveCanonicalProjectSelection } from "@/lib/projectStateAuthority";
 
 import { readProjectMilestoneWorkJournal } from "@/lib/projectWorkJournal";
@@ -13501,7 +13503,17 @@ I could not turn this recommendation into a clean action yet.
          ...(packet.currentProject.constraints || []),
          ...(understanding?.constraints || []),
       ]
-         .map((item) => compactText(item))
+         // MK XI B18 build fix:
+         // currentProject constraints are strings, while Project Intelligence
+         // constraints are ProjectConstraint objects. Normalize both shapes
+         // before passing them through compactText.
+         .map((item) =>
+            compactText(
+               typeof item === "string"
+                  ? item
+                  : item?.statement,
+            ),
+         )
          .filter(Boolean);
 
       const implementationPreferences = (packet.currentProject.implementationPreferences || [])
@@ -13608,7 +13620,61 @@ I could not turn this recommendation into a clean action yet.
             rawContent: sanitizePlainText(packet.currentProject.body || "", 12000),
             nextStep: "",
             contextPacket: packet,
-            projectUnderstanding: understanding,
+            // MK XI B18 build fix 2:
+            // Project Intelligence uses rich internal objects (for example
+            // ProjectConstraint), while the LLM request contract intentionally
+            // carries a sanitized transport shape. Mirror the existing AIDock
+            // mapping instead of passing ProjectUnderstanding through directly.
+            projectUnderstanding: understanding
+               ? {
+                    goal: understanding.goal,
+                    successState: understanding.successState,
+                    situation: understanding.situation,
+                    momentum: understanding.momentum,
+                    currentFocus: milestoneTitle,
+                    recommendedMove: understanding.recommendedMove,
+                    whyNow: understanding.whyNow,
+                    whatItUnlocks: understanding.whatItUnlocks,
+                    afterThis: understanding.afterThis,
+                    watchOuts: understanding.watchOuts,
+                    openWork: understanding.openWork,
+                    completedWork: understanding.completedWork,
+                    decisions: understanding.decisions,
+                    confirmedDecisions: understanding.confirmedDecisions,
+                    unresolvedDecisions: understanding.unresolvedDecisions,
+                    assumptions: understanding.assumptions,
+                    options: understanding.options,
+                    tensions: understanding.tensions,
+                    constraints: understanding.constraints.map((constraint) => constraint.statement),
+                    successCriteria: understanding.successCriteria.map((criterion) => criterion.statement),
+                    unresolvedQuestions: understanding.conversation.unresolvedQuestions,
+                    risks: understanding.risks.map((risk) => `${risk.title}: ${risk.consequence}`),
+                    dependencies: understanding.dependencies.map(
+                       (dependency) => `${dependency.before} → ${dependency.after}: ${dependency.reason}`,
+                    ),
+                    evidence: [
+                       ...understanding.confirmedDecisions.flatMap((decision) => decision.evidence),
+                       ...understanding.unresolvedDecisions.flatMap((decision) => decision.evidence),
+                    ],
+                    activeMilestone: activeMilestone
+                       ? {
+                            id: activeMilestone.id,
+                            title: activeMilestone.title,
+                            goal: activeMilestone.goal,
+                            whyItMatters: activeMilestone.whyItMatters,
+                            startingPrompt: activeMilestone.startingPrompt,
+                            workingContent: activeMilestone.workingContent,
+                            decisions: activeMilestone.decisions,
+                            openQuestions: activeMilestone.openQuestions,
+                            completionCriteria: activeMilestone.completionCriteria,
+                            completedCriteria: activeMilestone.completedCriteria,
+                            dependencies: activeMilestone.dependencies,
+                            whatItUnlocks: understanding.whatItUnlocks,
+                            status: activeMilestone.status,
+                         }
+                       : undefined,
+                 }
+               : undefined,
             conversation: {
                projectTitle: compactText(packet.currentProject.title),
                lastUserPrompt: prompt,
@@ -14050,7 +14116,7 @@ Rules:
          ? context.openMilestoneContext.map((item, index) => `${index + 1}. ${item}`).join("\n")
          : "None.";
       const checkpointText = context.currentCheckpoints.length
-         ? context.currentCheckpoints.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         ? context.currentCheckpoints.map((item: string, index: number) => `${index + 1}. ${item}`).join("\n")
          : "No explicit checkpoints are recorded for the current milestone.";
       const localFallback = buildLocalProjectProposalJudgmentFallback(
          proposal,
@@ -14205,9 +14271,18 @@ ${
          compactText(context.activeMilestone?.title) ||
          packet.currentProject.recommendedNextAction ||
          "the current milestone";
-      const confirmed = [...(context.canonical.state.decisions.confirmed || [])]
-         .sort((left, right) => (right.updatedAt || right.createdAt || 0) - (left.updatedAt || left.createdAt || 0));
-      const latestDecision = compactText(confirmed[0]?.statement);
+      // MK XI B18 build fix 4:
+      // Canonical decision DTOs intentionally expose only id/statement/affects.
+      // Explicit Project Lead memory owns decision chronology and returns newest
+      // records first, so use it for "Given that decision..." follow-ups.
+      const durableConfirmedDecision = readProjectLeadDecisions(
+         context.canonical.state.identity.projectId,
+         context.canonical.state.identity.title,
+      ).find((decision) => decision.status === "confirmed");
+      const canonicalConfirmedDecision = context.canonical.state.decisions.confirmed?.[0];
+      const latestDecision = compactText(
+         durableConfirmedDecision?.statement || canonicalConfirmedDecision?.statement,
+      );
       if (!latestDecision) return "";
 
       const responseMode = normalizeAIDockResponseMode(getActiveCognitionResponseMode());
@@ -14216,7 +14291,7 @@ ${
          ? context.groundedEvidence.map((item, index) => `${index + 1}. ${item}`).join("\n")
          : "No additional established project evidence is recorded.";
       const checkpointText = context.currentCheckpoints.length
-         ? context.currentCheckpoints.map((item, index) => `${index + 1}. ${item}`).join("\n")
+         ? context.currentCheckpoints.map((item: string, index: number) => `${index + 1}. ${item}`).join("\n")
          : "No explicit checkpoints are recorded for the current milestone.";
 
       const fallback =
