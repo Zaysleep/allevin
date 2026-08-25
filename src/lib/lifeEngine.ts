@@ -1,0 +1,517 @@
+// ========================================
+// ALLEVIN MK XII — Life Engine
+// Purpose:
+// Deterministic daily views, time helpers, and a resilient local Kin fallback.
+// The LLM can improve interpretation, but ALLEVIN remains useful without it.
+// ========================================
+
+import type { KinAction, LifeContext, LifeItem, LifeRecurrence, LifeState } from "@/lib/lifeTypes";
+
+export interface AttentionItem {
+   item: LifeItem;
+   reason: string;
+}
+
+export interface LifeViews {
+   today: LifeItem[];
+   attention: AttentionItem[];
+   upcoming: LifeItem[];
+   waiting: LifeItem[];
+   whenever: LifeItem[];
+   routines: LifeItem[];
+   completedToday: LifeItem[];
+}
+
+function startOfDay(timestamp = Date.now()) {
+   const date = new Date(timestamp);
+   date.setHours(0, 0, 0, 0);
+   return date.getTime();
+}
+
+function endOfDay(timestamp = Date.now()) {
+   const date = new Date(timestamp);
+   date.setHours(23, 59, 59, 999);
+   return date.getTime();
+}
+
+function addDays(timestamp: number, amount: number) {
+   const date = new Date(timestamp);
+   date.setDate(date.getDate() + amount);
+   return date.getTime();
+}
+
+function isSameDay(left: number, right: number) {
+   return startOfDay(left) === startOfDay(right);
+}
+
+function itemTime(item: LifeItem) {
+   return item.startAt || item.dueAt || item.followUpAt || item.deferUntil;
+}
+
+function itemIsDeferred(item: LifeItem, now: number) {
+   return Boolean(item.deferUntil && item.deferUntil > endOfDay(now));
+}
+
+function byTime(left: LifeItem, right: LifeItem) {
+   const leftTime = itemTime(left) || Number.MAX_SAFE_INTEGER;
+   const rightTime = itemTime(right) || Number.MAX_SAFE_INTEGER;
+   if (leftTime !== rightTime) return leftTime - rightTime;
+   return right.importance.localeCompare(left.importance);
+}
+
+export function buildLifeViews(state: LifeState, now = Date.now()): LifeViews {
+   const todayStart = startOfDay(now);
+   const todayEnd = endOfDay(now);
+   const horizon = endOfDay(addDays(now, 7));
+   const active = state.items.filter((item) => item.state !== "archived");
+
+   const today = active
+      .filter((item) => {
+         if (item.state !== "active") return false;
+         if (itemIsDeferred(item, now)) return false;
+         const when = item.startAt || item.dueAt;
+         return item.pinToToday || Boolean(when && when >= todayStart && when <= todayEnd);
+      })
+      .sort(byTime);
+
+   const todayIds = new Set(today.map((item) => item.id));
+
+   const attention = active
+      .flatMap((item): AttentionItem[] => {
+         if (item.state === "done" || item.state === "someday") return [];
+         if (item.state === "waiting") {
+            if (item.followUpAt && item.followUpAt <= todayEnd) return [{ item, reason: item.followUpAt < todayStart ? "Follow-up is overdue" : "Follow up today" }];
+            return [];
+         }
+         if (itemIsDeferred(item, now)) return [];
+         const when = item.dueAt || item.startAt;
+         if (when && when < todayStart) return [{ item, reason: "Overdue" }];
+         if (item.importance === "high" && !todayIds.has(item.id) && (!when || when <= endOfDay(addDays(now, 1)))) return [{ item, reason: "High importance" }];
+         return [];
+      })
+      .sort((left, right) => byTime(left.item, right.item));
+
+   const upcoming = active
+      .filter((item) => {
+         if (item.state !== "active") return false;
+         const when = item.deferUntil && item.deferUntil > todayEnd ? item.deferUntil : item.startAt || item.dueAt;
+         return Boolean(when && when > todayEnd && when <= horizon);
+      })
+      .sort(byTime);
+
+   const waiting = active.filter((item) => item.state === "waiting").sort((left, right) => (left.followUpAt || Number.MAX_SAFE_INTEGER) - (right.followUpAt || Number.MAX_SAFE_INTEGER));
+
+   const whenever = active
+      .filter((item) => {
+         if (item.state === "someday") return true;
+         if (item.state !== "active" || item.kind === "routine") return false;
+         return !item.dueAt && !item.startAt && !item.deferUntil && !item.pinToToday;
+      })
+      .sort((left, right) => (left.importance === right.importance ? right.updatedAt - left.updatedAt : left.importance === "high" ? -1 : 1));
+
+   const routines = active.filter((item) => item.kind === "routine" && item.state !== "done").sort(byTime);
+   const completedToday = active.filter((item) => item.state === "done" && item.completedAt && isSameDay(item.completedAt, now)).sort((left, right) => (right.completedAt || 0) - (left.completedAt || 0));
+
+   return { today, attention, upcoming, waiting, whenever, routines, completedToday };
+}
+
+export function formatLifeTime(timestamp?: number, allDay = false) {
+   if (!timestamp) return "";
+   if (allDay) return "All day";
+   return new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+export function formatLifeDate(timestamp?: number) {
+   if (!timestamp) return "";
+   const now = Date.now();
+   if (isSameDay(timestamp, now)) return "Today";
+   if (isSameDay(timestamp, addDays(now, 1))) return "Tomorrow";
+   return new Date(timestamp).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
+
+export function formatRelativeMoment(timestamp?: number) {
+   if (!timestamp) return "";
+   const difference = timestamp - Date.now();
+   const day = 86_400_000;
+   if (Math.abs(difference) < day && isSameDay(timestamp, Date.now())) return formatLifeTime(timestamp);
+   if (difference > 0 && difference < day * 2) return "Tomorrow";
+   if (difference < 0 && Math.abs(difference) < day * 2) return "Yesterday";
+   return formatLifeDate(timestamp);
+}
+
+export function getDayGreeting() {
+   const hour = new Date().getHours();
+   if (hour < 12) return "Good morning";
+   if (hour < 18) return "Good afternoon";
+   return "Good evening";
+}
+
+export function getTodayDateLabel() {
+   return new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+}
+
+export function buildLocalDayBrief(state: LifeState) {
+   const views = buildLifeViews(state);
+   const parts: string[] = [];
+
+   if (views.today.length) parts.push(`${views.today.length} ${views.today.length === 1 ? "thing" : "things"} on your plate today`);
+   if (views.attention.length) parts.push(`${views.attention.length} ${views.attention.length === 1 ? "item needs" : "items need"} attention`);
+   if (views.waiting.length) parts.push(`${views.waiting.length} ${views.waiting.length === 1 ? "thing is" : "things are"} waiting on someone or something else`);
+
+   if (!parts.length) return "Nothing is demanding your attention right now.";
+   return `${parts.join(" · ")}.`;
+}
+
+function normalizePrompt(value: string) {
+   return value.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9:$\s/-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function contextFromText(value: string): LifeContext {
+   const lower = normalizePrompt(value);
+   if (/\b(?:class|school|assignment|professor|homework|reading|course)\b/.test(lower)) return "school";
+   if (/\b(?:kin software|client|invoice|proposal|contract|dvbe|llc)\b/.test(lower)) return "kin-software";
+   if (/\b(?:grocery|groceries|store|pickup|pick up|errand)\b/.test(lower)) return "errand";
+   if (/\b(?:work|office|coworker|boss|dean|campus)\b/.test(lower)) return "work";
+   if (/\b(?:car|porsche|tires|brakes|oil change|mechanic|registration)\b/.test(lower)) return "car";
+   if (/\b(?:rent|bill|loan|bank|tax|roth|ira|payment)\b/.test(lower)) return "finance";
+   if (/\b(?:doctor|dentist|appointment|prescription|pharmacy|health)\b/.test(lower)) return "health";
+   if (/\b(?:laundry|clean|home|apartment|house)\b/.test(lower)) return "home";
+   return "personal";
+}
+
+function parseClockTime(value: string) {
+   const lower = value.toLowerCase();
+   if (/\bnoon\b/.test(lower)) return { hours: 12, minutes: 0 };
+   if (/\bmidnight\b/.test(lower)) return { hours: 0, minutes: 0 };
+
+   const match = lower.match(/\b(?:at|around)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+   if (!match) return null;
+   let hours = Number(match[1]);
+   const minutes = Number(match[2] || 0);
+   const suffix = match[3];
+   if (suffix === "pm" && hours < 12) hours += 12;
+   if (suffix === "am" && hours === 12) hours = 0;
+   if (!suffix && hours <= 7) hours += 12;
+   if (hours > 23 || minutes > 59) return null;
+   return { hours, minutes };
+}
+
+function nextWeekday(day: number, includeToday = false) {
+   const now = new Date();
+   const delta = (day - now.getDay() + 7) % 7 || (includeToday ? 0 : 7);
+   const date = new Date(now);
+   date.setDate(now.getDate() + delta);
+   return date;
+}
+
+function parseDateTime(value: string) {
+   const lower = normalizePrompt(value);
+   const now = new Date();
+   let date: Date | null = null;
+   let precision: "exact" | "day" | "window" | "none" = "none";
+
+   if (/\bday after tomorrow\b/.test(lower)) {
+      date = new Date(now);
+      date.setDate(now.getDate() + 2);
+      precision = "day";
+   } else if (/\btomorrow\b/.test(lower)) {
+      date = new Date(now);
+      date.setDate(now.getDate() + 1);
+      precision = "day";
+   } else if (/\b(?:today|tonight)\b/.test(lower)) {
+      date = new Date(now);
+      precision = /\btonight\b/.test(lower) ? "window" : "day";
+   } else if (/\bnext week\b/.test(lower)) {
+      date = new Date(now);
+      date.setDate(now.getDate() + 7);
+      precision = "window";
+   } else if (/\bnext month\b/.test(lower)) {
+      date = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      precision = "window";
+   }
+
+   const weekdays: Record<string, number> = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+   if (!date) {
+      for (const [name, day] of Object.entries(weekdays)) {
+         if (new RegExp(`\\b(?:next\\s+)?${name}\\b`).test(lower)) {
+            date = nextWeekday(day, false);
+            precision = "day";
+            break;
+         }
+      }
+   }
+
+   const months: Record<string, number> = {
+      january: 0,
+      february: 1,
+      march: 2,
+      april: 3,
+      may: 4,
+      june: 5,
+      july: 6,
+      august: 7,
+      september: 8,
+      october: 9,
+      november: 10,
+      december: 11,
+   };
+   if (!date) {
+      for (const [name, month] of Object.entries(months)) {
+         if (new RegExp(`\\b(?:in\\s+)?${name}\\b`).test(lower)) {
+            const year = month < now.getMonth() ? now.getFullYear() + 1 : now.getFullYear();
+            date = new Date(year, month, 1);
+            precision = "window";
+            break;
+         }
+      }
+   }
+
+   const iso = lower.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+   if (iso) {
+      date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+      precision = "day";
+   }
+
+   const slash = lower.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(20\d{2}|\d{2}))?\b/);
+   if (slash) {
+      const rawYear = slash[3] ? Number(slash[3]) : now.getFullYear();
+      const year = rawYear < 100 ? 2000 + rawYear : rawYear;
+      date = new Date(year, Number(slash[1]) - 1, Number(slash[2]));
+      precision = "day";
+   }
+
+   if (!date) return { timestamp: undefined, allDay: true, precision: "none" as const };
+
+   const clock = parseClockTime(value);
+   if (clock) {
+      date.setHours(clock.hours, clock.minutes, 0, 0);
+      return { timestamp: date.getTime(), allDay: false, precision: "exact" as const };
+   }
+
+   date.setHours(12, 0, 0, 0);
+   return { timestamp: date.getTime(), allDay: true, precision };
+}
+
+function parseRecurrence(value: string): LifeRecurrence {
+   const lower = normalizePrompt(value);
+   if (/\b(?:every|each)\s+day\b|\bdaily\b/.test(lower)) return "daily";
+   if (/\b(?:every|each)\s+weekday\b|\bweekdays\b/.test(lower)) return "weekdays";
+   if (/\b(?:every|each)\s+(?:week|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b|\bweekly\b/.test(lower)) return "weekly";
+   if (/\b(?:every|each)\s+month\b|\bmonthly\b/.test(lower)) return "monthly";
+   return "none";
+}
+
+function cleanTaskTitle(value: string) {
+   let clean = value.trim().replace(/[.!?]+$/, "");
+   clean = clean
+      .replace(/^(?:okay[, ]+|alright[, ]+|actually[, ]+)/i, "")
+      .replace(/^(?:every|each)\s+(?:day|weekday|week|month|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(?:please\s+)?(?:remind me to|remember to)\s+/i, "")
+      .replace(/^(?:can you\s+)?(?:please\s+)?(?:remind me to|don't let me forget(?: to)?|do not let me forget(?: to)?|remember to|i need(?: to)?|i have to|i've got to|i should|we need(?: to)?|we have to|need to|need)\s+/i, "")
+      .replace(/^(?:i|we)\s+want\s+to\s+/i, "")
+      .replace(/^i'?m\s+waiting\s+(?:on|for)\s+/i, "")
+      .replace(/^we'?re\s+waiting\s+(?:on|for)\s+/i, "")
+      .replace(/\b(?:today|tonight|tomorrow|day after tomorrow|next week|next month)\b.*$/i, "")
+      .replace(/\b(?:on|at|around)\s+(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b.*$/i, "")
+      .replace(/\b(?:at|around)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b.*$/i, "")
+      .replace(/\s+(?:sometime\s+)?in\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s*$/i, "")
+      .replace(/\s+(?:sometime|eventually)\s*$/i, "")
+      .trim();
+   if (!clean) clean = value.trim().replace(/[.!?]+$/, "");
+   const responseMatch = clean.match(/^(?:the\s+)?(.+?)\s+to\s+(?:respond|reply)$/i);
+   if (responseMatch?.[1]) clean = `${responseMatch[1]} response`;
+   return clean.charAt(0).toUpperCase() + clean.slice(1);
+}
+
+function findReferencedItem(state: LifeState, query: string) {
+   const lower = normalizePrompt(query);
+   const candidates = state.items.filter((item) => item.state !== "archived");
+   return candidates.find((item) => lower.includes(normalizePrompt(item.title))) || candidates.find((item) => normalizePrompt(item.title).split(" ").filter((word) => word.length > 3).some((word) => lower.includes(word)));
+}
+
+export function buildDeterministicLifeReadback(prompt: string, state: LifeState): string | null {
+   const raw = prompt.trim();
+   const lower = normalizePrompt(raw);
+   const views = buildLifeViews(state);
+
+   const asksAQuestion =
+      raw.endsWith("?") ||
+      /^(?:what|when|where|who|which|how|do|does|did|am|is|are|can|could|should|would|will|have|has)\b/i.test(raw);
+
+   if (!asksAQuestion) return null;
+
+   const asksToday =
+      lower.includes("attention today") ||
+      lower.includes("need today") ||
+      lower.includes("need to do today") ||
+      lower.includes("matters today") ||
+      lower.includes("have today") ||
+      lower.includes("today looking") ||
+      lower.includes("today look like") ||
+      lower === "what s today" ||
+      lower === "what is today";
+
+   if (asksToday) {
+      if (!views.today.length && !views.attention.length) {
+         return "Nothing needs your attention today.";
+      }
+
+      const today = views.today.slice(0, 5).map((item) => item.title);
+      const attention = views.attention
+         .slice(0, 4)
+         .map(({ item }) => item.title)
+         .filter((title) => !today.includes(title));
+
+      return [
+         today.length ? `Today: ${today.join(", ")}.` : "",
+         attention.length ? `Also worth attention: ${attention.join(", ")}.` : "",
+      ].filter(Boolean).join(" ");
+   }
+
+   const asksWaiting =
+      lower.includes("what am i waiting") ||
+      lower.includes("what s waiting") ||
+      lower.includes("what is waiting") ||
+      lower.includes("waiting on") ||
+      lower.includes("waiting for");
+
+   if (asksWaiting) {
+      if (!views.waiting.length) return "You're not waiting on anything I've recorded.";
+      const titles = views.waiting
+         .slice(0, 5)
+         .map((item) => item.title.replace(/^waiting\s+(?:for|on)\s+/i, "").trim());
+      return `You're waiting on ${titles.join(", ")}.`;
+   }
+
+   const asksUpcoming =
+      lower.includes("coming up") ||
+      lower.includes("what s upcoming") ||
+      lower.includes("what is upcoming") ||
+      lower.includes("this week") ||
+      lower.includes("next seven days");
+
+   if (asksUpcoming) {
+      if (!views.upcoming.length) return "Nothing is coming up in the next seven days.";
+      return views.upcoming
+         .slice(0, 7)
+         .map((item) => `${formatLifeDate(item.startAt || item.dueAt)} — ${item.title}`)
+         .join("\n");
+   }
+
+   const asksShortWindow =
+      (lower.includes("30 minutes") || lower.includes("thirty minutes")) &&
+      (lower.includes("i have") || lower.includes("i ve got") || lower.includes("got"));
+
+   if (asksShortWindow) {
+      const candidate = [...views.today, ...views.whenever].find(
+         (item) => !item.durationMinutes || item.durationMinutes <= 30,
+      );
+      return candidate
+         ? `Use the 30 minutes for ${candidate.title}.`
+         : "I don't have a clearly short task recorded.";
+   }
+
+   return null;
+}
+
+export function shouldUseDeterministicLifeReadback(prompt: string, state?: LifeState) {
+   if (!state) {
+      const raw = prompt.trim();
+      const lower = normalizePrompt(raw);
+      const asksAQuestion = raw.endsWith("?") || /^(?:what|when|where|who|which|how|do|does|did|am|is|are|can|could|should|would|will|have|has)\b/i.test(raw);
+      if (!asksAQuestion) return false;
+      return lower.includes("attention today") || lower.includes("coming up") || lower.includes("what am i waiting") || lower.includes("30 minutes") || lower.includes("thirty minutes");
+   }
+   return buildDeterministicLifeReadback(prompt, state) !== null;
+}
+
+function localQuestionResponse(prompt: string, state: LifeState) {
+   const deterministic = buildDeterministicLifeReadback(prompt, state);
+   if (deterministic) return deterministic;
+   return "Tell me what changed or what you want to figure out.";
+}
+
+export interface LocalKinInterpretation {
+   reply: string;
+   actions: KinAction[];
+}
+
+export function interpretKinLocally(prompt: string, state: LifeState): LocalKinInterpretation {
+   const raw = prompt.trim();
+   const lower = normalizePrompt(raw);
+   if (!raw) return { reply: "What's on your mind?", actions: [] };
+
+   const completionCue = /\b(?:mark|finish|complete)\s+(.+?)\s+(?:done|complete)|\b(?:i'?m done with|i finished|i completed)\s+(.+)/i.exec(raw);
+   if (completionCue) {
+      const query = completionCue[1] || completionCue[2] || raw;
+      const target = findReferencedItem(state, query);
+      if (target) return { reply: `Done — I'll close out ${target.title}.`, actions: [{ type: "complete_item", targetId: target.id }] };
+   }
+
+   const removeCue = /\b(?:remove|delete|archive|cancel)\s+(.+)/i.exec(raw);
+   if (removeCue) {
+      const target = findReferencedItem(state, removeCue[1]);
+      if (target) return { reply: `I'll take ${target.title} out of active view.`, actions: [{ type: "archive_item", targetId: target.id }] };
+   }
+
+   const moveDateCue = /\b(?:move|push|shift)\s+(.+?)\s+(?:to|until)\s+(.+)$/i.exec(raw);
+   if (moveDateCue) {
+      const target = findReferencedItem(state, moveDateCue[1]);
+      const date = parseDateTime(moveDateCue[2]);
+      if (target && date.timestamp) {
+         return {
+            reply: `Okay — ${target.title} moves to ${formatLifeDate(date.timestamp)}${date.allDay ? "" : ` at ${formatLifeTime(date.timestamp)}`}.`,
+            actions: [{ type: "update_item", targetId: target.id, changes: { dueAt: date.timestamp, startAt: target.kind === "commitment" ? date.timestamp : target.startAt, allDay: date.allDay, timingPrecision: date.precision, pinToToday: isSameDay(date.timestamp, Date.now()), state: "active" } }],
+         };
+      }
+   }
+
+   const moveTomorrowCue = /\b(?:move|push|shift)\s+(.+?)\s+(?:to|until)\s+tomorrow\b/i.exec(raw);
+   if (moveTomorrowCue) {
+      const target = findReferencedItem(state, moveTomorrowCue[1]);
+      if (target) {
+         const tomorrow = new Date();
+         tomorrow.setDate(tomorrow.getDate() + 1);
+         tomorrow.setHours(12, 0, 0, 0);
+         return {
+            reply: `Okay — ${target.title} moves to tomorrow.`,
+            actions: [{ type: "update_item", targetId: target.id, changes: { dueAt: tomorrow.getTime(), allDay: true, timingPrecision: "day", pinToToday: false, state: "active" } }],
+         };
+      }
+   }
+
+   const looksLikeQuestion = /\?$/.test(raw) || /^(?:what|when|where|which|who|why|how|do i|am i|can i|should i|is there|are there)\b/i.test(raw);
+   if (looksLikeQuestion) return { reply: localQuestionResponse(raw, state), actions: [] };
+
+   const waiting = /\b(?:waiting\s+(?:on|for)|hear back|response from|reply from)\b/i.test(raw);
+   const someday = /\b(?:someday|eventually|one day|when i get around to it)\b/i.test(raw);
+   const recurrence = parseRecurrence(raw);
+   const date = parseDateTime(raw);
+   const actionCue = waiting || someday || recurrence !== "none" || /\b(?:remind me|don't let me forget|do not let me forget|i need(?: to)?|i have to|i should|we need(?: to)?|we have to|need(?: to)?|pick up|buy|call|email|submit|pay|renew|schedule|book|order|return|send|finish|complete|do)\b/i.test(raw);
+
+   if (!actionCue) return { reply: localQuestionResponse(raw, state), actions: [] };
+
+   const title = cleanTaskTitle(raw);
+   const context = contextFromText(raw);
+   const importance = /\b(?:urgent|important|must|deadline|can't forget|cannot forget|due)\b/i.test(lower) ? "high" : "normal";
+   const kind = waiting ? "waiting" : recurrence !== "none" ? "routine" : /\b(?:appointment|meeting|class|dinner|flight|event)\b/i.test(lower) ? "commitment" : "task";
+   const stateValue = waiting ? "waiting" : someday ? "someday" : "active";
+   const timingPrecision = someday ? "someday" : date.precision;
+
+   const item = {
+      title,
+      kind,
+      state: stateValue,
+      context,
+      importance,
+      recurrence,
+      timingPrecision,
+      dueAt: waiting ? undefined : date.timestamp,
+      startAt: kind === "commitment" ? date.timestamp : undefined,
+      followUpAt: waiting ? date.timestamp : undefined,
+      allDay: date.allDay,
+      pinToToday: date.timestamp ? isSameDay(date.timestamp, Date.now()) : false,
+   } as const;
+
+   const timing = date.timestamp ? ` for ${formatLifeDate(date.timestamp)}${date.allDay ? "" : ` at ${formatLifeTime(date.timestamp)}`}` : someday ? " for later" : waiting ? " in Waiting" : "";
+   return { reply: `Got it — I'll keep ${title}${timing}.`, actions: [{ type: "create_item", item }] };
+}
