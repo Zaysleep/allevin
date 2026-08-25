@@ -19,7 +19,11 @@ const PREFIX = "allevin-";
 
 // Delivery logs belong to one browser/device. Copying them to a phone could
 // suppress a reminder just because the Mac already displayed it.
-const DEVICE_LOCAL_PREFIXES = ["allevin-notification-log"];
+const DEVICE_LOCAL_PREFIXES = [
+   "allevin-notification-log",
+   "allevin-push-device-id",
+   "allevin-server-push-active",
+];
 
 function isBrowser() {
    return typeof window !== "undefined";

@@ -10,11 +10,13 @@ import KinDock from "@/components/KinDock";
 import LifeItemRow from "@/components/LifeItemRow";
 import LifestyleSettingsEditor from "@/components/LifestyleSettingsEditor";
 import LiveClock from "@/components/LiveClock";
+import OnboardingFlow from "@/components/OnboardingFlow";
 import RhythmSettingsEditor from "@/components/RhythmSettingsEditor";
 import UpNextPanel from "@/components/UpNextPanel";
 import { useDailyRhythm } from "@/hooks/useDailyRhythm";
 import { useLifeState } from "@/hooks/useLifeState";
 import { getFreshAllevinHeroLine } from "@/lib/allevinHeroLine";
+import { shouldShowNewUserOnboarding, type OnboardingMode } from "@/lib/allevinOnboarding";
 import { getAllevinDisplayName, resetAllevinLifeWorkspace, saveAllevinUserProfile } from "@/lib/allevinUserProfile";
 import { readAllevinTone, saveAllevinTone, type AllevinTone } from "@/lib/allevinVoice";
 import { buildLifeViews, formatLifeDate, getDayGreeting } from "@/lib/lifeEngine";
@@ -25,7 +27,7 @@ type FooterInfo = "about" | "privacy" | "terms" | null;
 function FooterInfoPanel({ section, onClose }: { section: Exclude<FooterInfo, null>; onClose: () => void }) {
    const content = {
       about: { title: "About ALLEVIN", body: "ALLEVIN is a personal daily assistant from Kin Software LLC." },
-      privacy: { title: "Privacy", body: "Your ALLEVIN items, rhythm, recommendations, and conversation are saved in this browser in this version. AI requests may send relevant information to the configured AI service." },
+      privacy: { title: "Privacy", body: "Your ALLEVIN items, rhythm, recommendations, and conversation are saved in this browser. AI requests may send relevant information to the configured AI service. If server reminders are enabled, the next notification window and this device’s push subscription are temporarily stored in the configured server notification store so reminders can arrive while the app is closed." },
       terms: { title: "Terms", body: "ALLEVIN uses AI to interpret requests and offer suggestions. Important details should still be checked before you rely on them." },
    }[section];
 
@@ -47,6 +49,8 @@ export default function LifeDashboard() {
    const [comingUpOpen, setComingUpOpen] = useState(false);
    const [nowMs, setNowMs] = useState(() => Date.now());
    const [heroLine, setHeroLine] = useState("");
+   const [onboardingMode, setOnboardingMode] = useState<OnboardingMode | null>(null);
+   const [firstRunOnboarding, setFirstRunOnboarding] = useState(false);
 
    useEffect(() => {
       setName(getAllevinDisplayName(""));
@@ -56,6 +60,14 @@ export default function LifeDashboard() {
       // the browser, so refreshing produces a different line without creating
       // an AI request, loading state, or stale server-side cache.
       setHeroLine(getFreshAllevinHeroLine());
+
+      // New users should meet ALLEVIN before they meet an empty dashboard.
+      // Existing users are never forced through setup after an upgrade; they
+      // can reopen the same guide from Settings whenever they want.
+      if (shouldShowNewUserOnboarding()) {
+         setFirstRunOnboarding(true);
+         setOnboardingMode("setup");
+      }
 
       const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
       return () => window.clearInterval(timer);
@@ -112,9 +124,33 @@ export default function LifeDashboard() {
       if (!window.confirm("Clear your ALLEVIN items and conversation from this browser?")) return;
       resetAllevinLifeWorkspace({ preserveProfile: true });
       setSettingsOpen(false);
+      // Clearing the workspace leaves the user's name intact but immediately
+      // offers the setup guide again so an empty dashboard never feels like a
+      // dead end.
+      setOnboardingMode("setup");
+   }
+
+   function finishOnboarding() {
+      setFirstRunOnboarding(false);
+      setOnboardingMode(null);
+      setName(getAllevinDisplayName(""));
+      setTone(readAllevinTone());
+      setHeroLine(getFreshAllevinHeroLine());
    }
 
    if (!hydrated) return <main className="life-app"><div className="life-loading">Opening ALLEVIN…</div></main>;
+
+   if (firstRunOnboarding && onboardingMode === "setup") {
+      return (
+         <OnboardingFlow
+            mode="setup"
+            onClose={() => { setFirstRunOnboarding(false); setOnboardingMode(null); }}
+            onComplete={finishOnboarding}
+            onEnableReminders={rhythm.enableReminders}
+            remindersEnabled={rhythm.state.remindersEnabled}
+         />
+      );
+   }
 
    return (
       <main className="life-app">
@@ -132,7 +168,7 @@ export default function LifeDashboard() {
             <aside className="settings-panel">
                <div className="settings-panel-head"><h2>Settings</h2><button className="icon-button" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button></div>
                <label className="settings-field"><span>Name</span><input value={name} onChange={(event: ChangeEvent<HTMLInputElement>) => setName(event.target.value)} placeholder="Your name" maxLength={40} /></label>
-               <label className="settings-field"><span>Tone</span><select value={tone} onChange={(event: ChangeEvent<HTMLSelectElement>) => setTone(event.target.value as AllevinTone)}><option value="direct">Direct</option><option value="balanced">Balanced</option><option value="calm">Calm</option></select></label>
+               <label className="settings-field"><span>Tone</span><select value={tone} onChange={(event: ChangeEvent<HTMLSelectElement>) => setTone(event.target.value as AllevinTone)}><option value="direct">Direct</option><option value="balanced">Balanced</option><option value="calm">Gentle</option></select></label>
                <button className="settings-save" onClick={saveProfile}>Save</button>
                <div className="settings-divider" />
                <RhythmSettingsEditor state={rhythm.state} />
@@ -146,8 +182,24 @@ export default function LifeDashboard() {
                   {rhythm.notificationPermission === "granted" ? <button className="settings-inline-button" onClick={() => rhythm.setRemindersEnabled(!rhythm.state.remindersEnabled)}>{rhythm.state.remindersEnabled ? "On" : "Off"}</button> : <button className="settings-inline-button" onClick={() => void rhythm.enableReminders()}>Enable</button>}
                </div>
                <div className="settings-divider" />
+               <section className="settings-group settings-help-group">
+                  <div className="settings-group-heading"><strong>Help</strong></div>
+                  <button className="settings-guide-button" type="button" onClick={() => { setSettingsOpen(false); setOnboardingMode("setup"); }}>Set up ALLEVIN again</button>
+                  <button className="settings-guide-button" type="button" onClick={() => { setSettingsOpen(false); setOnboardingMode("install"); }}>Add ALLEVIN to your phone</button>
+               </section>
+               <div className="settings-divider" />
                <button className="settings-reset" onClick={resetLife}>Clear ALLEVIN data</button>
             </aside>
+         ) : null}
+
+         {onboardingMode ? (
+            <OnboardingFlow
+               mode={onboardingMode}
+               onClose={() => setOnboardingMode(null)}
+               onComplete={finishOnboarding}
+               onEnableReminders={rhythm.enableReminders}
+               remindersEnabled={rhythm.state.remindersEnabled}
+            />
          ) : null}
 
          <section className="life-hero">

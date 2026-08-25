@@ -81,15 +81,20 @@ export default function LifestyleSettingsEditor() {
                />
             </label>
             <label>
-               <span>Travel buffer</span>
-               <input
-                  type="number"
-                  min={1}
-                  max={240}
-                  value={commute}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setCommute(event.target.value)}
-                  placeholder="Minutes"
-               />
+               <span>Typical travel time</span>
+               <div className="settings-number-with-unit">
+                  <input
+                     type="number"
+                     inputMode="numeric"
+                     min={1}
+                     max={240}
+                     value={commute}
+                     onChange={(event: ChangeEvent<HTMLInputElement>) => setCommute(event.target.value)}
+                     placeholder="20"
+                     aria-label="Typical travel time in minutes"
+                  />
+                  <span>min</span>
+               </div>
             </label>
          </div>
 
