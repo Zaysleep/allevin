@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/allevin/push/run",
-      "schedule": "* * * * *"
-    }
-  ]
-}
