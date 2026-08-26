@@ -16,7 +16,7 @@ import UpNextPanel from "@/components/UpNextPanel";
 import { useDailyRhythm } from "@/hooks/useDailyRhythm";
 import { useLifeState } from "@/hooks/useLifeState";
 import { getFreshAllevinHeroLine } from "@/lib/allevinHeroLine";
-import { shouldShowNewUserOnboarding, type OnboardingMode } from "@/lib/allevinOnboarding";
+import { readOnboardingStatus, shouldShowNewUserOnboarding, type OnboardingMode } from "@/lib/allevinOnboarding";
 import { getAllevinDisplayName, resetAllevinLifeWorkspace, saveAllevinUserProfile } from "@/lib/allevinUserProfile";
 import { readAllevinTone, saveAllevinTone, type AllevinTone } from "@/lib/allevinVoice";
 import { buildLifeViews, formatLifeDate, getDayGreeting } from "@/lib/lifeEngine";
@@ -27,7 +27,7 @@ type FooterInfo = "about" | "privacy" | "terms" | null;
 function FooterInfoPanel({ section, onClose }: { section: Exclude<FooterInfo, null>; onClose: () => void }) {
    const content = {
       about: { title: "About ALLEVIN", body: "ALLEVIN is a personal daily assistant from Kin Software LLC." },
-      privacy: { title: "Privacy", body: "Your ALLEVIN items, rhythm, recommendations, and conversation are saved in this browser. AI requests may send relevant information to the configured AI service. If server reminders are enabled, the next notification window and this device’s push subscription are temporarily stored in the configured server notification store so reminders can arrive while the app is closed." },
+      privacy: { title: "Privacy", body: "Your ALLEVIN items, rhythm, recommendations, and conversation are saved in this browser. AI requests may send relevant information to the configured AI service. For notification wording, ALLEVIN sends only the current item and its nearby verified schedule context. If server reminders are enabled, the next notification window and this device’s push subscription are temporarily stored in the configured server notification store so reminders can arrive while the app is closed." },
       terms: { title: "Terms", body: "ALLEVIN uses AI to interpret requests and offer suggestions. Important details should still be checked before you rely on them." },
    }[section];
 
@@ -66,7 +66,7 @@ export default function LifeDashboard() {
       // can reopen the same guide from Settings whenever they want.
       if (shouldShowNewUserOnboarding()) {
          setFirstRunOnboarding(true);
-         setOnboardingMode("setup");
+         setOnboardingMode(readOnboardingStatus()?.state === "phone-pending" ? "install" : "setup");
       }
 
       const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);

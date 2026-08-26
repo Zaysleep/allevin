@@ -4,16 +4,7 @@ import { Plus, X } from "lucide-react";
 import type { ChangeEvent } from "react";
 import { useEffect, useState } from "react";
 
-import {
-   LIFESTYLE_PROFILE_UPDATED_EVENT,
-   readLifestyleProfile,
-   removeFlexibleChoiceSet,
-   setCommuteMinutes,
-   setPreferredBedtime,
-   upsertFlexibleChoiceSet,
-   type FlexibleChoiceSet,
-   type LifestylePeriod,
-} from "@/lib/allevinLifestyleProfile";
+import { LIFESTYLE_PROFILE_UPDATED_EVENT, readLifestyleProfile, removeFlexibleChoiceSet, setCommuteMinutes, setPreferredBedtime, upsertFlexibleChoiceSet, type FlexibleChoiceSet, type LifestylePeriod } from "@/lib/allevinLifestyleProfile";
 
 function periodLabel(period: LifestylePeriod) {
    if (period === "morning") return "Morning";
@@ -74,31 +65,20 @@ export default function LifestyleSettingsEditor() {
          <div className="settings-time-row">
             <label>
                <span>Bedtime</span>
-               <input
-                  type="time"
-                  value={bedtime}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setBedtime(event.target.value)}
-               />
+               <input type="time" value={bedtime} onChange={(event: ChangeEvent<HTMLInputElement>) => setBedtime(event.target.value)} />
             </label>
             <label>
-               <span>Typical travel time</span>
+               <span>Typical commute time (like getting to work)</span>
                <div className="settings-number-with-unit">
-                  <input
-                     type="number"
-                     inputMode="numeric"
-                     min={1}
-                     max={240}
-                     value={commute}
-                     onChange={(event: ChangeEvent<HTMLInputElement>) => setCommute(event.target.value)}
-                     placeholder="20"
-                     aria-label="Typical travel time in minutes"
-                  />
+                  <input type="number" inputMode="numeric" min={1} max={240} value={commute} onChange={(event: ChangeEvent<HTMLInputElement>) => setCommute(event.target.value)} placeholder="20" aria-label="Typical travel time in minutes" />
                   <span>min</span>
                </div>
             </label>
          </div>
 
-         <button className="settings-inline-button" type="button" onClick={saveBasics}>Save lifestyle</button>
+         <button className="settings-inline-button" type="button" onClick={saveBasics}>
+            Save lifestyle
+         </button>
 
          <div className="settings-divider" />
 
@@ -136,11 +116,7 @@ export default function LifestyleSettingsEditor() {
             </label>
             <label>
                <span>Options</span>
-               <input
-                  value={draftChoices}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftChoices(event.target.value)}
-                  placeholder="Reading, gaming, coding…"
-               />
+               <input value={draftChoices} onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftChoices(event.target.value)} placeholder="Reading, gaming, coding…" />
             </label>
             <button className="settings-primary-action" type="button" onClick={addSet}>
                <Plus size={14} /> Save choices

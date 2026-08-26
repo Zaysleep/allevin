@@ -11,6 +11,11 @@ export interface StoredPushJob {
    entryId?: string;
    phase: "prep" | "start";
    priority: 1 | 2 | 3 | 4 | 5;
+   actionTarget?: {
+      source: "rhythm" | "life";
+      id: string;
+      dateKey: string;
+   };
 }
 
 const JOBS_KEY = "allevin:push:jobs:v1";

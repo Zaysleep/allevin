@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { enableAllevinNotifications, registerAllevinServiceWorker, runRhythmReminderCheck } from "@/lib/allevinNotifications";
 import { syncServerNotificationSchedule } from "@/lib/allevinServerPushClient";
+import { ALLEVIN_TONE_UPDATED_EVENT } from "@/lib/allevinVoice";
 import { LIFE_STATE_UPDATED_EVENT } from "@/lib/lifeStore";
 import {
    buildTodayRhythm,
@@ -52,6 +53,7 @@ export function useDailyRhythm() {
 
       window.addEventListener(DAILY_RHYTHM_UPDATED_EVENT, onUpdate);
       window.addEventListener(LIFE_STATE_UPDATED_EVENT, syncServerPlan);
+      window.addEventListener(ALLEVIN_TONE_UPDATED_EVENT, syncServerPlan);
       window.addEventListener("storage", onUpdate);
       window.addEventListener("focus", catchUpAfterResume);
       document.addEventListener("visibilitychange", catchUpAfterResume);
@@ -66,6 +68,7 @@ export function useDailyRhythm() {
       return () => {
          window.removeEventListener(DAILY_RHYTHM_UPDATED_EVENT, onUpdate);
          window.removeEventListener(LIFE_STATE_UPDATED_EVENT, syncServerPlan);
+         window.removeEventListener(ALLEVIN_TONE_UPDATED_EVENT, syncServerPlan);
          window.removeEventListener("storage", onUpdate);
          window.removeEventListener("focus", catchUpAfterResume);
          document.removeEventListener("visibilitychange", catchUpAfterResume);

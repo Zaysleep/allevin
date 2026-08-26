@@ -56,7 +56,7 @@ export async function GET(request: Request) {
                tag: job.tag,
                url: job.url,
                entryId: job.entryId,
-               data: { phase: job.phase, priority: job.priority, scheduledAt: job.dueAt },
+               data: { phase: job.phase, priority: job.priority, scheduledAt: job.dueAt, actionTarget: job.actionTarget },
             }),
             { TTL: 300, urgency: job.priority >= 4 ? "high" : "normal" },
          );

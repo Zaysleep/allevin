@@ -5,14 +5,17 @@ import type { ChangeEvent, FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { requestKinLLM } from "@/lib/allevinLLMClient";
-import { adaptationReplySuffix, captureGeneralDayContext, interpretAdaptiveDayConversation, reconcileLifeEventsWithRhythm } from "@/lib/allevinDayAdaptation";
+import { adaptationReplySuffix, captureGeneralDayContext, interpretAdaptiveDayConversation, previewAdaptiveDayConversation, reconcileLifeEventsWithRhythm } from "@/lib/allevinDayAdaptation";
 import { buildRecommendationContext, interpretRecommendationConversation } from "@/lib/allevinRecommendations";
-import { buildLifestyleContext, interpretLifestyleConversation } from "@/lib/allevinLifestyleProfile";
+import { buildLifestyleContext, interpretLifestyleConversation, readLifestyleProfile } from "@/lib/allevinLifestyleProfile";
+import { answerMemoryQuestion, buildMemoryContext } from "@/lib/allevinMemory";
+import { answerContextualScheduleQuestion, interpretContextualLifeMutation } from "@/lib/contextualLifeIntelligence";
+import { clearPendingAssistantChange, isPendingConfirmation, isPendingDecline, readPendingAssistantChange, stagePendingAssistantChange } from "@/lib/allevinPendingChange";
 import { getAllevinDisplayName } from "@/lib/allevinUserProfile";
 import { captureAssistantUndo, undoLastAssistantChange } from "@/lib/allevinUndo";
 import { readAllevinTone } from "@/lib/allevinVoice";
 import { answerDayIntelligence, assistantScheduleRelations, mergeScheduleRelationReply, preflightAssistantActions } from "@/lib/dayIntelligence";
-import { buildRhythmContextForPrompt, buildRhythmNarrationContextForPrompt, interpretRhythmConversation, isRhythmMutationPrompt, readDailyRhythm } from "@/lib/dailyRhythm";
+import { buildRhythmContextForPrompt, buildRhythmNarrationContextForPrompt, interpretRhythmConversation, isRhythmMutationPrompt, readDailyRhythm, setRhythmCompletion, skipRhythmAnchor } from "@/lib/dailyRhythm";
 import { buildDeterministicLifeReadback, interpretKinLocally } from "@/lib/lifeEngine";
 import { applyKinActions, getLifeSnapshot, readLifeState } from "@/lib/lifeStore";
 import { appendKinMessage, clearKinConversation, KIN_CONVERSATION_UPDATED_EVENT, readKinConversation, type KinMessage } from "@/lib/kinConversation";
@@ -123,6 +126,51 @@ export default function KinDock() {
    }, []);
 
    useEffect(() => {
+      // Notification buttons return intent to the foreground app. Only this
+      // deterministic state layer may mark/skip an occurrence; the service
+      // worker itself never claims completion or replans a day.
+      const processAction = () => {
+         const params = new URLSearchParams(window.location.search);
+         const action = params.get("allevinNotificationAction");
+         const source = params.get("source");
+         const id = params.get("id");
+         const dateKey = params.get("date");
+         if (!action || !id || !dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+         const [year, month, day] = dateKey.split("-").map(Number);
+         const date = new Date(year, month - 1, day, 12, 0, 0, 0);
+
+         if (action === "running-late") {
+            setOpen(true);
+            setInput("I’m running late by ");
+            appendKinMessage("assistant", "How many minutes late are you? I’ll preview what needs to move before changing the day.");
+            window.setTimeout(() => inputRef.current?.focus(), 60);
+         } else if (source === "rhythm" && action === "done") {
+            const rhythm = readDailyRhythm();
+            const title = rhythm.anchors.find((anchor) => anchor.id === id)?.title || "That routine";
+            setRhythmCompletion(rhythm, id, true, date);
+            appendKinMessage("assistant", `${title} is done.`);
+         } else if (source === "rhythm" && action === "skip") {
+            const rhythm = readDailyRhythm();
+            const title = rhythm.anchors.find((anchor) => anchor.id === id)?.title || "That routine";
+            skipRhythmAnchor(rhythm, id, date, "skipped", "Skipped from notification action");
+            appendKinMessage("assistant", `${title} is skipped for this day.`);
+         } else if (source === "life" && (action === "done" || action === "skip")) {
+            applyKinActions([{ type: action === "done" ? "complete_item" : "archive_item", targetId: id }]);
+            appendKinMessage("assistant", action === "done" ? "Marked done." : "Removed from the active day.");
+         }
+
+         params.delete("allevinNotificationAction");
+         params.delete("source");
+         params.delete("id");
+         params.delete("date");
+         const query = params.toString();
+         window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+      };
+      const timeout = window.setTimeout(processAction, 0);
+      return () => window.clearTimeout(timeout);
+   }, []);
+
+   useEffect(() => {
       if (open) window.setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }), 30);
    }, [messages, open, busy]);
 
@@ -147,6 +195,58 @@ export default function KinDock() {
          const tone = readAllevinTone();
          const currentState = readLifeState();
          const currentRhythm = readDailyRhythm();
+
+         // Significant cascades and explicit conflicts are staged before any
+         // state write. Confirmation reuses the deterministic plan; the LLM
+         // never becomes the authority for what changed.
+         const pending = readPendingAssistantChange();
+         if (pending && isPendingDecline(prompt)) {
+            clearPendingAssistantChange();
+            appendKinMessage("assistant", "Left it alone.");
+            return;
+         }
+         if (pending && isPendingConfirmation(prompt)) {
+            clearPendingAssistantChange();
+            if (pending.kind === "adaptation") {
+               const confirmed = interpretAdaptiveDayConversation(pending.prompt, currentState, currentRhythm, tone);
+               const reply = await phraseStateAcknowledgement(pending.prompt, confirmed.reply, confirmed.narrationFacts);
+               appendKinMessage("assistant", reply);
+               return;
+            }
+            captureAssistantUndo(pending.prompt);
+            const relations = assistantScheduleRelations(pending.actions, currentState, currentRhythm, pending.prompt);
+            const applied = applyKinActions(pending.actions);
+            const reconciled = reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
+            const rawReply = pending.reply || (applied.applied.length ? applied.applied.join(". ") : "Done.");
+            appendKinMessage("assistant", `${mergeScheduleRelationReply(rawReply, relations)}${adaptationReplySuffix(reconciled)}`);
+            return;
+         }
+
+         const adaptivePreview = previewAdaptiveDayConversation(prompt, currentRhythm);
+         if (adaptivePreview.handled) {
+            if (adaptivePreview.requiresConfirmation) stagePendingAssistantChange({ kind: "adaptation", prompt });
+            appendKinMessage("assistant", adaptivePreview.reply);
+            return;
+         }
+
+         const contextualMutation = interpretContextualLifeMutation(prompt, currentState, currentRhythm, conversationBefore);
+         if (contextualMutation.handled) {
+            if (!contextualMutation.actions.length) {
+               appendKinMessage("assistant", contextualMutation.reply);
+               return;
+            }
+            const conflict = preflightAssistantActions(contextualMutation.actions, currentState, currentRhythm, prompt);
+            if (conflict) {
+               stagePendingAssistantChange({ kind: "actions", prompt, reply: contextualMutation.reply, actions: contextualMutation.actions });
+               appendKinMessage("assistant", `${conflict}\n\nMake the change anyway?`);
+               return;
+            }
+            captureAssistantUndo(prompt);
+            applyKinActions(contextualMutation.actions);
+            const reconciled = reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
+            appendKinMessage("assistant", `${contextualMutation.reply}${adaptationReplySuffix(reconciled)}`);
+            return;
+         }
 
          // High-confidence reality changes are applied before recommendations or
          // the LLM. "Skip gym today" must never be interpreted as deleting the
@@ -189,6 +289,22 @@ export default function KinDock() {
             return;
          }
 
+         const lifestyleProfile = readLifestyleProfile();
+         const contextualAnswer = answerContextualScheduleQuestion(prompt, currentState, effectiveRhythm, conversationBefore, {
+            travelMinutes: lifestyleProfile.commuteMinutes,
+            bedtime: lifestyleProfile.preferredBedtime,
+         });
+         if (contextualAnswer.handled) {
+            appendKinMessage("assistant", contextualAnswer.reply);
+            return;
+         }
+
+         const memoryAnswer = answerMemoryQuestion(prompt, effectiveRhythm, tone);
+         if (memoryAnswer.handled) {
+            appendKinMessage("assistant", memoryAnswer.reply);
+            return;
+         }
+
          const dayIntelligence = answerDayIntelligence(prompt, currentState, effectiveRhythm, tone);
          if (dayIntelligence.handled) {
             appendKinMessage("assistant", dayIntelligence.reply);
@@ -225,7 +341,8 @@ export default function KinDock() {
                prompt,
             );
             if (conflict) {
-               appendKinMessage("assistant", conflict);
+               stagePendingAssistantChange({ kind: "actions", prompt, reply: deterministicMutation.reply, actions: deterministicMutation.actions });
+               appendKinMessage("assistant", `${conflict}\n\nAdd it anyway?`);
                return;
             }
 
@@ -253,7 +370,8 @@ export default function KinDock() {
             displayName: getAllevinDisplayName(""),
             assistantContext: `${buildRhythmContextForPrompt(effectiveRhythm, prompt)}
 ${buildLifestyleContext()}
-${buildRecommendationContext()}`,
+${buildRecommendationContext()}
+${buildMemoryContext(effectiveRhythm, tone)}`,
             voiceStyle: tone,
             lifeItems: snapshot.items,
             conversation: conversationForJudgment(prompt, conversationBefore)
@@ -263,7 +381,8 @@ ${buildRecommendationContext()}`,
          if (!response.usedFallback && (response.reply || response.actions.length)) {
             const conflict = preflightAssistantActions(response.actions, currentState, effectiveRhythm, prompt);
             if (conflict) {
-               appendKinMessage("assistant", conflict);
+               stagePendingAssistantChange({ kind: "actions", prompt, reply: response.reply, actions: response.actions });
+               appendKinMessage("assistant", `${conflict}\n\nMake the change anyway?`);
                return;
             }
 
@@ -287,7 +406,8 @@ ${buildRecommendationContext()}`,
             const local = interpretKinLocally(prompt, currentState);
             const conflict = preflightAssistantActions(local.actions, currentState, effectiveRhythm, prompt);
             if (conflict) {
-               appendKinMessage("assistant", conflict);
+               stagePendingAssistantChange({ kind: "actions", prompt, reply: local.reply, actions: local.actions });
+               appendKinMessage("assistant", `${conflict}\n\nMake the change anyway?`);
                return;
             }
 
@@ -310,7 +430,8 @@ ${buildRecommendationContext()}`,
          const local = interpretKinLocally(prompt, currentState);
          const conflict = preflightAssistantActions(local.actions, currentState, currentRhythm, prompt);
          if (conflict) {
-            appendKinMessage("assistant", conflict);
+            stagePendingAssistantChange({ kind: "actions", prompt, reply: local.reply, actions: local.actions });
+            appendKinMessage("assistant", `${conflict}\n\nMake the change anyway?`);
             return;
          }
          const relations = assistantScheduleRelations(

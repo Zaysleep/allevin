@@ -1,0 +1,72 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  createNotificationCopyContext,
+  fallbackNotificationBody,
+  notificationCopyCacheKey,
+  validateNotificationBody,
+} from "../src/lib/allevinNotificationCopy.ts";
+
+const hour = 60 * 60 * 1000;
+const startAt = new Date(2026, 7, 27, 8, 0, 0, 0).getTime();
+const timeline = [
+  { id: "current", title: "Breakfast", category: "meal", startAt, endAt: startAt + 30 * 60_000 },
+  { id: "next", title: "Commute", category: "personal", startAt: startAt + 40 * 60_000, endAt: startAt + hour },
+  { id: "later", title: "Work", category: "work", startAt: startAt + hour, endAt: startAt + 9 * hour },
+];
+
+function context(overrides = {}) {
+  return createNotificationCopyContext({
+    id: "job-1",
+    occurrenceKey: "2026-08-27:rhythm:breakfast:start",
+    title: "Breakfast",
+    category: "meal",
+    phase: "start",
+    tone: "balanced",
+    priority: 2,
+    leadMinutes: 10,
+    startAt,
+    endAt: startAt + 30 * 60_000,
+    timelineId: "current",
+    timeline,
+    ...overrides,
+  });
+}
+
+test("uses deterministic timeline truth for the upcoming item and transition", () => {
+  const result = context();
+  assert.equal(result.next?.title, "Commute");
+  assert.equal(result.next?.startsInMinutes, 40);
+  assert.equal(result.next?.minutesFromCurrentEnd, 10);
+});
+
+test("does not expose an unrelated event more than six hours away", () => {
+  const result = context({
+    timeline: [timeline[0], { id: "far", title: "Evening class", category: "school", startAt: startAt + 7 * hour, endAt: startAt + 8 * hour }],
+  });
+  assert.equal(result.next, undefined);
+});
+
+test("fallback copy is compact, human, and does not repeat the visible title", () => {
+  const result = context();
+  const body = fallbackNotificationBody(result);
+  assert.ok(body.length >= 18 && body.length <= 220);
+  assert.equal(body.toLowerCase().includes("breakfast"), false);
+  assert.equal(validateNotificationBody(body, result), body);
+});
+
+test("rejects robotic, repetitive, and oversized model copy", () => {
+  const result = context();
+  assert.equal(validateNotificationBody("Breakfast starts now. Time to switch over.", result), null);
+  assert.equal(validateNotificationBody("Clock's done negotiating. Handle the thing that matters.", result), null);
+  assert.equal(validateNotificationBody("A".repeat(221), result), null);
+});
+
+test("copy cache identity changes when occurrence or nearby truth changes", () => {
+  const base = context();
+  const nextDay = context({ occurrenceKey: "2026-08-28:rhythm:breakfast:start" });
+  const differentNext = context({ timeline: [timeline[0], { ...timeline[1], id: "dentist", title: "Dentist" }] });
+  assert.notEqual(notificationCopyCacheKey(base), notificationCopyCacheKey(nextDay));
+  assert.notEqual(notificationCopyCacheKey(base), notificationCopyCacheKey(differentNext));
+});

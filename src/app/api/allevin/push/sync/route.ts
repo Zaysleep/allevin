@@ -22,6 +22,13 @@ function cleanJob(raw: unknown, deviceId: string): StoredPushJob | null {
    const title = String(value.title || "").trim().slice(0, 160);
    const body = String(value.body || "").trim().slice(0, 420);
    if (!id || !title || !body) return null;
+   const target = value.actionTarget;
+   const actionTarget = target &&
+      (target.source === "rhythm" || target.source === "life") &&
+      typeof target.id === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(String(target.dateKey || ""))
+      ? { source: target.source, id: target.id.slice(0, 220), dateKey: String(target.dateKey) }
+      : undefined;
 
    return {
       id,
@@ -34,6 +41,7 @@ function cleanJob(raw: unknown, deviceId: string): StoredPushJob | null {
       entryId: value.entryId ? String(value.entryId).slice(0, 220) : undefined,
       phase,
       priority: priority as StoredPushJob["priority"],
+      actionTarget,
    };
 }
 

@@ -1,8 +1,15 @@
 "use client";
 
 import { buildRhythmForDate, localDateKey, minutesFromClock, readDailyRhythm, type RhythmEntry } from "@/lib/dailyRhythm";
-import { getProactiveRecommendation, type RecommendationCategory } from "@/lib/allevinRecommendations";
-import { readAllevinTone, type AllevinTone } from "@/lib/allevinVoice";
+import { fallbackNotificationBody, type NotificationCopyContext } from "@/lib/allevinNotificationCopy";
+import { prepareNotificationBodies } from "@/lib/allevinNotificationCopyClient";
+import {
+   buildNotificationTimeline,
+   lifeNotificationContext,
+   rhythmNotificationContext,
+   timestampForLocalClock,
+} from "@/lib/allevinNotificationScheduleContext";
+import { readAllevinTone } from "@/lib/allevinVoice";
 import { readLifeState } from "@/lib/lifeStore";
 import type { LifeImportance, LifeItem } from "@/lib/lifeTypes";
 
@@ -24,6 +31,8 @@ interface PushPlanJob {
    entryId?: string;
    phase: ReminderPhase;
    priority: ReminderPriority;
+   actionTarget?: { source: "rhythm" | "life"; id: string; dateKey: string };
+   copyContext: NotificationCopyContext;
 }
 
 function randomId() {
@@ -45,15 +54,6 @@ function base64UrlToUint8Array(value: string) {
    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
    const raw = window.atob(base64);
    return Uint8Array.from([...raw].map((char) => char.charCodeAt(0)));
-}
-
-function categoryForEntry(entry: RhythmEntry): RecommendationCategory {
-   const title = entry.title.toLowerCase();
-   if (entry.category === "exercise" || /gym|workout|run|cardio|strength|lift|mobility/.test(title)) return "workout";
-   if (entry.category === "meal" && /breakfast|coffee|morning/.test(title)) return "breakfast";
-   if (/commute|leave|travel|prep|get ready|hygiene|shower/.test(title)) return "transition";
-   if (entry.category === "work" || entry.category === "school") return "focus";
-   return "general";
 }
 
 function clampPriority(value: number): ReminderPriority {
@@ -87,51 +87,6 @@ function prepLeadMinutes(priority: ReminderPriority) {
    return ({ 1: 5, 2: 10, 3: 15, 4: 20, 5: 30 } as const)[priority];
 }
 
-function stablePick(lines: string[], seed: string) {
-   const total = [...seed].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-   return lines[total % lines.length];
-}
-
-function prepCopy(title: string, lead: number, tone: AllevinTone, priority: ReminderPriority, seed: string) {
-   if (tone === "calm") return `${title} starts in ${lead} minutes. Get what you need ready so the transition stays easy.`;
-   if (tone === "balanced") return `${title} in ${lead} minutes. Get set now so you can start on time.`;
-
-   const lines = priority >= 4
-      ? [
-           `${title} in ${lead}. Clear the runway now; scrambling is a terrible hobby.`,
-           `${lead} minutes until ${title}. Get what you need lined up before the clock starts collecting interest.`,
-        ]
-      : [
-           `${title} in ${lead}. Get set now and spare future-you the stupid little scramble.`,
-           `${lead} minutes until ${title}. Line it up now; chaos has enough hobbies already.`,
-        ];
-   return stablePick(lines, seed);
-}
-
-function startCopy(title: string, tone: AllevinTone, priority: ReminderPriority, seed: string, recommendation?: string) {
-   const focus = recommendation ? ` ${recommendation}` : "";
-   if (tone === "calm") return `${title} starts now.${focus} Give it the space it needs.`;
-   if (tone === "balanced") return `${title} starts now.${focus} Time to switch over.`;
-
-   const lines = priority >= 4
-      ? [
-           `${title}. Time to move.${focus} This one deserves the lane—give it your attention and get back out.`,
-           `${title} starts now.${focus} Clock's done negotiating. Handle the thing that matters.`,
-        ]
-      : [
-           `${title}. You're up.${focus} Get it handled before the calendar starts freelancing.`,
-           `${title} starts now.${focus} No ceremony. Do the useful thing and keep moving.`,
-        ];
-   return stablePick(lines, seed);
-}
-
-function timestampForClock(date: Date, clock: string) {
-   const target = new Date(date);
-   const minutes = minutesFromClock(clock);
-   target.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
-   return target.getTime();
-}
-
 function shouldScheduleRhythm(entry: RhythmEntry, dateKey: string) {
    if (entry.completed || entry.skipped) return false;
    const rhythm = readDailyRhythm();
@@ -142,16 +97,6 @@ function shouldScheduleRhythm(entry: RhythmEntry, dateKey: string) {
    return anchor?.reminder ?? Boolean(temporary);
 }
 
-function recommendationForEntry(entry: RhythmEntry, dateKey: string) {
-   const recommendation = getProactiveRecommendation(
-      `${dateKey}:${entry.id}`,
-      categoryForEntry(entry),
-      Math.max(5, entry.durationMinutes || 30),
-      entry.title,
-   );
-   return recommendation?.title;
-}
-
 function addTwoPhaseJobs({
    jobs,
    device,
@@ -160,9 +105,9 @@ function addTwoPhaseJobs({
    startAt,
    title,
    priority,
-   tone,
-   recommendation,
+   buildCopyContext,
    includePrep,
+   actionTarget,
 }: {
    jobs: PushPlanJob[];
    device: string;
@@ -171,9 +116,9 @@ function addTwoPhaseJobs({
    startAt: number;
    title: string;
    priority: ReminderPriority;
-   tone: AllevinTone;
-   recommendation?: string;
+   buildCopyContext: (id: string, phase: ReminderPhase, leadMinutes: number) => NotificationCopyContext;
    includePrep?: boolean;
+   actionTarget?: PushPlanJob["actionTarget"];
 }) {
    const lead = prepLeadMinutes(priority);
    const prepAt = startAt - lead * 60_000;
@@ -184,36 +129,43 @@ function addTwoPhaseJobs({
    // explicit transition routine already ends at that exact start time; that
    // avoids two notifications describing the same transition in the same minute.
    if (includePrep !== false && prepAt > now + 5_000) {
+      const id = `${device}:${dateKey}:${sourceId}:prep:${startAt}`;
+      const copyContext = buildCopyContext(id, "prep", lead);
       jobs.push({
-         id: `${device}:${dateKey}:${sourceId}:prep:${startAt}`,
+         id,
          deviceId: device,
          dueAt: prepAt,
          title,
-         body: prepCopy(title, lead, tone, priority, `${dateKey}:${sourceId}:prep`),
+         body: fallbackNotificationBody(copyContext),
          tag: `allevin-${dateKey}-${sourceId}-prep`,
          url: "/",
          entryId: sourceId,
          phase: "prep",
          priority,
+         actionTarget,
+         copyContext,
       });
    }
 
    if (startAt > now + 5_000) {
+      const id = `${device}:${dateKey}:${sourceId}:start:${startAt}`;
+      const copyContext = buildCopyContext(id, "start", lead);
       jobs.push({
-         id: `${device}:${dateKey}:${sourceId}:start:${startAt}`,
+         id,
          deviceId: device,
          dueAt: startAt,
          title,
-         body: startCopy(title, tone, priority, `${dateKey}:${sourceId}:start`, recommendation),
+         body: fallbackNotificationBody(copyContext),
          tag: `allevin-${dateKey}-${sourceId}-start`,
          url: "/",
          entryId: sourceId,
          phase: "start",
          priority,
+         actionTarget,
+         copyContext,
       });
    }
 }
-
 
 function hasExplicitTransitionInto(schedule: RhythmEntry, entries: RhythmEntry[]) {
    if (schedule.kind !== "schedule") return false;
@@ -234,6 +186,8 @@ function buildPushPlan(device: string) {
    const now = new Date();
    const horizon = Date.now() + HORIZON_HOURS * 60 * 60 * 1000;
    const jobs: PushPlanJob[] = [];
+   const lifeItems = readLifeState().items;
+   const timelineByDate = new Map<string, ReturnType<typeof buildNotificationTimeline>>();
 
    for (let offset = 0; offset <= 2; offset += 1) {
       const date = new Date(now);
@@ -242,9 +196,11 @@ function buildPushPlan(device: string) {
       const dateKey = localDateKey(date);
 
       const entries = buildRhythmForDate(rhythm, date);
+      const timeline = buildNotificationTimeline(date, entries, lifeItems);
+      timelineByDate.set(dateKey, timeline);
       for (const entry of entries) {
          if (!shouldScheduleRhythm(entry, dateKey)) continue;
-         const startAt = timestampForClock(date, entry.time);
+         const startAt = timestampForLocalClock(date, entry.time);
          if (startAt > horizon) continue;
          const priority = rateRhythmEntry(entry);
          addTwoPhaseJobs({
@@ -255,14 +211,16 @@ function buildPushPlan(device: string) {
             startAt,
             title: entry.title,
             priority,
-            tone,
-            recommendation: recommendationForEntry(entry, dateKey),
+            buildCopyContext: (id, phase, leadMinutes) => rhythmNotificationContext({ id, entry, date, phase, tone, priority, leadMinutes, timeline }),
             includePrep: !hasExplicitTransitionInto(entry, entries),
+            actionTarget: entry.kind === "anchor"
+               ? { source: "rhythm", id: entry.sourceId, dateKey }
+               : undefined,
          });
       }
    }
 
-   for (const item of readLifeState().items) {
+   for (const item of lifeItems) {
       if (
          item.state !== "active" ||
          (item.kind !== "commitment" && item.kind !== "task") ||
@@ -273,6 +231,8 @@ function buildPushPlan(device: string) {
       if (!startAt || startAt <= Date.now() + 5_000 || startAt > horizon) continue;
       const date = new Date(startAt);
       const dateKey = localDateKey(date);
+      const timeline = timelineByDate.get(dateKey) || buildNotificationTimeline(date, buildRhythmForDate(rhythm, date), lifeItems);
+      const priority = rateLifeItem(item);
       addTwoPhaseJobs({
          jobs,
          device,
@@ -280,8 +240,9 @@ function buildPushPlan(device: string) {
          dateKey,
          startAt,
          title: item.title,
-         priority: rateLifeItem(item),
-         tone,
+         priority,
+         buildCopyContext: (id, phase, leadMinutes) => lifeNotificationContext({ id, item, phase, tone, priority, leadMinutes, timeline }),
+         actionTarget: { source: "life", id: item.id, dateKey },
       });
    }
 
@@ -289,7 +250,7 @@ function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxii9-server-push", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxiii-contextual-actions", {
       scope: "/",
       updateViaCache: "none",
    });
@@ -316,13 +277,18 @@ export async function syncServerNotificationSchedule() {
    if (!("Notification" in window) || Notification.permission !== "granted") return false;
 
    try {
-      const subscription = await ensurePushSubscription();
       const device = deviceId();
       const jobs = buildPushPlan(device);
+      const bodies = await prepareNotificationBodies(jobs.map((job) => job.copyContext));
+      const preparedJobs = jobs.map(({ copyContext, ...job }) => ({
+         ...job,
+         body: bodies.get(copyContext.id) || fallbackNotificationBody(copyContext),
+      }));
+      const subscription = await ensurePushSubscription();
       const response = await fetch("/api/allevin/push/sync", {
          method: "POST",
          headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({ deviceId: device, subscription: subscription.toJSON(), jobs }),
+         body: JSON.stringify({ deviceId: device, subscription: subscription.toJSON(), jobs: preparedJobs }),
       });
 
       if (!response.ok) throw new Error(`Push sync failed (${response.status}).`);

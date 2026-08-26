@@ -520,7 +520,7 @@ export function interpretLifestyleConversation(
          Boolean(last) &&
          (
             lower.includes(last!.choice.toLowerCase()) ||
-            /(?:that evening pick|that flexible choice|that option)/.test(lower)
+            /\b(?:that evening pick|that flexible choice|that option)\b/.test(lower)
          );
 
       if (last && referencesFlexibleChoice) {

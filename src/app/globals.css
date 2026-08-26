@@ -1173,6 +1173,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .onboarding-edit-card { display: grid; gap: 15px; border-top: 1px solid var(--line-strong); padding-top: 18px; }
 .onboarding-card-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .onboarding-card-head > strong { font-size: .95rem; letter-spacing: -.015em; }
+.onboarding-summary-button { min-width: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 20px; padding: 5px 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+.onboarding-summary-copy { min-width: 0; display: grid; gap: 7px; }
+.onboarding-summary-copy strong { display: block; font-size: .9rem; }
+.onboarding-summary-copy > span { display: block; color: var(--muted); font-size: .73rem; line-height: 1.45; }
+.onboarding-edit-cue { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-size: .69rem; font-weight: 780; white-space: nowrap; }
+.onboarding-summary-button:hover .onboarding-edit-cue,
+.onboarding-summary-button:focus-visible .onboarding-edit-cue { color: var(--ink); }
 .onboarding-day-picker { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
 .onboarding-day-picker button {
    min-height: 40px;
@@ -1238,8 +1245,17 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .onboarding-install-note strong { color: var(--ink); }
 .onboarding-review { display: grid; border-top: 1px solid var(--line-strong); }
 .onboarding-review > div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 18px; padding: 14px 0; border-bottom: 1px solid var(--line); }
-.onboarding-review span { color: var(--muted); font-size: .72rem; font-weight: 700; }
-.onboarding-review strong { font-size: .78rem; line-height: 1.5; font-weight: 670; }
+.onboarding-review > div > span { color: var(--muted); font-size: .72rem; font-weight: 700; }
+.onboarding-review > div > strong { font-size: .78rem; line-height: 1.5; font-weight: 670; }
+.onboarding-review-list { min-width: 0; display: grid; gap: 11px; }
+.onboarding-review-routine { min-width: 0; display: grid; gap: 3px; }
+.onboarding-review-routine + .onboarding-review-routine { padding-top: 11px; border-top: 1px solid var(--line); }
+.onboarding-review-routine strong { font-size: .8rem; line-height: 1.35; font-weight: 720; }
+.onboarding-review-routine span { color: var(--muted); font-size: .73rem; line-height: 1.45; font-weight: 560; }
+.onboarding-live-preview { margin-top: 18px; padding-top: 16px; }
+.onboarding-live-preview > strong { margin-bottom: 5px; font-size: .82rem; }
+.onboarding-live-preview > div { grid-template-columns: 150px minmax(0, 1fr); }
+.onboarding-live-preview > small { margin-top: 12px; color: var(--muted); }
 .onboarding-error { color: var(--danger) !important; font-size: .78rem !important; }
 .onboarding-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
 .onboarding-actions-start { justify-content: flex-start; border-top: 0; padding-top: 10px; }
@@ -1300,7 +1316,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
    .onboarding-choice-row button { width: 100%; }
    .onboarding-tone-grid button { min-height: 88px; }
    .onboarding-day-picker { grid-template-columns: repeat(4, 1fr); }
+   .onboarding-summary-button { gap: 14px; }
    .onboarding-review > div { grid-template-columns: 1fr; gap: 5px; }
+   .onboarding-review-list { gap: 10px; padding-top: 2px; }
    .onboarding-actions { align-items: stretch; }
    .onboarding-actions button { flex: 1; }
    .onboarding-actions-start { flex-direction: column; }

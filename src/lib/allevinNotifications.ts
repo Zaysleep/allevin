@@ -16,15 +16,22 @@ import {
    readDailyRhythm,
    type RhythmEntry,
 } from "@/lib/dailyRhythm";
-import { getProactiveRecommendation, type RecommendationCategory } from "@/lib/allevinRecommendations";
-import { readAllevinTone, rhythmVoice, type AllevinTone } from "@/lib/allevinVoice";
+import { notificationBodyFromCache } from "@/lib/allevinNotificationCopyClient";
+import {
+   buildNotificationTimeline,
+   lifeNotificationContext,
+   rhythmNotificationContext,
+   timedLifeItemsForDate,
+} from "@/lib/allevinNotificationScheduleContext";
+import { readAllevinTone } from "@/lib/allevinVoice";
 import { readLifeState } from "@/lib/lifeStore";
 import type { LifeItem, LifeImportance } from "@/lib/lifeTypes";
 import { serverPushIsActive } from "@/lib/allevinServerPushClient";
 
 const NOTIFICATION_LOG_KEY = "allevin-notification-log-mkxii-3";
-const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxii9-server-push";
+const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxiii-contextual-actions";
 let reminderCheckRunning = false;
+type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 
 function canNotify() {
    return typeof window !== "undefined" && "Notification" in window && "serviceWorker" in navigator;
@@ -81,31 +88,21 @@ async function showNotification(title: string, body: string, tag: string, entryI
    });
 }
 
-function recommendationCategoryForEntry(entry: RhythmEntry): RecommendationCategory {
-   const title = entry.title.toLowerCase();
-   if (entry.category === "exercise" || /gym|workout|run|cardio|strength|lift|mobility/.test(title)) return "workout";
-   if (entry.category === "meal" && /breakfast|coffee|matcha|morning/.test(title)) return "breakfast";
-   if (/commute|leave|prep|get ready|hygiene|shower/.test(title)) return "transition";
-   if (entry.category === "work" || entry.category === "school") return "focus";
-   return "general";
-}
-
-
-function localReminderPriorityForEntry(entry: RhythmEntry) {
+function localReminderPriorityForEntry(entry: RhythmEntry): ReminderPriority {
    let score = 2;
    if (entry.kind === "schedule") score = 4;
    if (entry.category === "exercise") score = 3;
    if (entry.category === "work" || entry.category === "school") score = 4;
    if (/commute|leave|travel/.test(entry.title.toLowerCase())) score = 4;
-   return Math.max(1, Math.min(5, score));
+   return Math.max(1, Math.min(5, score)) as ReminderPriority;
 }
 
-function localReminderPriorityForLife(item: LifeItem) {
+function localReminderPriorityForLife(item: LifeItem): ReminderPriority {
    let score = item.kind === "commitment" ? 4 : 3;
    const shift: Record<LifeImportance, number> = { low: -1, normal: 0, high: 1 };
    score += shift[item.importance];
    if (item.timingPrecision !== "exact") score -= 1;
-   return Math.max(1, Math.min(5, score));
+   return Math.max(1, Math.min(5, score)) as ReminderPriority;
 }
 
 function leadMinutesForPriority(priority: number) {
@@ -116,52 +113,11 @@ function leadMinutesForPriority(priority: number) {
    return 5;
 }
 
-function prepCopy(title: string, lead: number, tone: AllevinTone) {
-   if (tone === "calm") return `${title} starts in ${lead} minutes. Get what you need ready so the transition stays easy.`;
-   if (tone === "balanced") return `${title} in ${lead} minutes. Get set now so you can start on time.`;
-   return `${title} in ${lead}. Get set now and spare future-you the stupid little scramble.`;
-}
-
-function startCopy(entry: RhythmEntry, tone: AllevinTone, dateKey: string) {
-   const base = rhythmVoice("start", entry.title, tone, `${dateKey}:${entry.sourceId}:start`);
-   const category = recommendationCategoryForEntry(entry);
-
-   // Recommendation assignments are reused by Up Next and Talk to ALLEVIN.
-   // A notification therefore cannot quietly invent a fourth "today's focus."
-   const recommendation = getProactiveRecommendation(
-      `${dateKey}:${entry.id}`,
-      category,
-      Math.max(5, entry.durationMinutes || 30),
-      entry.title,
-   );
-
-   if (!recommendation) return base;
-
-   // Keep notifications glanceable. The full detail stays in Up Next.
-   return `${base} ${recommendation.title}`;
-}
-
-function sameLocalDay(timestamp: number, date: Date) {
-   const target = new Date(timestamp);
-   return (
-      target.getFullYear() === date.getFullYear() &&
-      target.getMonth() === date.getMonth() &&
-      target.getDate() === date.getDate()
-   );
-}
-
 function lifeStartMinutes(item: LifeItem) {
    const timestamp = item.startAt || item.dueAt;
    if (!timestamp) return null;
    const date = new Date(timestamp);
    return date.getHours() * 60 + date.getMinutes();
-}
-
-function lifeReminderCopy(item: LifeItem, tone: AllevinTone, seed: string) {
-   if (tone === "direct") {
-      return `${item.title} is up. Give it the attention it actually needs, then get back out.`;
-   }
-   return rhythmVoice("start", item.title, tone, seed);
 }
 
 /**
@@ -186,10 +142,13 @@ export async function runRhythmReminderCheck(now = new Date()) {
       if (!rhythm.remindersEnabled) return;
 
       const tone = readAllevinTone();
-   const key = localDateKey(now);
-   const log = readLog();
-   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-   const entries = buildRhythmForDate(rhythm, now);
+      const key = localDateKey(now);
+      const log = readLog();
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const entries = buildRhythmForDate(rhythm, now);
+      const life = readLifeState();
+      const timedItems = timedLifeItemsForDate(life.items, now);
+      const timeline = buildNotificationTimeline(now, entries, life.items);
 
    for (const entry of entries) {
       if (entry.completed || entry.skipped) continue;
@@ -209,9 +168,10 @@ export async function runRhythmReminderCheck(now = new Date()) {
          });
          const prepKey = `${key}:${entry.sourceId}:${entry.time}:schedule-prep`;
          if (!hasExplicitTransition && nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
+            const context = rhythmNotificationContext({ id: prepKey, entry, date: now, phase: "prep", tone, priority, leadMinutes: lead, timeline });
             await showNotification(
                entry.title,
-               prepCopy(entry.title, lead, tone),
+               notificationBodyFromCache(context),
                `allevin-${key}-${entry.sourceId}-${entry.time}-schedule-prep`,
                entry.sourceId,
             );
@@ -221,9 +181,10 @@ export async function runRhythmReminderCheck(now = new Date()) {
 
          const scheduleKey = `${key}:${entry.sourceId}:${entry.time}:schedule-start`;
          if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(scheduleKey)) {
+            const context = rhythmNotificationContext({ id: scheduleKey, entry, date: now, phase: "start", tone, priority, leadMinutes: lead, timeline });
             await showNotification(
                entry.title,
-               rhythmVoice("start", entry.title, tone, scheduleKey),
+               notificationBodyFromCache(context),
                `allevin-${key}-${entry.sourceId}-${entry.time}-schedule`,
                entry.sourceId,
             );
@@ -247,9 +208,10 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const prepAt = start - lead;
       const prepKey = `${key}:${entry.sourceId}:${entry.time}:prep`;
       if (nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
+         const context = rhythmNotificationContext({ id: prepKey, entry, date: now, phase: "prep", tone, priority, leadMinutes: lead, timeline });
          await showNotification(
             entry.title,
-            prepCopy(entry.title, lead, tone),
+            notificationBodyFromCache(context),
             `allevin-${key}-${entry.sourceId}-${entry.time}-prep`,
             entry.sourceId,
          );
@@ -260,9 +222,10 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const startKey = `${key}:${entry.sourceId}:${entry.time}:start`;
 
       if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(startKey)) {
+         const context = rhythmNotificationContext({ id: startKey, entry, date: now, phase: "start", tone, priority, leadMinutes: lead, timeline });
          await showNotification(
             entry.title,
-            startCopy(entry, tone, key),
+            notificationBodyFromCache(context),
             `allevin-${key}-${entry.sourceId}-${entry.time}-start`,
             entry.sourceId,
          );
@@ -274,17 +237,6 @@ export async function runRhythmReminderCheck(now = new Date()) {
 
    // One-off commitments (dinner, dentist, meetings, etc.) deserve the same
    // day-aware notification treatment as recurring routines.
-   const life = readLifeState();
-   const timedItems = life.items.filter(
-      (item) =>
-         item.state === "active" &&
-         (item.kind === "commitment" || item.kind === "task") &&
-         item.timingPrecision === "exact" &&
-         !item.allDay &&
-         Boolean(item.startAt || item.dueAt) &&
-         sameLocalDay(item.startAt || item.dueAt || 0, now),
-   );
-
    for (const item of timedItems) {
       const start = lifeStartMinutes(item);
       if (start === null) continue;
@@ -294,9 +246,10 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const prepAt = start - lead;
       const prepKey = `${key}:life:${item.id}:prep`;
       if (nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
+         const context = lifeNotificationContext({ id: prepKey, item, phase: "prep", tone, priority, leadMinutes: lead, timeline });
          await showNotification(
             item.title,
-            prepCopy(item.title, lead, tone),
+            notificationBodyFromCache(context),
             `allevin-${key}-life-${item.id}-prep`,
             item.id,
          );
@@ -306,9 +259,10 @@ export async function runRhythmReminderCheck(now = new Date()) {
 
       const eventKey = `${key}:life:${item.id}:start`;
       if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(eventKey)) {
+         const context = lifeNotificationContext({ id: eventKey, item, phase: "start", tone, priority, leadMinutes: lead, timeline });
          await showNotification(
             item.title,
-            lifeReminderCopy(item, tone, eventKey),
+            notificationBodyFromCache(context),
             `allevin-${key}-life-${item.id}-start`,
             item.id,
          );
@@ -320,8 +274,6 @@ export async function runRhythmReminderCheck(now = new Date()) {
    // Personal Alpha notifications are intentionally limited to the two task
    // phases requested by the user: preparation and exact start. No automatic
    // accountability or generic evening-reset push is emitted here.
-
-
       saveLog(log);
    } finally {
       reminderCheckRunning = false;

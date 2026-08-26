@@ -3,6 +3,7 @@ import { rhythmVoice } from "@/lib/allevinVoice";
 import { buildRhythmForDate, formatClock, minutesFromClock, type DailyRhythmState } from "@/lib/dailyRhythm";
 import { buildLifeViews, formatLifeDate } from "@/lib/lifeEngine";
 import type { KinAction, LifeItem, LifeState } from "@/lib/lifeTypes";
+import { readLifestyleProfile } from "@/lib/allevinLifestyleProfile";
 
 export interface DayIntelligenceResult {
    handled: boolean;
@@ -541,7 +542,9 @@ export function mergeScheduleRelationReply(
 }
 
 /**
- * Blocks only true one-off-vs-one-off collisions and invalid references.
+ * Detects true one-off collisions and transition pressure. The caller may let
+ * the user confirm anyway; this function reports deterministic conflict truth
+ * but never silently decides that the event cannot exist.
  * Overlap with a recurring Work/Class/etc. schedule is allowed because that
  * block represents ongoing context. `assistantScheduleRelations()` reports the
  * relationship separately so the UI/chat can explain it without deleting the
@@ -607,7 +610,32 @@ export function preflightAssistantActions(
       });
 
       if (itemConflict) {
-         return `${proposed.title || "That"} overlaps ${itemConflict.title}. Those are both one-off commitments, so I need to know which one actually wins.`;
+         return `${proposed.title || "That"} overlaps ${itemConflict.title}. I left the schedule unchanged.`;
+      }
+
+      const travelMinutes = readLifestyleProfile().commuteMinutes || 0;
+      const neighbors = state.items
+         .filter((item) => item.state === "active" && item.kind === "commitment" && item.startAt)
+         .filter((item) => !action.targetId || item.id !== action.targetId)
+         .flatMap((item) => {
+            const interval = commitmentInterval(item);
+            if (!interval || overlaps(proposedInterval.start, proposedInterval.end, interval.start, interval.end)) return [];
+            const gapMs = interval.start >= proposedInterval.end
+               ? interval.start - proposedInterval.end
+               : proposedInterval.start - interval.end;
+            return [{ item, gapMinutes: Math.round(gapMs / 60_000) }];
+         })
+         .filter((neighbor) => neighbor.gapMinutes >= 0 && neighbor.gapMinutes <= Math.max(10, travelMinutes))
+         .sort((left, right) => left.gapMinutes - right.gapMinutes);
+      const nearest = neighbors[0];
+      if (nearest) {
+         const travelApplies = travelMinutes > 0 && Boolean(proposed.location || nearest.item.location);
+         if (travelApplies && nearest.gapMinutes < travelMinutes) {
+            return `${proposed.title || "That"} leaves ${nearest.gapMinutes} minutes next to ${nearest.item.title}, but your usual travel time is ${travelMinutes} minutes. I left the schedule unchanged.`;
+         }
+         if (nearest.gapMinutes <= 10) {
+            return `${proposed.title || "That"} leaves only ${nearest.gapMinutes} minutes next to ${nearest.item.title}. That transition is very tight, so I left the schedule unchanged.`;
+         }
       }
    }
 

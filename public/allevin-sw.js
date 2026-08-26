@@ -5,7 +5,7 @@
  * can wake the installed PWA later without changing the client UI contract.
  */
 
-const SW_VERSION = "mkxii8-personal-alpha";
+const SW_VERSION = "mkxiii-contextual-actions";
 
 self.addEventListener("install", () => {
   // Promote a newly deployed worker immediately. ALLEVIN stores user state in
@@ -39,6 +39,7 @@ self.addEventListener("push", (event) => {
   }
 
   const title = payload.title || "ALLEVIN";
+  const actionTarget = payload.data?.actionTarget;
   const options = {
     body: payload.body || "Something changed in your day.",
     tag: payload.tag || `allevin-push-${Date.now()}`,
@@ -49,6 +50,15 @@ self.addEventListener("push", (event) => {
       entryId: payload.entryId,
       ...(payload.data || {}),
     },
+    // These actions carry intent back into the app. The deterministic state
+    // engine applies them after launch; the worker never edits schedule truth.
+    ...(actionTarget ? {
+      actions: [
+        { action: "done", title: "Done" },
+        { action: "running-late", title: "Running late" },
+        { action: "skip", title: "Skip" },
+      ],
+    } : {}),
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
@@ -56,7 +66,16 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = event.notification?.data?.url || "/";
+  const data = event.notification?.data || {};
+  const actionTarget = data.actionTarget;
+  const targetUrl = new URL(data.url || "/", self.location.origin);
+  if (event.action && actionTarget) {
+    targetUrl.searchParams.set("allevinNotificationAction", event.action);
+    targetUrl.searchParams.set("source", actionTarget.source);
+    targetUrl.searchParams.set("id", actionTarget.id);
+    targetUrl.searchParams.set("date", actionTarget.dateKey);
+  }
+  const target = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {

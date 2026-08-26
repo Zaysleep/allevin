@@ -1,4 +1,4 @@
-import { buildRhythmForDate, localDateKey, minutesFromClock, type DailyRhythmState, type RhythmCategory, type RhythmEntry } from "@/lib/dailyRhythm";
+import { buildRhythmForDate, localDateKey, type DailyRhythmState, type RhythmCategory, type RhythmEntry } from "@/lib/dailyRhythm";
 import type { LifeItem, LifeState } from "@/lib/lifeTypes";
 
 export type UpNextSource = "rhythm" | "life";
@@ -165,6 +165,34 @@ export function buildUpNextItem(lifeState: LifeState, rhythmState: DailyRhythmSt
             (left.endAt || Number.MAX_SAFE_INTEGER) - (right.endAt || Number.MAX_SAFE_INTEGER),
       )[0];
    }
+
+   // An untimed/flexible item can be more useful than merely echoing the next
+   // chronological row, but it must fit cleanly before the next hard boundary.
+   // This is guidance over known state—not an optimization score exposed to
+   // the user, and never a claim that a flexible item was completed.
+   const todayKey = localDateKey(now);
+   const upcomingHard = candidates
+      .filter((candidate) => candidate.at >= nowMs)
+      .filter((candidate) => candidate.source === "life" ? candidate.life?.kind === "commitment" : candidate.rhythm?.kind === "schedule")
+      .sort((left, right) => left.at - right.at)[0];
+   const openMinutes = upcomingHard ? Math.floor((upcomingHard.at - nowMs) / 60_000) : 180;
+   const recoveryDay = (rhythmState.dayContexts[todayKey] || []).some((context) => context.kind === "recovery" || context.kind === "sleep-in");
+   const tomorrow = new Date(now);
+   tomorrow.setDate(now.getDate() + 1);
+   const tomorrowLoad = buildRhythmForDate(rhythmState, tomorrow).filter((entry) => !entry.skipped).length +
+      lifeState.items.filter((item) => item.state === "active" && Boolean(lifeTimestamp(item)) && localDateKey(new Date(lifeTimestamp(item) || 0)) === localDateKey(tomorrow)).length;
+   const flexibleNow = candidates
+      .filter((candidate) => candidate.dateKey === todayKey && candidate.at <= nowMs + 15 * 60_000)
+      .filter((candidate) => candidate.source === "life" ? candidate.life?.kind !== "commitment" : candidate.rhythm?.kind === "anchor" && candidate.rhythm.flexible)
+      .filter((candidate) => (candidate.durationMinutes || 30) + 10 <= openMinutes)
+      .filter((candidate) => !(recoveryDay && candidate.category === "exercise"))
+      .sort((left, right) => {
+         const importance = { low: 0, normal: 12, high: 28 };
+         const leftScore = (left.life ? importance[left.life.importance] : 10) + (tomorrowLoad >= 6 && (left.durationMinutes || 30) <= 30 ? 6 : 0);
+         const rightScore = (right.life ? importance[right.life.importance] : 10) + (tomorrowLoad >= 6 && (right.durationMinutes || 30) <= 30 ? 6 : 0);
+         return rightScore - leftScore || (left.durationMinutes || 30) - (right.durationMinutes || 30) || left.title.localeCompare(right.title);
+      })[0];
+   if (flexibleNow && openMinutes >= 30) return flexibleNow;
 
    return candidates.sort((left, right) => left.at - right.at || left.title.localeCompare(right.title))[0] || null;
 }

@@ -313,7 +313,7 @@ function cleanTaskTitle(value: string) {
       .replace(/^(?:can you\s+)?(?:please\s+)?(?:remind me to|don't let me forget(?: to)?|do not let me forget(?: to)?|remember to|i need(?: to)?|i have to|i've got to|i should|we need(?: to)?|we have to|need to|need)\s+/i, "")
       // Natural calendar language should not leak command words into the
       // calendar title or notification copy.
-      .replace(/^(?:add|schedule|book|create|put)\s+(?:a|an|the)?\s*/i, "")
+      .replace(/^(?:add|schedule|book|create|put)\s+(?:my|our|a|an|the)?\s*/i, "")
       .replace(/^(?:i|we)\s+(?:have|have got|got)\s+(?:a|an|the)?\s*/i, "")
       .replace(/^i(?:'|’)ve\s+got\s+(?:a|an|the)?\s*/i, "")
       .replace(/^(?:i|we)\s+want\s+to\s+/i, "")
@@ -498,7 +498,12 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
    const recurrence = parseRecurrence(raw);
    const date = parseDateTime(raw);
    const commitmentCue = /\b(?:appointment|meeting|class|lecture|dinner|lunch|breakfast|coffee|flight|event|reservation|interview|dentist|doctor|checkup|therapy|call)\b/i.test(raw);
-   const declarativeCommitment = Boolean(date.timestamp) && commitmentCue;
+   // “I have / I’ve got X Friday at 9” is ordinary calendar language even
+   // when X is not in a vocabulary list. “I have to X” remains a task. This
+   // broadens creation without teaching users a magic command or hardcoding
+   // their personal examples.
+   const possessionCommitment = Boolean(date.timestamp) && /^(?:i\s+have(?!\s+to\b)|i(?:'|’)ve\s+got|we\s+have(?!\s+to\b)|we(?:'|’)ve\s+got)\b/i.test(raw.trim());
+   const declarativeCommitment = Boolean(date.timestamp) && (commitmentCue || possessionCommitment);
    const actionCue =
       waiting ||
       someday ||
@@ -511,7 +516,7 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
    const title = cleanTaskTitle(raw);
    const context = contextFromText(raw);
    const importance = /\b(?:urgent|important|must|deadline|can't forget|cannot forget|due)\b/i.test(lower) ? "high" : "normal";
-   const kind = waiting ? "waiting" : recurrence !== "none" ? "routine" : commitmentCue ? "commitment" : "task";
+   const kind = waiting ? "waiting" : recurrence !== "none" ? "routine" : declarativeCommitment ? "commitment" : "task";
    const stateValue = waiting ? "waiting" : someday ? "someday" : "active";
    const timingPrecision = someday ? "someday" : date.precision;
 

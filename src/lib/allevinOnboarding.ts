@@ -56,9 +56,17 @@ export interface OnboardingDraft {
    tone: AllevinTone;
 }
 
+export interface OnboardingPreviewRow {
+   id: string;
+   title: string;
+   start: string;
+   end?: string;
+   kind: "commitment" | "routine";
+}
+
 interface OnboardingStatus {
    version: 1;
-   state: "completed" | "skipped";
+   state: "completed" | "skipped" | "phone-pending";
    at: number;
 }
 
@@ -122,14 +130,14 @@ export function readOnboardingStatus(): OnboardingStatus | null {
    if (typeof window === "undefined") return null;
    try {
       const parsed = JSON.parse(window.localStorage.getItem(ALLEVIN_ONBOARDING_STORAGE_KEY) || "null") as Partial<OnboardingStatus> | null;
-      if (!parsed || parsed.version !== 1 || (parsed.state !== "completed" && parsed.state !== "skipped")) return null;
+      if (!parsed || parsed.version !== 1 || (parsed.state !== "completed" && parsed.state !== "skipped" && parsed.state !== "phone-pending")) return null;
       return { version: 1, state: parsed.state, at: typeof parsed.at === "number" ? parsed.at : Date.now() };
    } catch {
       return null;
    }
 }
 
-export function markOnboardingState(state: "completed" | "skipped") {
+export function markOnboardingState(state: OnboardingStatus["state"]) {
    if (typeof window === "undefined") return;
    const status: OnboardingStatus = { version: 1, state, at: Date.now() };
    window.localStorage.setItem(ALLEVIN_ONBOARDING_STORAGE_KEY, JSON.stringify(status));
@@ -143,7 +151,9 @@ export function markOnboardingState(state: "completed" | "skipped") {
  */
 export function shouldShowNewUserOnboarding() {
    if (typeof window === "undefined") return false;
-   if (readOnboardingStatus()) return false;
+   const status = readOnboardingStatus();
+   if (status?.state === "phone-pending") return true;
+   if (status) return false;
    if (getAllevinUserProfile()) return false;
 
    const rhythm = readDailyRhythm();
@@ -198,6 +208,48 @@ export function createBlankRoutineDraft(scheduleBlockId?: string): OnboardingRou
       offsetMinutes: 30,
       durationMinutes: 30,
    };
+}
+
+function signedRoutineOffset(routine: OnboardingRoutineDraft, linked: Pick<OnboardingScheduleDraft, "start" | "end">) {
+   const reference = minutesFromClock(routine.timing === "before" ? linked.start : linked.end);
+   const chosen = minutesFromClock(routine.time || "08:00");
+   // A time near midnight may belong on the other side of the reference. Pick
+   // the closest same/adjacent-day distance, then enforce the chosen relation.
+   const candidates = [chosen - reference, chosen + 1440 - reference, chosen - 1440 - reference];
+   const expected = candidates
+      .filter((offset) => routine.timing === "before" ? offset <= 0 : offset >= 0)
+      .sort((left, right) => Math.abs(left) - Math.abs(right))[0];
+   if (typeof expected === "number") return expected;
+   const fallback = clampMinutes(routine.offsetMinutes, 30, 720);
+   return routine.timing === "before" ? -fallback : fallback;
+}
+
+/** Live preview is derived from the same relationship math used on commit. */
+export function buildOnboardingDayPreview(draft: OnboardingDraft, day: RhythmDay): OnboardingPreviewRow[] {
+   const blocks = draft.scheduleBlocks.filter((block) => block.days.includes(day));
+   const scheduleRows = blocks.map((block): OnboardingPreviewRow => ({
+      id: `schedule:${block.id}`,
+      title: sanitizeText(block.title, 120) || defaultScheduleTitle(block.category),
+      start: block.start,
+      end: block.end,
+      kind: "commitment",
+   }));
+   const routineRows = draft.routines.flatMap((routine): OnboardingPreviewRow[] => {
+      if (!sanitizeText(routine.title, 120)) return [];
+      if (routine.timing === "fixed") {
+         if (routine.days.length && !routine.days.includes(day)) return [];
+         return [{ id: `routine:${routine.id}`, title: routine.title, start: routine.time, end: clockFromMinutes(minutesFromClock(routine.time) + clampMinutes(routine.durationMinutes, 30)), kind: "routine" }];
+      }
+      const referenceDraft = draft.scheduleBlocks.find((block) => block.id === routine.scheduleBlockId);
+      if (!referenceDraft) return [];
+      const dayBlock = blocks.find((block) => block.id === referenceDraft.id) ||
+         (referenceDraft.category !== "other" ? blocks.find((block) => block.category === referenceDraft.category) : undefined);
+      if (!dayBlock) return [];
+      const reference = minutesFromClock(routine.timing === "before" ? dayBlock.start : dayBlock.end);
+      const start = reference + signedRoutineOffset(routine, referenceDraft);
+      return [{ id: `routine:${routine.id}`, title: routine.title, start: clockFromMinutes(start), end: clockFromMinutes(start + clampMinutes(routine.durationMinutes, 30)), kind: "routine" }];
+   });
+   return [...scheduleRows, ...routineRows].sort((left, right) => minutesFromClock(left.start) - minutesFromClock(right.start));
 }
 
 /**
@@ -297,8 +349,10 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
          const linked = scheduleBlocks.find((block) => block.id === routine.scheduleBlockId);
 
          if (routine.timing !== "fixed" && linked) {
-            const offsetMagnitude = clampMinutes(routine.offsetMinutes, 30, 720);
-            const signedOffset = routine.timing === "before" ? -offsetMagnitude : offsetMagnitude;
+            // The user supplies an ordinary normal-day clock. ALLEVIN derives
+            // the relative offset internally and never asks them to calculate
+            // raw minutes from a schedule boundary.
+            const signedOffset = signedRoutineOffset(routine, linked);
             const referencePoint = routine.timing === "before" ? "start" : "end";
             const reference = minutesFromClock(referencePoint === "start" ? linked.start : linked.end);
             const sameCategoryBlocks = scheduleBlocks.filter((block) => block.category === linked.category);
@@ -377,7 +431,9 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
 
    saveAllevinUserProfile(cleanName);
    saveAllevinTone(draft.tone);
-   markOnboardingState("completed");
+   // Keep the last phone step resumable across the Safari → Home Screen
+   // handoff. Completion is recorded only after the user enters ALLEVIN.
+   markOnboardingState("phone-pending");
 
    // Give a first-time user one useful conversational handoff instead of a
    // blank assistant panel. This teaches the interaction model in one sentence

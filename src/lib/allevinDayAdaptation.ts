@@ -52,6 +52,12 @@ export interface ReconcileResult {
    adjustedTitles: string[];
 }
 
+export interface AdaptiveDayPreview {
+   handled: boolean;
+   reply: string;
+   requiresConfirmation?: boolean;
+}
+
 function normalize(value: string) {
    return value
       .toLowerCase()
@@ -193,6 +199,95 @@ function resolvedAnchorEntry(state: DailyRhythmState, anchor: RhythmAnchor, date
    return buildRhythmForDate(state, date).find(
       (entry) => entry.kind === "anchor" && entry.sourceId === anchor.id,
    );
+}
+
+function requestedExtensionMinutes(lower: string) {
+   const minutes = lower.match(/\b(?:another|extra)\s+(\d{1,3})\s*(?:minutes?|mins?)\b/);
+   if (minutes) return Math.max(5, Math.min(360, Number(minutes[1])));
+   const hours = lower.match(/\b(?:another|extra)\s+(\d+(?:\.\d+)?)\s*hours?\b/);
+   if (hours) return Math.max(5, Math.min(360, Math.round(Number(hours[1]) * 60)));
+   return 0;
+}
+
+function extensionAnchor(state: DailyRhythmState, lower: string, date: Date) {
+   const named = findAnchorFromPrompt(state, lower);
+   if (named) return named;
+   const now = new Date();
+   if (localDateKey(date) !== localDateKey(now)) return null;
+   const minutes = now.getHours() * 60 + now.getMinutes();
+   const active = buildRhythmForDate(state, date).filter((entry) => {
+      if (entry.kind !== "anchor" || entry.completed || entry.skipped) return false;
+      const start = minutesFromClock(entry.time);
+      return minutes >= start && minutes <= start + Math.max(5, entry.durationMinutes || 30);
+   });
+   return active.length === 1 ? state.anchors.find((anchor) => anchor.id === active[0].sourceId) || null : null;
+}
+
+/**
+ * Significant day changes get a deterministic consequence preview before any
+ * state is written. The preview names only consequences ALLEVIN can prove from
+ * the resolved day; the existing interpreter performs the actual mutation
+ * after confirmation.
+ */
+export function previewAdaptiveDayConversation(
+   prompt: string,
+   state: DailyRhythmState,
+): AdaptiveDayPreview {
+   const lower = normalize(prompt);
+   if (!lower || /\b(?:from now on|going forward|permanently)\b/.test(lower)) {
+      return { handled: false, reply: "" };
+   }
+   const isLate = /\b(?:overslept|slept in late|running \d{1,3} minutes? late|behind schedule|running behind)\b/.test(lower);
+   const extensionRequest = /\b(?:is taking longer than expected|need(?:s)? another|i need another|extra \d+)\b/.test(lower);
+   const mentionsEarlyWork = /\b(?:leaving work early|leave work early|getting off work early|get off work early)\b/.test(lower);
+   const changesWorkEnd =
+      /\b(?:leaving work|leave work|getting off work|get off work|work ends|working until)\b/.test(lower) &&
+      /\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(lower) &&
+      Boolean(parseClock(lower));
+   if (mentionsEarlyWork && !parseClock(lower)) {
+      return { handled: true, requiresConfirmation: false, reply: "What time will Work end? Tell me, for example, “Work ends at 4 today,” and I’ll preview what follows it before changing the day." };
+   }
+   if (extensionRequest) {
+      const anchor = extensionAnchor(state, lower, resolveAdaptiveTargetDate(lower, state));
+      const extra = requestedExtensionMinutes(lower);
+      if (!anchor) return { handled: false, reply: "" };
+      if (!extra) return { handled: true, requiresConfirmation: false, reply: `How much longer does ${anchor.title} need?` };
+      return {
+         handled: true,
+         requiresConfirmation: true,
+         reply: `If I make that change:\n- ${anchor.title} gets another ${extra} minutes\n- later flexible routines may move if the space closes\n- hard commitments stay fixed\n\nWant me to make the change?`,
+      };
+   }
+   if (!isLate && !changesWorkEnd) return { handled: false, reply: "" };
+
+   const date = resolveAdaptiveTargetDate(lower, state);
+   const entries = buildRhythmForDate(state, date).filter((entry) => !entry.completed && !entry.skipped);
+   const hard = entries.filter((entry) => entry.kind === "schedule");
+   const flexible = entries.filter((entry) => entry.kind === "anchor" && entry.flexible);
+   const consequences: string[] = [];
+
+   if (isLate) {
+      if (flexible.length) consequences.push(`${flexible.slice(0, 3).map((entry) => entry.title).join(", ")} may move, shorten, or drop if they no longer fit`);
+      if (hard.length) consequences.push(`${hard[0].title} stays protected at ${hard[0].time}`);
+      consequences.push("nothing is marked complete just because time passed");
+   } else {
+      const end = parseClock(lower);
+      const work = hard.find((entry) => entry.category === "work");
+      consequences.push(`Work ends at ${end ? new Date(2000, 0, 1, Number(end.split(":")[0]), Number(end.split(":")[1])).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "the new time"} for this day only`);
+      const afterWork = entries.filter((entry) => {
+         if (entry.kind !== "anchor") return false;
+         const anchor = state.anchors.find((candidate) => candidate.id === entry.sourceId);
+         return anchor?.timingMode === "schedule-relative" && anchor.scheduleReferencePoint === "end";
+      });
+      if (afterWork.length) consequences.push(`${afterWork.map((entry) => entry.title).slice(0, 3).join(", ")} follows the new Work end`);
+      if (work) consequences.push(`the normal ${work.title} schedule remains unchanged on other days`);
+   }
+
+   return {
+      handled: true,
+      requiresConfirmation: true,
+      reply: `If I make that change:\n- ${consequences.join("\n- ")}\n\nWant me to make the change?`,
+   };
 }
 
 function replacementTitle(prompt: string) {
@@ -445,6 +540,22 @@ export function interpretAdaptiveDayConversation(
    }
 
    const targetDate = resolveAdaptiveTargetDate(lower, state);
+
+   const extraMinutes = requestedExtensionMinutes(lower);
+   if (extraMinutes) {
+      const anchor = extensionAnchor(state, lower, targetDate);
+      const entry = anchor ? resolvedAnchorEntry(state, anchor, targetDate) : undefined;
+      if (anchor && entry) {
+         moveRhythmAnchorForDay(state, anchor.id, entry.time, targetDate, (entry.durationMinutes || anchor.durationMinutes) + extraMinutes, "Extended from conversation");
+         addRhythmDayContext(readDailyRhythm(), "event-change", prompt, targetDate);
+         return {
+            handled: true,
+            changed: true,
+            reply: `${anchor.title} gets another ${extraMinutes} minutes for this day. I left hard commitments in place.`,
+            narrationFacts: [`${anchor.title} was extended by ${extraMinutes} minutes on ${localDateKey(targetDate)}`, "Recurring duration was not changed", "Time passing did not imply completion"],
+         };
+      }
+   }
 
    // Explicitly cancelling Work/Class is different from merely feeling unwell.
    // The hard schedule changes only for this occurrence, and all schedule-linked

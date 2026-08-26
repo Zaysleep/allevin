@@ -122,11 +122,11 @@ function formatRelativeOffset(anchor: RhythmAnchor) {
 }
 
 function scheduleReferenceLabel(anchor: RhythmAnchor, state: DailyRhythmState) {
-   if (anchor.scheduleCategory) return `${categoryLabel(anchor.scheduleCategory)} schedule`;
+   if (anchor.scheduleCategory) return categoryLabel(anchor.scheduleCategory);
    if (anchor.scheduleBlockId) {
       return state.scheduleBlocks.find((block) => block.id === anchor.scheduleBlockId)?.title || "schedule";
    }
-   return "schedule";
+   return "regular commitment";
 }
 
 export default function RhythmSettingsEditor({
@@ -443,10 +443,13 @@ export default function RhythmSettingsEditor({
                            type="number"
                            min={5}
                            max={360}
-                           value={anchorDraft.durationMinutes}
+                           value={Number.isFinite(anchorDraft.durationMinutes) ? anchorDraft.durationMinutes : ""}
                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                              setAnchorDraft({ ...anchorDraft, durationMinutes: Number(event.target.value) || 30 })
+                              setAnchorDraft({ ...anchorDraft, durationMinutes: event.target.value === "" ? Number.NaN : Number(event.target.value) })
                            }
+                           onBlur={() => {
+                              if (!Number.isFinite(anchorDraft.durationMinutes) || anchorDraft.durationMinutes < 5) setAnchorDraft({ ...anchorDraft, durationMinutes: 30 });
+                           }}
                         />
                      </label>
                   </div>
@@ -472,7 +475,7 @@ export default function RhythmSettingsEditor({
                         }}
                      >
                         <option value="everyday">Every day</option>
-                        <option value="schedule" disabled={!scheduleReferences.length}>Follow a schedule</option>
+                        <option value="schedule" disabled={!scheduleReferences.length}>Same days as a regular commitment</option>
                         <option value="custom">Custom days</option>
                      </select>
                   </label>
@@ -500,7 +503,7 @@ export default function RhythmSettingsEditor({
                   {anchorDraft.repeatMode === "schedule" ? (
                      <>
                         <label>
-                           <span>Schedule</span>
+                           <span>Moves with</span>
                            <select
                               value={anchorDraft.scheduleReference || defaultScheduleReference}
                               onChange={(event: ChangeEvent<HTMLSelectElement>) =>
@@ -514,7 +517,7 @@ export default function RhythmSettingsEditor({
                         </label>
 
                         <label>
-                           <span>Timing</span>
+                           <span>Relationship</span>
                            <select
                               value={anchorDraft.timingMode}
                               onChange={(event: ChangeEvent<HTMLSelectElement>) =>
@@ -524,7 +527,7 @@ export default function RhythmSettingsEditor({
                                  })
                               }
                            >
-                              <option value="schedule-relative">Relative to schedule</option>
+                              <option value="schedule-relative">Moves when it moves</option>
                               <option value="fixed">Specific time</option>
                            </select>
                         </label>
@@ -544,8 +547,8 @@ export default function RhythmSettingsEditor({
                                  })
                               }
                            >
-                              <option value="before">Before schedule starts</option>
-                              <option value="after">After schedule ends</option>
+                              <option value="before">Before it starts</option>
+                              <option value="after">After it ends</option>
                            </select>
                         </label>
                         <label>
@@ -554,10 +557,11 @@ export default function RhythmSettingsEditor({
                               type="number"
                               min={0}
                               max={12}
-                              value={anchorDraft.relativeHours}
+                              value={Number.isFinite(anchorDraft.relativeHours) ? anchorDraft.relativeHours : ""}
                               onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                                 setAnchorDraft({ ...anchorDraft, relativeHours: Number(event.target.value) || 0 })
+                                 setAnchorDraft({ ...anchorDraft, relativeHours: event.target.value === "" ? Number.NaN : Number(event.target.value) })
                               }
+                              onBlur={() => { if (!Number.isFinite(anchorDraft.relativeHours)) setAnchorDraft({ ...anchorDraft, relativeHours: 0 }); }}
                            />
                         </label>
                         <label>
@@ -566,10 +570,11 @@ export default function RhythmSettingsEditor({
                               type="number"
                               min={0}
                               max={59}
-                              value={anchorDraft.relativeMinutes}
+                              value={Number.isFinite(anchorDraft.relativeMinutes) ? anchorDraft.relativeMinutes : ""}
                               onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                                 setAnchorDraft({ ...anchorDraft, relativeMinutes: Number(event.target.value) || 0 })
+                                 setAnchorDraft({ ...anchorDraft, relativeMinutes: event.target.value === "" ? Number.NaN : Number(event.target.value) })
                               }
+                              onBlur={() => { if (!Number.isFinite(anchorDraft.relativeMinutes)) setAnchorDraft({ ...anchorDraft, relativeMinutes: 0 }); }}
                            />
                         </label>
                      </div>
