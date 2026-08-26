@@ -211,6 +211,39 @@ export default function KinDock() {
             return;
          }
 
+         // Obvious create/move/complete/remove requests should not depend on the
+         // model returning a tool action. The model can still handle ambiguous
+         // language, but deterministic ALLEVIN state logic owns high-confidence
+         // mutations such as “I have a dentist appointment at 4:45” or
+         // “Remind me at 4:45 to test notifications.”
+         const deterministicMutation = interpretKinLocally(prompt, currentState);
+         if (deterministicMutation.actions.length) {
+            const conflict = preflightAssistantActions(
+               deterministicMutation.actions,
+               currentState,
+               effectiveRhythm,
+               prompt,
+            );
+            if (conflict) {
+               appendKinMessage("assistant", conflict);
+               return;
+            }
+
+            const relations = assistantScheduleRelations(
+               deterministicMutation.actions,
+               currentState,
+               effectiveRhythm,
+               prompt,
+            );
+            captureAssistantUndo(prompt);
+            const applied = applyKinActions(deterministicMutation.actions);
+            const reconciled = reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
+            const rawReply = deterministicMutation.reply || (applied.applied.length ? applied.applied.join(". ") : "Done.");
+            const reply = mergeScheduleRelationReply(rawReply, relations);
+            appendKinMessage("assistant", `${reply}${adaptationReplySuffix(reconciled)}`);
+            return;
+         }
+
          const snapshot = getLifeSnapshot(currentState);
          const response = await requestKinLLM({
             mode: "kin-life",

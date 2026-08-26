@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, ChevronLeft, ChevronRight, Plus, Share2, Smartphone, X } from "lucide-react";
+import { Bell, ChevronLeft, ChevronRight, Share2, Smartphone, X } from "lucide-react";
 import type { ChangeEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -31,7 +31,15 @@ const DAYS: Array<{ value: RhythmDay; label: string }> = [
    { value: 6, label: "Sat" },
 ];
 
-const STEP_TITLES = ["Welcome", "Your name", "Your week", "Your routines", "Your free time", "A few details", "Review", "Notifications"];
+const STEP_TITLES = ["Welcome", "Your name", "Your schedule", "Your routines", "Your free time", "A few details", "Review", "Notifications"];
+
+const COMMON_ROUTINES: Array<{ title: string; timing: "before" | "after" }> = [
+   { title: "Workout", timing: "before" },
+   { title: "Get ready", timing: "before" },
+   { title: "Meal", timing: "before" },
+   { title: "Commute", timing: "before" },
+   { title: "Wind down", timing: "after" },
+];
 
 function toggleDay(days: RhythmDay[], day: RhythmDay) {
    return days.includes(day) ? days.filter((value) => value !== day) : [...days, day].sort();
@@ -58,7 +66,7 @@ function scheduleLabel(block: OnboardingScheduleDraft) {
    if (block.title.trim()) return block.title.trim();
    if (block.category === "work") return "Work";
    if (block.category === "school") return "Class";
-   return "Weekly block";
+   return "Regular commitment";
 }
 
 function toneLabel(tone: AllevinTone) {
@@ -76,6 +84,49 @@ function readableClock(clock: string) {
 function readableDays(days: RhythmDay[]) {
    if (days.length === 7) return "Every day";
    return days.map((day) => DAYS.find((item) => item.value === day)?.label || "").filter(Boolean).join(", ");
+}
+
+function readableDuration(minutes: number) {
+   const safe = Math.max(0, Math.round(minutes || 0));
+   const hours = Math.floor(safe / 60);
+   const remainder = safe % 60;
+   if (hours && remainder) return `${hours} hr ${remainder} min`;
+   if (hours) return `${hours} hr`;
+   return `${remainder} min`;
+}
+
+function relativeTimingValue(routine: OnboardingRoutineDraft) {
+   if (routine.timing === "fixed" || !routine.scheduleBlockId) return "fixed";
+   return `${routine.timing}:${routine.scheduleBlockId}`;
+}
+
+function routineReferenceBlocks(blocks: OnboardingScheduleDraft[]) {
+   const seen = new Set<string>();
+   return blocks.filter((block) => {
+      if (block.category === "other") return true;
+      if (seen.has(block.category)) return false;
+      seen.add(block.category);
+      return true;
+   });
+}
+
+function routineReferenceLabel(block: OnboardingScheduleDraft, blocks: OnboardingScheduleDraft[]) {
+   const base = scheduleLabel(block);
+   const sameCategoryCount = blocks.filter((candidate) => candidate.category === block.category).length;
+   if (block.category !== "other" && sameCategoryCount > 1) return `${base} (all ${base} days)`;
+   return base;
+}
+
+function routineReviewLabel(routine: OnboardingRoutineDraft, blocks: OnboardingScheduleDraft[]) {
+   const title = routine.title.trim() || "Routine";
+   const duration = `${readableDuration(routine.durationMinutes)} long`;
+   if (routine.timing === "fixed") {
+      return `${title} · ${duration} · ${readableDays(routine.days)} at ${readableClock(routine.time)}`;
+   }
+   const block = blocks.find((item) => item.id === routine.scheduleBlockId);
+   const reference = block ? routineReferenceLabel(block, blocks) : "your schedule";
+   const relation = routine.timing === "before" ? `before ${reference} starts` : `after ${reference} ends`;
+   return `${title} · ${duration} · ${readableDuration(routine.offsetMinutes)} ${relation}`;
 }
 
 export default function OnboardingFlow({
@@ -127,6 +178,48 @@ export default function OnboardingFlow({
          ...current,
          routines: current.routines.map((routine) => routine.id === id ? { ...routine, ...patch } : routine),
       }));
+   }
+
+   function addSchedule(category: OnboardingScheduleDraft["category"], title: string) {
+      const block = { ...createBlankScheduleDraft(), category, title };
+      setDraft((current) => ({ ...current, scheduleBlocks: [...current.scheduleBlocks, block] }));
+   }
+
+   function addRoutine(title = "", timing: "before" | "after" = "before") {
+      setDraft((current) => {
+         const routine = createBlankRoutineDraft(current.scheduleBlocks[0]?.id);
+         return {
+            ...current,
+            routines: [
+               ...current.routines,
+               {
+                  ...routine,
+                  title,
+                  timing: current.scheduleBlocks.length ? timing : "fixed",
+               },
+            ],
+         };
+      });
+   }
+
+   function updateRoutineTiming(routine: OnboardingRoutineDraft, value: string) {
+      if (value === "fixed") {
+         updateRoutine(routine.id, { timing: "fixed", scheduleBlockId: undefined });
+         return;
+      }
+      const [timing, scheduleBlockId] = value.split(":");
+      if ((timing === "before" || timing === "after") && scheduleBlockId) {
+         updateRoutine(routine.id, { timing, scheduleBlockId });
+      }
+   }
+
+   function updateRoutineOffsetPart(routine: OnboardingRoutineDraft, part: "hours" | "minutes", rawValue: string) {
+      const currentHours = Math.floor((routine.offsetMinutes || 0) / 60);
+      const currentMinutes = (routine.offsetMinutes || 0) % 60;
+      const parsed = rawValue === "" ? 0 : Math.max(0, Number(rawValue) || 0);
+      const hours = part === "hours" ? Math.min(12, parsed) : currentHours;
+      const minutes = part === "minutes" ? Math.min(59, parsed) : currentMinutes;
+      updateRoutine(routine.id, { offsetMinutes: hours * 60 + minutes });
    }
 
    function skipSetup() {
@@ -212,49 +305,92 @@ export default function OnboardingFlow({
                {step === 2 ? (
                   <section className="onboarding-step">
                      <span className="onboarding-kicker">Your normal week</span>
-                     <h2>What usually takes up your week?</h2>
-                     <p>Add work, school, classes, caregiving, or anything else that regularly stays put. You can leave this empty if your week changes too much.</p>
-                     <div className="onboarding-stack">
-                        {draft.scheduleBlocks.map((block) => (
-                           <article className="onboarding-edit-card" key={block.id}>
-                              <div className="onboarding-card-head"><strong>{scheduleLabel(block)}</strong><button className="icon-button" type="button" onClick={() => removeSchedule(block.id)} aria-label="Remove weekly block"><X size={15} /></button></div>
-                              <div className="onboarding-grid-two">
-                                 <label className="onboarding-field"><span>Type</span><select value={block.category} onChange={(event) => updateSchedule(block.id, { category: event.target.value as OnboardingScheduleDraft["category"] })}><option value="work">Work</option><option value="school">School or class</option><option value="other">Other</option></select></label>
-                                 <label className="onboarding-field"><span>Name</span><input value={block.title} onChange={(event) => updateSchedule(block.id, { title: event.target.value })} placeholder={block.category === "work" ? "Work" : block.category === "school" ? "Class" : "Weekly block"} /></label>
-                              </div>
-                              <label className="onboarding-field"><span>Days</span><DayPicker value={block.days} onChange={(days) => updateSchedule(block.id, { days })} /></label>
-                              <div className="onboarding-grid-two"><label className="onboarding-field"><span>Starts</span><input type="time" value={block.start} onChange={(event) => updateSchedule(block.id, { start: event.target.value })} /></label><label className="onboarding-field"><span>Ends</span><input type="time" value={block.end} onChange={(event) => updateSchedule(block.id, { end: event.target.value })} /></label></div>
-                           </article>
-                        ))}
+                     <h2>What stays on your calendar most weeks?</h2>
+                     <p>Add the regular commitments ALLEVIN should plan around, like work, school, classes, or caregiving. If your week is unpredictable, you can leave this empty and add things later.</p>
+
+                     <div className="onboarding-quick-add">
+                        <span>Quick add</span>
+                        <div className="onboarding-choice-row">
+                           <button type="button" onClick={() => addSchedule("work", "Work")}>+ Work</button>
+                           <button type="button" onClick={() => addSchedule("school", "Class")}>+ School or class</button>
+                           <button type="button" onClick={() => addSchedule("other", "")}>+ Something else</button>
+                        </div>
                      </div>
-                     <button className="onboarding-add" type="button" onClick={() => setDraft((current) => ({ ...current, scheduleBlocks: [...current.scheduleBlocks, createBlankScheduleDraft()] }))}><Plus size={15} /> Add a weekly block</button>
+
+                     {draft.scheduleBlocks.length ? (
+                        <div className="onboarding-stack">
+                           {draft.scheduleBlocks.map((block) => (
+                              <article className="onboarding-edit-card" key={block.id}>
+                                 <div className="onboarding-card-head"><strong>{scheduleLabel(block)}</strong><button className="icon-button" type="button" onClick={() => removeSchedule(block.id)} aria-label="Remove regular commitment"><X size={15} /></button></div>
+                                 <div className="onboarding-grid-two">
+                                    <label className="onboarding-field"><span>What is it?</span><select value={block.category} onChange={(event) => updateSchedule(block.id, { category: event.target.value as OnboardingScheduleDraft["category"] })}><option value="work">Work</option><option value="school">School or class</option><option value="other">Other</option></select></label>
+                                    <label className="onboarding-field"><span>What should ALLEVIN call it?</span><input value={block.title} onChange={(event) => updateSchedule(block.id, { title: event.target.value })} placeholder={block.category === "work" ? "Work" : block.category === "school" ? "Class" : "Regular commitment"} /></label>
+                                 </div>
+                                 <label className="onboarding-field"><span>Which days?</span><DayPicker value={block.days} onChange={(days) => updateSchedule(block.id, { days })} /></label>
+                                 <div className="onboarding-grid-two"><label className="onboarding-field"><span>Starts</span><input type="time" value={block.start} onChange={(event) => updateSchedule(block.id, { start: event.target.value })} /></label><label className="onboarding-field"><span>Ends</span><input type="time" value={block.end} onChange={(event) => updateSchedule(block.id, { end: event.target.value })} /></label></div>
+                              </article>
+                           ))}
+                        </div>
+                     ) : (
+                        <div className="onboarding-empty-note">Nothing added yet. That is completely fine if you do not have a repeating weekly schedule.</div>
+                     )}
+
                      <div className="onboarding-actions"><button className="onboarding-back" onClick={() => setStep(1)}><ChevronLeft size={16} /> Back</button><button className="onboarding-primary" onClick={() => setStep(3)}>Continue <ChevronRight size={16} /></button></div>
                   </section>
                ) : null}
 
                {step === 3 ? (
                   <section className="onboarding-step">
-                     <span className="onboarding-kicker">The things around it</span>
-                     <h2>What do you usually do around those plans?</h2>
-                     <p>Add routines like workouts, meals, commuting, studying, getting ready, or winding down. ALLEVIN can move these when the day changes.</p>
-                     <div className="onboarding-stack">
-                        {draft.routines.map((routine) => (
-                           <article className="onboarding-edit-card" key={routine.id}>
-                              <div className="onboarding-card-head"><strong>{routine.title.trim() || "Routine"}</strong><button className="icon-button" type="button" onClick={() => setDraft((current) => ({ ...current, routines: current.routines.filter((item) => item.id !== routine.id) }))} aria-label="Remove routine"><X size={15} /></button></div>
-                              <label className="onboarding-field"><span>What is it?</span><input value={routine.title} onChange={(event) => updateRoutine(routine.id, { title: event.target.value })} placeholder="Workout, breakfast, study…" /></label>
-                              <div className="onboarding-grid-two">
-                                 <label className="onboarding-field"><span>When</span><select value={routine.timing} onChange={(event) => updateRoutine(routine.id, { timing: event.target.value as OnboardingRoutineDraft["timing"] })}><option value="fixed">At a set time</option><option value="before" disabled={!draft.scheduleBlocks.length}>Before a weekly block</option><option value="after" disabled={!draft.scheduleBlocks.length}>After a weekly block</option></select></label>
-                                 <label className="onboarding-field"><span>How long?</span><div className="onboarding-number-unit"><input type="number" inputMode="numeric" min={5} max={360} value={routine.durationMinutes} onChange={(event) => updateRoutine(routine.id, { durationMinutes: Number(event.target.value) })} /><span>min</span></div></label>
-                              </div>
-                              {routine.timing === "fixed" ? (
-                                 <><label className="onboarding-field"><span>Days</span><DayPicker value={routine.days} onChange={(days) => updateRoutine(routine.id, { days })} /></label><label className="onboarding-field"><span>Time</span><input type="time" value={routine.time} onChange={(event) => updateRoutine(routine.id, { time: event.target.value })} /></label></>
-                              ) : (
-                                 <div className="onboarding-grid-two"><label className="onboarding-field"><span>{routine.timing === "before" ? "Before" : "After"}</span><select value={routine.scheduleBlockId || ""} onChange={(event) => updateRoutine(routine.id, { scheduleBlockId: event.target.value })}><option value="">Choose one</option>{draft.scheduleBlocks.map((block) => <option value={block.id} key={block.id}>{scheduleLabel(block)}</option>)}</select></label><label className="onboarding-field"><span>By how much?</span><div className="onboarding-number-unit"><input type="number" inputMode="numeric" min={5} max={720} value={routine.offsetMinutes} onChange={(event) => updateRoutine(routine.id, { offsetMinutes: Number(event.target.value) })} /><span>min</span></div></label></div>
-                              )}
-                           </article>
-                        ))}
+                     <span className="onboarding-kicker">Your routines</span>
+                     <h2>What usually happens around those commitments?</h2>
+                     <p>Add the things you regularly do before, after, or at a set time. ALLEVIN can move routines that are tied to your schedule when the day changes.</p>
+
+                     <div className="onboarding-quick-add">
+                        <span>Common routines</span>
+                        <div className="onboarding-choice-row">
+                           {COMMON_ROUTINES.map((item) => {
+                              const alreadyAdded = draft.routines.some((routine) => routine.title.trim().toLowerCase() === item.title.toLowerCase());
+                              return <button key={item.title} type="button" disabled={alreadyAdded} onClick={() => addRoutine(item.title, item.timing)}>{alreadyAdded ? "Added" : "+ " + item.title}</button>;
+                           })}
+                           <button type="button" onClick={() => addRoutine()}>+ Custom routine</button>
+                        </div>
                      </div>
-                     <button className="onboarding-add" type="button" onClick={() => setDraft((current) => ({ ...current, routines: [...current.routines, createBlankRoutineDraft(current.scheduleBlocks[0]?.id)] }))}><Plus size={15} /> Add a routine</button>
+
+                     {draft.routines.length ? (
+                        <div className="onboarding-stack">
+                           {draft.routines.map((routine) => {
+                              const linkedBlock = draft.scheduleBlocks.find((block) => block.id === routine.scheduleBlockId);
+                              const linkedName = linkedBlock ? routineReferenceLabel(linkedBlock, draft.scheduleBlocks) : "your schedule";
+                              const referenceBlocks = routineReferenceBlocks(draft.scheduleBlocks);
+                              const offsetHours = Math.floor((routine.offsetMinutes || 0) / 60);
+                              const offsetMinutes = (routine.offsetMinutes || 0) % 60;
+                              return (
+                                 <article className="onboarding-edit-card" key={routine.id}>
+                                    <div className="onboarding-card-head"><strong>{routine.title.trim() || "Routine"}</strong><button className="icon-button" type="button" onClick={() => setDraft((current) => ({ ...current, routines: current.routines.filter((item) => item.id !== routine.id) }))} aria-label="Remove routine"><X size={15} /></button></div>
+                                    <label className="onboarding-field"><span>What is it?</span><input value={routine.title} onChange={(event) => updateRoutine(routine.id, { title: event.target.value })} placeholder="Workout, breakfast, study…" /></label>
+                                    <div className="onboarding-grid-two">
+                                       <label className="onboarding-field"><span>When does it happen?</span><select value={relativeTimingValue(routine)} onChange={(event) => updateRoutineTiming(routine, event.target.value)}><option value="fixed">At a set time</option>{referenceBlocks.flatMap((block) => [<option value={`before:${block.id}`} key={`before-${block.id}`}>Before {routineReferenceLabel(block, draft.scheduleBlocks)}</option>, <option value={`after:${block.id}`} key={`after-${block.id}`}>After {routineReferenceLabel(block, draft.scheduleBlocks)}</option>])}</select></label>
+                                       <label className="onboarding-field"><span>How long does it take?</span><div className="onboarding-number-unit"><input type="number" inputMode="numeric" min={5} max={360} value={routine.durationMinutes || ""} onChange={(event) => updateRoutine(routine.id, { durationMinutes: event.target.value === "" ? 0 : Number(event.target.value) })} placeholder="30" /><span>min</span></div></label>
+                                    </div>
+                                    {routine.timing === "fixed" ? (
+                                       <><label className="onboarding-field"><span>Which days?</span><DayPicker value={routine.days} onChange={(days) => updateRoutine(routine.id, { days })} /></label><label className="onboarding-field"><span>What time?</span><input type="time" value={routine.time} onChange={(event) => updateRoutine(routine.id, { time: event.target.value })} /></label></>
+                                    ) : (
+                                       <div className="onboarding-offset-section">
+                                          <span className="onboarding-offset-label">{routine.timing === "before" ? `How long before ${linkedName} starts?` : `How long after ${linkedName} ends?`}</span>
+                                          <div className="onboarding-offset-fields">
+                                             <div className="onboarding-number-unit"><input aria-label="Hours" type="number" inputMode="numeric" min={0} max={12} value={offsetHours || ""} onChange={(event) => updateRoutineOffsetPart(routine, "hours", event.target.value)} placeholder="0" /><span>hr</span></div>
+                                             <div className="onboarding-number-unit"><input aria-label="Minutes" type="number" inputMode="numeric" min={0} max={59} value={offsetMinutes || ""} onChange={(event) => updateRoutineOffsetPart(routine, "minutes", event.target.value)} placeholder="30" /><span>min</span></div>
+                                          </div>
+                                          <small>{routine.timing === "before" ? `${routine.title.trim() || "This routine"} will move with ${linkedName}'s start time.` : `${routine.title.trim() || "This routine"} will move with ${linkedName}'s end time.`}</small>
+                                       </div>
+                                    )}
+                                 </article>
+                              );
+                           })}
+                        </div>
+                     ) : (
+                        <div className="onboarding-empty-note">No routines yet. Use a common one above or add a custom routine.</div>
+                     )}
                      <div className="onboarding-actions"><button className="onboarding-back" onClick={() => setStep(2)}><ChevronLeft size={16} /> Back</button><button className="onboarding-primary" onClick={() => setStep(4)}>Continue <ChevronRight size={16} /></button></div>
                   </section>
                ) : null}
@@ -299,11 +435,11 @@ export default function OnboardingFlow({
                   <section className="onboarding-step">
                      <span className="onboarding-kicker">One last look</span>
                      <h2>Here’s what I understood.</h2>
-                     <p>This will replace your recurring weekly setup if you already had one. One-off Calendar events stay where they are.</p>
+                     <p>This will replace your normal weekly schedule and routines if you already had them. One-off Calendar events stay where they are.</p>
                      <div className="onboarding-review">
                         <div><span>Name</span><strong>{draft.name || "Not added yet"}</strong></div>
-                        <div><span>Weekly blocks</span><strong>{draft.scheduleBlocks.length ? draft.scheduleBlocks.map((block) => `${scheduleLabel(block)} · ${readableDays(block.days)} · ${readableClock(block.start)}–${readableClock(block.end)}`).join(" / ") : "None added"}</strong></div>
-                        <div><span>Routines</span><strong>{draft.routines.length ? draft.routines.map((routine) => routine.title || "Routine").join(" · ") : "None added"}</strong></div>
+                        <div><span>Regular commitments</span><strong>{draft.scheduleBlocks.length ? draft.scheduleBlocks.map((block) => `${scheduleLabel(block)} · ${readableDays(block.days)} · ${readableClock(block.start)}–${readableClock(block.end)}`).join(" / ") : "None added"}</strong></div>
+                        <div><span>Routines</span><strong>{draft.routines.length ? draft.routines.map((routine) => routineReviewLabel(routine, draft.scheduleBlocks)).join(" / ") : "None added"}</strong></div>
                         <div><span>Free time</span><strong>{draft.hobbies.trim() || "Not added"}</strong></div>
                         <div><span>Bedtime</span><strong>{draft.bedtime || "Not added"}</strong></div>
                         <div><span>Typical travel time</span><strong>{draft.travelMinutes ? `${draft.travelMinutes} min` : "Not added"}</strong></div>

@@ -305,16 +305,27 @@ function cleanTaskTitle(value: string) {
    let clean = value.trim().replace(/[.!?]+$/, "");
    clean = clean
       .replace(/^(?:okay[, ]+|alright[, ]+|actually[, ]+)/i, "")
+      // "Remind me at 4:45 today to test notifications" should become
+      // "Test notifications", not "Remind me". Pull the requested action out
+      // before the generic date/time cleanup below runs.
+      .replace(/^(?:can you\s+)?(?:please\s+)?remind me\b.*?\bto\s+/i, "")
       .replace(/^(?:every|each)\s+(?:day|weekday|week|month|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(?:please\s+)?(?:remind me to|remember to)\s+/i, "")
       .replace(/^(?:can you\s+)?(?:please\s+)?(?:remind me to|don't let me forget(?: to)?|do not let me forget(?: to)?|remember to|i need(?: to)?|i have to|i've got to|i should|we need(?: to)?|we have to|need to|need)\s+/i, "")
+      // Natural calendar language should not leak command words into the
+      // calendar title or notification copy.
+      .replace(/^(?:add|schedule|book|create|put)\s+(?:a|an|the)?\s*/i, "")
+      .replace(/^(?:i|we)\s+(?:have|have got|got)\s+(?:a|an|the)?\s*/i, "")
+      .replace(/^i(?:'|’)ve\s+got\s+(?:a|an|the)?\s*/i, "")
       .replace(/^(?:i|we)\s+want\s+to\s+/i, "")
       .replace(/^i'?m\s+waiting\s+(?:on|for)\s+/i, "")
       .replace(/^we'?re\s+waiting\s+(?:on|for)\s+/i, "")
       .replace(/\b(?:today|tonight|tomorrow|day after tomorrow|next week|next month)\b.*$/i, "")
-      .replace(/\b(?:on|at|around)\s+(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b.*$/i, "")
+      .replace(/\b(?:on|at|around|for)\s+(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b.*$/i, "")
+      .replace(/\s+(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b.*$/i, "")
       .replace(/\b(?:at|around)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b.*$/i, "")
       .replace(/\s+(?:sometime\s+)?in\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s*$/i, "")
       .replace(/\s+(?:sometime|eventually)\s*$/i, "")
+      .replace(/\s+(?:for|on|at|around|by)\s*$/i, "")
       .trim();
    if (!clean) clean = value.trim().replace(/[.!?]+$/, "");
    const responseMatch = clean.match(/^(?:the\s+)?(.+?)\s+to\s+(?:respond|reply)$/i);
@@ -486,14 +497,21 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
    const someday = /\b(?:someday|eventually|one day|when i get around to it)\b/i.test(raw);
    const recurrence = parseRecurrence(raw);
    const date = parseDateTime(raw);
-   const actionCue = waiting || someday || recurrence !== "none" || /\b(?:remind me|don't let me forget|do not let me forget|i need(?: to)?|i have to|i should|we need(?: to)?|we have to|need(?: to)?|pick up|buy|call|email|submit|pay|renew|schedule|book|order|return|send|finish|complete|do)\b/i.test(raw);
+   const commitmentCue = /\b(?:appointment|meeting|class|lecture|dinner|lunch|breakfast|coffee|flight|event|reservation|interview|dentist|doctor|checkup|therapy|call)\b/i.test(raw);
+   const declarativeCommitment = Boolean(date.timestamp) && commitmentCue;
+   const actionCue =
+      waiting ||
+      someday ||
+      recurrence !== "none" ||
+      declarativeCommitment ||
+      /\b(?:remind me|don't let me forget|do not let me forget|i need(?: to)?|i have to|i should|we need(?: to)?|we have to|need(?: to)?|add|create|put|pick up|buy|call|email|submit|pay|renew|schedule|book|order|return|send|finish|complete|do)\b/i.test(raw);
 
    if (!actionCue) return { reply: localQuestionResponse(raw, state), actions: [] };
 
    const title = cleanTaskTitle(raw);
    const context = contextFromText(raw);
    const importance = /\b(?:urgent|important|must|deadline|can't forget|cannot forget|due)\b/i.test(lower) ? "high" : "normal";
-   const kind = waiting ? "waiting" : recurrence !== "none" ? "routine" : /\b(?:appointment|meeting|class|dinner|flight|event)\b/i.test(lower) ? "commitment" : "task";
+   const kind = waiting ? "waiting" : recurrence !== "none" ? "routine" : commitmentCue ? "commitment" : "task";
    const stateValue = waiting ? "waiting" : someday ? "someday" : "active";
    const timingPrecision = someday ? "someday" : date.precision;
 

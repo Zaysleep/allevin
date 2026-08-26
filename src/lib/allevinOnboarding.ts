@@ -82,7 +82,8 @@ function sanitizeText(value: string, limit = 80) {
 }
 
 function clampMinutes(value: number, fallback: number, max = 360) {
-   return Number.isFinite(value) ? Math.max(5, Math.min(max, Math.round(value))) : fallback;
+   if (!Number.isFinite(value) || value <= 0) return fallback;
+   return Math.max(5, Math.min(max, Math.round(value)));
 }
 
 function categoryForRoutine(title: string): RhythmCategory {
@@ -105,7 +106,7 @@ function scheduleCategory(category: OnboardingScheduleCategory): RhythmCategory 
 function defaultScheduleTitle(category: OnboardingScheduleCategory) {
    if (category === "work") return "Work";
    if (category === "school") return "Class";
-   return "Weekly block";
+   return "Regular commitment";
 }
 
 function lifestyleChoices(value: string) {
@@ -268,13 +269,13 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
    if (!cleanName) throw new Error("Add the name you want ALLEVIN to use first.");
 
    const incompleteSchedule = draft.scheduleBlocks.find((block) => !block.days.length || !block.start || !block.end);
-   if (incompleteSchedule) throw new Error("Choose at least one day, start time, and end time for each weekly block.");
+   if (incompleteSchedule) throw new Error("Choose at least one day, a start time, and an end time for each regular commitment.");
 
    const untitledRoutine = draft.routines.find((routine) => !sanitizeText(routine.title, 120));
    if (untitledRoutine) throw new Error("Give each routine a name, or remove the empty routine before continuing.");
 
    const unlinkedRelativeRoutine = draft.routines.find((routine) => routine.timing !== "fixed" && !draft.scheduleBlocks.some((block) => block.id === routine.scheduleBlockId));
-   if (unlinkedRelativeRoutine) throw new Error(`Choose what ${sanitizeText(unlinkedRelativeRoutine.title, 120)} should happen ${unlinkedRelativeRoutine.timing}.`);
+   if (unlinkedRelativeRoutine) throw new Error(`Choose which regular commitment ${sanitizeText(unlinkedRelativeRoutine.title, 120)} should happen ${unlinkedRelativeRoutine.timing}.`);
 
    const scheduleBlocks: RhythmScheduleBlock[] = draft.scheduleBlocks
       .filter((block) => block.days.length && block.start && block.end)
@@ -300,6 +301,8 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
             const signedOffset = routine.timing === "before" ? -offsetMagnitude : offsetMagnitude;
             const referencePoint = routine.timing === "before" ? "start" : "end";
             const reference = minutesFromClock(referencePoint === "start" ? linked.start : linked.end);
+            const sameCategoryBlocks = scheduleBlocks.filter((block) => block.category === linked.category);
+            const followWholeCategory = linked.category !== "other" && sameCategoryBlocks.length > 1;
 
             return {
                id: routine.id || makeId("anchor"),
@@ -311,7 +314,10 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
                reminder: true,
                accountabilityAfterMinutes: 15,
                dayRule: "schedule" as const,
-               scheduleBlockId: linked.id,
+               // If a user has different Work/Class hours on different days,
+               // one routine should follow the whole category instead of making
+               // them recreate the same routine for every schedule card.
+               scheduleBlockId: followWholeCategory ? undefined : linked.id,
                scheduleCategory: linked.category,
                flexible: !/commute|travel|leave/i.test(title),
                timingMode: "schedule-relative" as const,
