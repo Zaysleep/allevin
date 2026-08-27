@@ -13,6 +13,7 @@ export interface NotificationTimelineItem {
 export interface NotificationUpcomingContext {
    title: string;
    category: string;
+   startsAtLabel: string;
    startsInMinutes: number;
    minutesFromCurrentEnd: number;
 }
@@ -45,6 +46,9 @@ const DISALLOWED_COPY = [
    "starts now",
    "time to switch over",
    "get it handled",
+   "use this window well",
+   "keep the transition clean",
+   "make the handoff clean",
    "future-you",
    "notification phase",
    "priority level",
@@ -66,6 +70,15 @@ function normalized(value: string) {
 
 function minuteLabel(minutes: number) {
    return Math.max(1, Math.round(minutes));
+}
+
+function localClockLabel(timestamp: number) {
+   const date = new Date(timestamp);
+   const hours = date.getHours();
+   const minutes = date.getMinutes();
+   const suffix = hours >= 12 ? "PM" : "AM";
+   const hour = hours % 12 || 12;
+   return `${hour}:${String(minutes).padStart(2, "0")} ${suffix}`;
 }
 
 function stableIndex(seed: string, length: number) {
@@ -125,6 +138,7 @@ export function createNotificationCopyContext({
          ? {
               title: cleanInline(next.title, 160),
               category: cleanInline(next.category, 80) || "general",
+              startsAtLabel: localClockLabel(next.startAt),
               startsInMinutes: Math.max(1, Math.round((next.startAt - startAt) / 60_000)),
               minutesFromCurrentEnd: Math.round((next.startAt - endAt) / 60_000),
            }
@@ -164,6 +178,11 @@ export function validateNotificationBody(value: unknown, context: NotificationCo
    if (DISALLOWED_COPY.some((phrase) => lower.includes(phrase))) return null;
    const currentTitle = normalized(context.title);
    if (currentTitle.length >= 4 && normalized(body).includes(currentTitle)) return null;
+   if (
+      context.next &&
+      context.next.startsInMinutes >= 60 &&
+      /\b(?:6[0-9]|[7-9][0-9]|[1-9][0-9]{2,})\s+minutes?\b/i.test(body)
+   ) return null;
    if ((body.match(/[.!?]/g) || []).length > 2) return null;
    if (/^[#*\-]|```|\b(?:phase|priority|schedule engine)\b/i.test(body)) return null;
    return body;
@@ -193,8 +212,8 @@ export function fallbackNotificationBody(context: NotificationCopyContext) {
    } else if (context.next && context.next.minutesFromCurrentEnd <= 5) {
       lines = context.tone === "direct"
          ? [
-              `${context.next.title} is close behind. Keep this focused and make the handoff clean.`,
-              `${context.next.title} comes right after this. Use the window well and leave yourself room to move.`,
+              `${context.next.title} is close behind. Keep this focused and leave yourself room to move.`,
+              `${context.next.title} comes right after this. Stay with what matters and leave a little room at the end.`,
            ]
          : context.tone === "calm"
            ? [
@@ -205,11 +224,16 @@ export function fallbackNotificationBody(context: NotificationCopyContext) {
                 `${context.next.title} comes right after this. Keep it simple and leave yourself an easy handoff.`,
                 `${context.next.title} is close behind. Settle into this, but keep a little room for what follows.`,
              ];
-   } else if (context.next && context.next.startsInMinutes <= 180) {
+   } else if (context.next && context.next.startsInMinutes >= 60) {
+      lines = [
+         `${context.next.title} is next at ${context.next.startsAtLabel}. You’ve got plenty of time before then.`,
+         `Your next scheduled item is ${context.next.title} at ${context.next.startsAtLabel}. Nothing needs to be rushed right now.`,
+      ];
+   } else if (context.next) {
       lines = context.tone === "direct"
          ? [
-              `${context.next.title} is coming up in ${minuteLabel(context.next.startsInMinutes)} minutes. Use this window well and keep the transition clean.`,
-              `There’s room before ${context.next.title}. Get into this now and leave yourself a clean exit.`,
+              `${context.next.title} is coming up in ${minuteLabel(context.next.startsInMinutes)} minutes. You’ve got enough room before then.`,
+              `${context.next.title} is ${minuteLabel(context.next.startsInMinutes)} minutes away. There’s no need to rush this.`,
            ]
          : context.tone === "calm"
            ? [

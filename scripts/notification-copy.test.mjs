@@ -37,6 +37,7 @@ function context(overrides = {}) {
 test("uses deterministic timeline truth for the upcoming item and transition", () => {
   const result = context();
   assert.equal(result.next?.title, "Commute");
+  assert.equal(result.next?.startsAtLabel, "8:40 AM");
   assert.equal(result.next?.startsInMinutes, 40);
   assert.equal(result.next?.minutesFromCurrentEnd, 10);
 });
@@ -60,7 +61,25 @@ test("rejects robotic, repetitive, and oversized model copy", () => {
   const result = context();
   assert.equal(validateNotificationBody("Breakfast starts now. Time to switch over.", result), null);
   assert.equal(validateNotificationBody("Clock's done negotiating. Handle the thing that matters.", result), null);
+  assert.equal(validateNotificationBody("Use this window well and keep the transition clean.", result), null);
   assert.equal(validateNotificationBody("A".repeat(221), result), null);
+});
+
+test("long gaps use the next clock time instead of raw minute math", () => {
+  const longGap = context({
+    timeline: [
+      timeline[0],
+      { id: "later-routine", title: "Cook & Unwind", category: "personal", startAt: startAt + 153 * 60_000, endAt: startAt + 228 * 60_000 },
+    ],
+  });
+  const body = fallbackNotificationBody(longGap);
+  assert.equal(longGap.next?.startsAtLabel, "10:33 AM");
+  assert.match(body, /10:33 AM/);
+  assert.doesNotMatch(body, /153 minutes/i);
+  assert.equal(
+    validateNotificationBody("Cook & Unwind is coming up in 153 minutes. You have time before then.", longGap),
+    null,
+  );
 });
 
 test("copy cache identity changes when occurrence or nearby truth changes", () => {

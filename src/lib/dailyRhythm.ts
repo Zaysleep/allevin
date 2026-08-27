@@ -1,4 +1,10 @@
 import { rhythmVoice, type AllevinTone } from "@/lib/allevinVoice";
+import {
+   applyScheduleMutation,
+   parseExplicitDurationMinutes,
+   parseScheduleMutationSegments,
+   type ScheduleMutationResult,
+} from "./scheduleMutationCore";
 
 export const DAILY_RHYTHM_UPDATED_EVENT = "allevin-daily-rhythm-updated";
 export const DAILY_RHYTHM_STORAGE_KEY = "allevin-daily-rhythm-mkxii-2";
@@ -1041,35 +1047,7 @@ function parseDaySpec(value: string): RhythmDay[] | null {
    return [...new Set(tokens)].sort() as RhythmDay[];
 }
 
-interface ParsedScheduleSegment {
-   days: RhythmDay[];
-   start: string;
-   end: string;
-}
-
-function parseScheduleSegments(value: string): ParsedScheduleSegment[] {
-   const segments: ParsedScheduleSegment[] = [];
-   const timeRangePattern = /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*(?:to|until|-|–|—)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/gi;
-   let cursor = 0;
-
-   for (const match of value.matchAll(timeRangePattern)) {
-      const matchIndex = match.index ?? 0;
-      const dayContext = value.slice(cursor, matchIndex);
-      const days = parseDaySpec(dayContext);
-      const start = parseClock(match[1]);
-      const end = parseClock(match[2]);
-
-      if (days && start && end) {
-         segments.push({ days, start, end });
-      }
-
-      cursor = matchIndex + match[0].length;
-   }
-
-   return segments;
-}
-
-function scheduleSegmentsOverlap(segments: ParsedScheduleSegment[]) {
+function scheduleSegmentsOverlap(segments: ReturnType<typeof parseScheduleMutationSegments>) {
    const seen = new Set<RhythmDay>();
    for (const segment of segments) {
       for (const day of segment.days) {
@@ -1080,35 +1058,40 @@ function scheduleSegmentsOverlap(segments: ParsedScheduleSegment[]) {
    return null;
 }
 
-function replaceScheduleCategory(
-   current: DailyRhythmState,
-   category: RhythmCategory,
-   title: string,
-   segments: ParsedScheduleSegment[],
-) {
-   const existing = current.scheduleBlocks.filter((block) => block.category === category);
-   const retained = current.scheduleBlocks.filter((block) => block.category !== category);
+const FULL_DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-   const replacement = segments.map((segment, index): RhythmScheduleBlock => ({
-      id: existing[index]?.id || (index === 0 ? `schedule-${category}` : `schedule-${category}-${index + 1}`),
-      title: existing[index]?.title || title,
-      category,
-      days: segment.days,
-      start: segment.start,
-      end: segment.end,
-      enabled: true,
-   }));
-
-   return saveDailyRhythm({ ...current, scheduleBlocks: [...retained, ...replacement] });
+function dayPhrase(days: RhythmDay[]) {
+   const sorted = [...new Set(days)].sort() as RhythmDay[];
+   if (sorted.length === 7) return "every day";
+   if (sorted.length === 1) return FULL_DAY_NAMES[sorted[0]];
+   const contiguous = sorted.every((day, index) => index === 0 || day === sorted[index - 1] + 1);
+   if (contiguous && sorted.length >= 3) return `${FULL_DAY_NAMES[sorted[0]]}–${FULL_DAY_NAMES[sorted.at(-1)!]}`;
+   return sorted.map((day) => FULL_DAY_NAMES[day]).join(", ");
 }
 
-function scheduleReply(title: string, segments: ParsedScheduleSegment[]) {
-   return `${title}: ${segments
-      .map(
-         (segment) =>
-            `${segment.days.map((day) => DAY_NAMES[day]).join(", ")} · ${formatClock(segment.start)}–${formatClock(segment.end)}`,
-      )
-      .join("; ")}.`;
+function fullScheduleReplacementRequested(lower: string, category: "work" | "school") {
+   const label = category === "work" ? "work" : "(?:class|school)";
+   return new RegExp(`\\b(?:replace|overwrite)\\s+(?:my\\s+)?(?:(?:entire|whole|full|complete)\\s+)?${label}\\s+schedule\\b`, "i").test(lower) ||
+      new RegExp(`\\bmy\\s+(?:entire|whole|full|complete)\\s+${label}\\s+schedule\\s+(?:is|will be)\\b`, "i").test(lower);
+}
+
+function scheduleMutationReply(
+   title: string,
+   category: RhythmCategory,
+   result: ScheduleMutationResult,
+) {
+   const blocks = result.state.scheduleBlocks
+      .filter((block) => block.category === category && block.enabled)
+      .sort((left, right) => Math.min(...left.days) - Math.min(...right.days) || minutesFromClock(left.start) - minutesFromClock(right.start));
+   const schedule = blocks
+      .map((block) => `${dayPhrase(block.days)} ${formatClock(block.start)}–${formatClock(block.end)}`)
+      .join(" and ");
+   const action = result.kind === "replaced"
+      ? `Replaced your full ${title} schedule.`
+      : result.kind === "added"
+        ? `Added ${dayPhrase(result.affectedDays)}.`
+        : `Updated ${dayPhrase(result.affectedDays)}.`;
+   return `${action} Your ${title} schedule is now ${schedule}.`;
 }
 
 function parseTargetDate(lower: string) {
@@ -1168,11 +1151,7 @@ function titleFromRoutineCommand(raw: string) {
 }
 
 function parseDuration(lower: string) {
-   const minuteMatch = lower.match(/\bfor\s+(\d{1,3})\s*(?:minutes?|mins?)\b/i);
-   if (minuteMatch) return Math.max(5, Math.min(360, Number(minuteMatch[1])));
-   const hourMatch = lower.match(/\bfor\s+(\d+(?:\.\d+)?)\s*hours?\b/i);
-   if (hourMatch) return Math.max(5, Math.min(360, Math.round(Number(hourMatch[1]) * 60)));
-   return 30;
+   return parseExplicitDurationMinutes(lower) ?? 30;
 }
 
 function routineDays(
@@ -1343,7 +1322,7 @@ export interface RhythmConversationResult {
 
 export function isRhythmMutationPrompt(prompt: string) {
    const lower = prompt.toLowerCase();
-   return /\b(?:i work|my work schedule|i have class|my class schedule|add|create|schedule|move|change|set|make|put|skip|not doing|done|finished|completed|off work|working .* this week|remove|delete)\b/.test(lower);
+   return /\b(?:i work|my work schedule|i have class|my class schedule|add|create|schedule|move|change|set|make|put|skip|not doing|done|finished|completed|off work|working .* this week|remove|delete|should be|should last|lasts?)\b/.test(lower);
 }
 
 export function interpretRhythmConversation(prompt: string, current: DailyRhythmState, tone: AllevinTone = "direct"): RhythmConversationResult {
@@ -1358,7 +1337,7 @@ export function interpretRhythmConversation(prompt: string, current: DailyRhythm
    }
 
    if (/\b(?:i work|my work schedule|work schedule)\b/.test(lower)) {
-      const segments = parseScheduleSegments(lower);
+      const segments = parseScheduleMutationSegments(lower);
       if (segments.length) {
          const overlap = scheduleSegmentsOverlap(segments);
          if (overlap !== null) {
@@ -1369,13 +1348,24 @@ export function interpretRhythmConversation(prompt: string, current: DailyRhythm
             };
          }
 
-         replaceScheduleCategory(current, "work", "Work", segments);
-         return { handled: true, changed: true, reply: scheduleReply("Work", segments) };
+         const mutation = applyScheduleMutation(
+            current,
+            "work",
+            "Work",
+            segments,
+            fullScheduleReplacementRequested(lower, "work") ? "replace" : "merge",
+         );
+         const saved = saveDailyRhythm(mutation.state);
+         return {
+            handled: true,
+            changed: true,
+            reply: scheduleMutationReply("Work", "work", { ...mutation, state: saved }),
+         };
       }
    }
 
    if (/\b(?:i have class|my class schedule|school schedule)\b/.test(lower)) {
-      const segments = parseScheduleSegments(lower);
+      const segments = parseScheduleMutationSegments(lower);
       if (segments.length) {
          const overlap = scheduleSegmentsOverlap(segments);
          if (overlap !== null) {
@@ -1386,8 +1376,19 @@ export function interpretRhythmConversation(prompt: string, current: DailyRhythm
             };
          }
 
-         replaceScheduleCategory(current, "school", "Class", segments);
-         return { handled: true, changed: true, reply: scheduleReply("Class", segments) };
+         const mutation = applyScheduleMutation(
+            current,
+            "school",
+            "Class",
+            segments,
+            fullScheduleReplacementRequested(lower, "school") ? "replace" : "merge",
+         );
+         const saved = saveDailyRhythm(mutation.state);
+         return {
+            handled: true,
+            changed: true,
+            reply: scheduleMutationReply("Class", "school", { ...mutation, state: saved }),
+         };
       }
    }
 
@@ -1520,12 +1521,17 @@ export function interpretRhythmConversation(prompt: string, current: DailyRhythm
       return { handled: true, changed: true, reply: `${anchor.title} now follows the ${category} start time instead of using one fixed clock time.` };
    }
 
+   const explicitDuration = anchor ? parseExplicitDurationMinutes(lower) : null;
+   if (
+      anchor &&
+      explicitDuration !== null &&
+      /\b(?:change|set|make|update|should\s+(?:be|last)|lasts?|lasting)\b/.test(lower)
+   ) {
+      upsertRhythmAnchor(current, { ...anchor, durationMinutes: explicitDuration });
+      return { handled: true, changed: true, reply: `${anchor.title} is now ${explicitDuration} minutes.` };
+   }
+
    if (anchor && /\b(?:change|set|make|update)\b/.test(lower)) {
-      const duration = parseDuration(lower);
-      if (/\bfor\s+\d+(?:\.\d+)?\s*(?:minutes?|mins?|hours?)\b/.test(lower)) {
-         upsertRhythmAnchor(current, { ...anchor, durationMinutes: duration });
-         return { handled: true, changed: true, reply: `${anchor.title} is now ${duration} minutes.` };
-      }
 
       if (/\b(?:workdays|school days|weekdays|weekends|every day|daily)\b/.test(lower)) {
          const dayConfig = routineDays(lower, current);

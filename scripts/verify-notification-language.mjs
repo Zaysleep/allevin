@@ -20,6 +20,8 @@ const checks = [
   [copyClient.includes("FALLBACK_CACHE_MAX_AGE"), "temporary fallback retry window"],
   [copyRoute.includes("Never invent an event"), "grounded LLM prompt"],
   [copyRoute.includes("Vary openings"), "anti-staleness prompt"],
+  [copyRoute.includes("startsAtLocalTime"), "long gaps expose a human clock time"],
+  [copyRoute.includes("60 or more minutes away"), "large minute-count wording prohibited"],
   [copyRoute.includes("Cross-origin notification copy is not allowed"), "same-origin API boundary"],
   [hook.includes("ALLEVIN_TONE_UPDATED_EVENT"), "tone changes resync future copy"],
 ];
