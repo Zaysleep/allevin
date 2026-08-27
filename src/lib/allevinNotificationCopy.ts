@@ -49,6 +49,11 @@ const DISALLOWED_COPY = [
    "use this window well",
    "keep the transition clean",
    "make the handoff clean",
+   "this is a good time to begin",
+   "keep the next step simple",
+   "you've got the space for this now",
+   "you’ve got the space for this now",
+   "get into it",
    "future-you",
    "notification phase",
    "priority level",
@@ -79,11 +84,6 @@ function localClockLabel(timestamp: number) {
    const suffix = hours >= 12 ? "PM" : "AM";
    const hour = hours % 12 || 12;
    return `${hour}:${String(minutes).padStart(2, "0")} ${suffix}`;
-}
-
-function stableIndex(seed: string, length: number) {
-   const total = [...seed].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, 2166136261);
-   return length ? total % length : 0;
 }
 
 /**
@@ -190,67 +190,9 @@ export function validateNotificationBody(value: unknown, context: NotificationCo
 
 export function fallbackNotificationBody(context: NotificationCopyContext) {
    const lead = minuteLabel(context.leadMinutes);
-   let lines: string[];
-
    if (context.phase === "prep") {
-      if (context.tone === "direct") {
-         lines = [
-            `You’ve got ${lead} minutes. Finish where you are and get yourself set.`,
-            `About ${lead} minutes to go. Wrap this up and make the handoff clean.`,
-         ];
-      } else if (context.tone === "calm") {
-         lines = [
-            `There are about ${lead} minutes to go. Bring this to a stopping point and move over when you’re ready.`,
-            `You have ${lead} minutes. Finish where you are, then ease into the next part of your day.`,
-         ];
-      } else {
-         lines = [
-            `You’ve got ${lead} minutes. Wrap up what you’re doing and give yourself an easy transition.`,
-            `This is your heads-up: about ${lead} minutes. Finish where you are, then ease into it.`,
-         ];
-      }
-   } else if (context.next && context.next.minutesFromCurrentEnd <= 5) {
-      lines = context.tone === "direct"
-         ? [
-              `${context.next.title} is close behind. Keep this focused and leave yourself room to move.`,
-              `${context.next.title} comes right after this. Stay with what matters and leave a little room at the end.`,
-           ]
-         : context.tone === "calm"
-           ? [
-                `${context.next.title} follows closely. Keep this simple and leave yourself a comfortable transition.`,
-                `${context.next.title} is not far behind. Take this one step at a time and protect the handoff.`,
-             ]
-           : [
-                `${context.next.title} comes right after this. Keep it simple and leave yourself an easy handoff.`,
-                `${context.next.title} is close behind. Settle into this, but keep a little room for what follows.`,
-             ];
-   } else if (context.next && context.next.startsInMinutes >= 60) {
-      lines = [
-         `${context.next.title} is next at ${context.next.startsAtLabel}. You’ve got plenty of time before then.`,
-         `Your next scheduled item is ${context.next.title} at ${context.next.startsAtLabel}. Nothing needs to be rushed right now.`,
-      ];
-   } else if (context.next) {
-      lines = context.tone === "direct"
-         ? [
-              `${context.next.title} is coming up in ${minuteLabel(context.next.startsInMinutes)} minutes. You’ve got enough room before then.`,
-              `${context.next.title} is ${minuteLabel(context.next.startsInMinutes)} minutes away. There’s no need to rush this.`,
-           ]
-         : context.tone === "calm"
-           ? [
-                `You have some room before ${context.next.title}. Settle into this without rushing.`,
-                `${context.next.title} comes later. For now, take this one step at a time.`,
-             ]
-           : [
-                `You’ve got some breathing room before ${context.next.title}. Settle into this without rushing.`,
-                `${context.next.title} is coming up later. There’s enough room to give this your attention now.`,
-             ];
-   } else {
-      lines = context.tone === "direct"
-         ? ["This is a good time to begin. Get into it and keep the next step simple.", "You’ve got the space for this now. Start clean and take it from there."]
-         : context.tone === "calm"
-           ? ["This is a good time to begin. Ease into it and take the next step from there.", "There is room for this now. Start gently and stay with the first step."]
-           : ["This is a good time to begin. Ease into it and keep the next step simple.", "You have room for this now. Settle in and take it one step at a time."];
+      return `Scheduled in ${lead} minutes.`;
    }
-
-   return lines[stableIndex(notificationCopyCacheKey(context), lines.length)];
+   if (context.next) return `Next: ${context.next.title} at ${context.next.startsAtLabel}.`;
+   return "Scheduled reminder is due now.";
 }

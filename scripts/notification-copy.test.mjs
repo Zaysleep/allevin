@@ -49,12 +49,13 @@ test("does not expose an unrelated event more than six hours away", () => {
   assert.equal(result.next, undefined);
 });
 
-test("fallback copy is compact, human, and does not repeat the visible title", () => {
+test("safety copy is factual and does not imitate generated personality", () => {
   const result = context();
   const body = fallbackNotificationBody(result);
   assert.ok(body.length >= 18 && body.length <= 220);
   assert.equal(body.toLowerCase().includes("breakfast"), false);
   assert.equal(validateNotificationBody(body, result), body);
+  assert.match(body, /^Next:/);
 });
 
 test("rejects robotic, repetitive, and oversized model copy", () => {
@@ -62,6 +63,7 @@ test("rejects robotic, repetitive, and oversized model copy", () => {
   assert.equal(validateNotificationBody("Breakfast starts now. Time to switch over.", result), null);
   assert.equal(validateNotificationBody("Clock's done negotiating. Handle the thing that matters.", result), null);
   assert.equal(validateNotificationBody("Use this window well and keep the transition clean.", result), null);
+  assert.equal(validateNotificationBody("This is a good time to begin. Get into it and keep the next step simple.", result), null);
   assert.equal(validateNotificationBody("A".repeat(221), result), null);
 });
 

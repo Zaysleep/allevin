@@ -91,10 +91,18 @@ function sanitizeRequest(raw: unknown): KinLLMRequest | null {
    const input = clean(value.input, 6000);
    if (!input) return null;
 
+   const phraseModes = ["state-ack", "grounded", "clarify", "mutation-ack"] as const;
    return {
       mode: "kin-life",
-      responseMode: value.responseMode === "state-ack" ? "state-ack" : "normal",
+      responseMode: phraseModes.includes(value.responseMode as (typeof phraseModes)[number])
+         ? value.responseMode
+         : "normal",
       stateReceipt: clean(value.stateReceipt, 3000) || undefined,
+      candidateTitle: clean(value.candidateTitle, 180) || undefined,
+      recentReplies: Array.isArray(value.recentReplies)
+         ? value.recentReplies.slice(-12).map((reply) => clean(reply, 1000)).filter(Boolean)
+         : [],
+      variationNonce: clean(value.variationNonce, 120) || undefined,
       input,
       nowIso: clean(value.nowIso, 80) || new Date().toISOString(),
       timezoneOffsetMinutes: typeof value.timezoneOffsetMinutes === "number" && Number.isFinite(value.timezoneOffsetMinutes) ? value.timezoneOffsetMinutes : 0,
@@ -457,16 +465,12 @@ function normalizeActionTiming(
 
 function buildPrompt(request: KinLLMRequest) {
    const voice = request.voiceStyle || "direct";
-   return [
-      {
-         role: "system" as const,
-         content: `You are ALLEVIN, a high-level personal assistant inside ALLEVIN MK XII. ALLEVIN helps a person understand the shape of their day, preserve accurate life state, adapt when reality changes, and decide what deserves attention next.
-
-ALLEVIN is not a project manager, productivity scoreboard, habit-streak app, or generic chatbot.
-
-The LIFE STATE and ASSISTANT CONTEXT supplied by the app are authoritative. Never claim a task, commitment, routine, schedule block, completion, waiting item, or date exists unless that context says so or you return an allowed action that would change LIFE STATE. Routine/schedule mutations are handled by the client-side rhythm engine; never pretend you changed them if no life-state action can represent the change.
-
-Return ONLY valid JSON with this exact shape:
+   const phraseOnly = request.responseMode !== "normal";
+   const outputContract = request.responseMode === "mutation-ack"
+      ? `Return ONLY valid JSON with this exact shape:\n{\n  "reply": "natural post-action acknowledgement",\n  "canonicalTitle": "concise action title"\n}`
+      : phraseOnly
+        ? `Return ONLY valid JSON with this exact shape:\n{\n  "reply": "natural grounded response"\n}`
+        : `Return ONLY valid JSON with this exact shape:
 {
   "reply": "natural response to the user",
   "actions": [
@@ -478,7 +482,17 @@ Return ONLY valid JSON with this exact shape:
       "changes": { ...fields for update_item }
     }
   ]
-}
+}`;
+   return [
+      {
+         role: "system" as const,
+         content: `You are ALLEVIN, a high-level personal assistant inside ALLEVIN MK XII. ALLEVIN helps a person understand the shape of their day, preserve accurate life state, adapt when reality changes, and decide what deserves attention next.
+
+ALLEVIN is not a project manager, productivity scoreboard, habit-streak app, or generic chatbot.
+
+The LIFE STATE and ASSISTANT CONTEXT supplied by the app are authoritative. Never claim a task, commitment, routine, schedule block, completion, waiting item, or date exists unless that context says so or you return an allowed action that would change LIFE STATE. Routine/schedule mutations are handled by the client-side rhythm engine; never pretend you changed them if no life-state action can represent the change.
+
+${outputContract}
 
 Allowed item fields:
 title, details, kind(task|commitment|waiting|routine|note), state(active|waiting|someday|done|archived), context(personal|work|school|kin-software|home|errand|car|finance|health|other), importance(low|normal|high), recurrence(none|daily|weekdays|weekly|monthly), timingPrecision(exact|day|window|someday|none), dueAt/startAt/endAt/followUpAt/deferUntil as Unix milliseconds, durationMinutes, location, allDay, pinToToday.
@@ -487,6 +501,8 @@ Assistant behavior:
 - Maintain truth before personality. The app owns dates, state, recurrence, completion, and schedule truth.
 - Do not create an item merely because the user asks a question.
 - Create an item when the user clearly asks you to remember, remind, schedule, track, wait for, or do something.
+- If the user's request is visibly cut off or ends without the required person, object, action, or time, return no actions and ask one concise question for the missing detail. Never save a partial title.
+- For every created item, title must be the concise underlying action or event—not the user's full command. Remove phrases such as “remind me”, “add”, and temporal scaffolding from the title while preserving proper names, brands, and acronyms.
 - A dated/timed real-world plan such as dinner with someone, an appointment, reservation, meeting, class event, flight, or other place/time obligation is kind=commitment. Treat it as a hard one-off boundary so the deterministic day adapter can move/suppress elastic routines around it.
 - Waiting on another person belongs in kind=waiting and state=waiting. Do not invent a follow-up date.
 - Someday/eventually ideas belong in state=someday. Do not crowd Today with them.
@@ -525,6 +541,9 @@ Assistant behavior:
 - Serious situations stay serious. Humor belongs only where stakes are low.
 - In Direct mode, favor confident short sentences, useful pushback, and a little edge. Do not become cruel, melodramatic, or performative.
 - Sound like a person responding to what changed, not a state machine narrating its implementation. Avoid bookkeeping phrases such as “for this occurrence”, “recovery mode”, “normal schedule stays intact”, “I marked”, “I put the day into”, or “date-scoped context” unless the user explicitly asks how the system works. Say what changed in ordinary language, then stop.
+- Make the response useful to this specific action. When the supplied facts support it, connect the action to its ordinary human purpose: preparation, rest, recovery, nourishment, focus, care, connection, relief, or protecting time. Do not invent a personal motive, feeling, or benefit that is not reasonably grounded in the action.
+- Vary openings and sentence shape. Do not lead with filler such as “Got it”, “Okay”, “Understood”, “Noted”, “Done”, or “I’ll keep”. Avoid copying RECENT REPLIES.
+- Avoid generic task language such as “this is a good time to begin”, “get into it”, “keep the next step simple”, “you have space for this now”, “use this window well”, and “keep the transition clean”.
 - When you return mutation actions, write the reply as the successful post-action acknowledgement, not a promise to act later. Prefer “Staff meeting is in at 10” over “I’ll add your staff meeting.” The client will suppress your reply if preflight rejects the mutation.
 - RECENT CONVERSATION is supporting language context only, never temporal authority. If old prose conflicts with currentDateKey, currentDayContext, matching nearTermReality, or resolved entries, ignore the old prose.
 - No Jarvis roleplay, hype, motivational-poster language, or product-management jargon.
@@ -548,20 +567,29 @@ ${JSON.stringify(request.lifeItems, null, 2)}
 RECENT CONVERSATION
 ${JSON.stringify(request.conversation, null, 2)}
 
+RECENT REPLIES TO AVOID REPEATING
+${JSON.stringify(request.recentReplies || [], null, 2)}
+
+VARIATION NONCE
+${request.variationNonce || "not supplied"}
+
 RESPONSE MODE
 ${request.responseMode || "normal"}
-${request.responseMode === "state-ack" ? `
+${phraseOnly ? `
 STATE RECEIPT
 ${request.stateReceipt || "The deterministic state engine already applied the requested change."}
 
-STATE-ACK RULES
-- The state change is already complete. Return actions: [].
+GROUNDED RESPONSE RULES
+- You are phrasing verified facts. Never propose or return state-changing actions.
 - Acknowledge only what the authoritative current state supports. When the receipt contains factual anchors, preserve their meaning but do not borrow their wording.
 - Lead with the primary change the user explicitly requested. Mention downstream effects only after that, and only when they matter.
 - Lead with the practical consequence rather than filler such as "Got it", "Understood", "Noted", or "I've marked".
 - Phrase it naturally in ALLEVIN’s selected voice; never expose internal state terminology.
 - Do not add a second change, invent a consequence, or turn temporary context into a permanent preference.
 - Keep it to one or two compact sentences unless clarification is genuinely needed.
+${request.responseMode === "clarify" ? "- The request is incomplete. Ask only for the missing detail. Do not imply that anything was saved." : ""}
+${request.responseMode === "grounded" ? "- Answer from the supplied factual receipt. Do not turn a simple answer into a confirmation or advice unless the facts support it." : ""}
+${request.responseMode === "mutation-ack" ? `- The deterministic action will be applied only after client validation. Phrase the reply as the successful result.\n- Improve CANDIDATE TITLE into a concise calendar title that preserves the same action and subject. Remove command/timing scaffolding, preserve proper names and brands, and do not add facts.\nCANDIDATE TITLE\n${request.candidateTitle || ""}` : ""}
 ` : ""}
 USER
 ${request.input}`,
@@ -593,14 +621,40 @@ export async function POST(request: Request) {
    if (!apiKey) return NextResponse.json({ ok: true, reply: "", actions: [], usedFallback: true, error: "No server AI key configured." } satisfies KinLLMResponse);
 
    try {
+      const phraseOnly = payload.responseMode !== "normal";
+      const responseFormat = phraseOnly
+         ? {
+              type: "json_schema",
+              json_schema: {
+                 name: payload.responseMode === "mutation-ack" ? "allevin_mutation_ack" : "allevin_grounded_reply",
+                 strict: true,
+                 schema: payload.responseMode === "mutation-ack"
+                    ? {
+                         type: "object",
+                         additionalProperties: false,
+                         properties: {
+                            reply: { type: "string" },
+                            canonicalTitle: { type: "string" },
+                         },
+                         required: ["reply", "canonicalTitle"],
+                      }
+                    : {
+                         type: "object",
+                         additionalProperties: false,
+                         properties: { reply: { type: "string" } },
+                         required: ["reply"],
+                      },
+              },
+           }
+         : { type: "json_object" };
       const provider = await fetch("https://api.openai.com/v1/chat/completions", {
          method: "POST",
          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
          body: JSON.stringify({
             model,
-            temperature: 0.25,
+            temperature: phraseOnly ? 0.9 : 0.3,
             max_tokens: 700,
-            response_format: { type: "json_object" },
+            response_format: responseFormat,
             messages: buildPrompt(payload),
          }),
       });
@@ -622,10 +676,11 @@ export async function POST(request: Request) {
          // State-ack requests are deliberately read-only. Deterministic client
          // logic already owns the mutation; the model only supplies natural
          // language so personality can evolve without becoming state authority.
-         actions: payload.responseMode === "state-ack"
-            ? []
-            : normalizeActionTiming(sanitizedActions, payload),
+         actions: phraseOnly ? [] : normalizeActionTiming(sanitizedActions, payload),
          usedFallback: false,
+         canonicalTitle: payload.responseMode === "mutation-ack"
+            ? clean(parsed.canonicalTitle, 180) || undefined
+            : undefined,
       };
       return NextResponse.json(result);
    } catch {

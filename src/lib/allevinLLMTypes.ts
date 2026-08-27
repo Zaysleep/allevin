@@ -17,10 +17,17 @@ export interface KinLLMRequest {
     * state-ack = deterministic client code already changed state; the model is
     * only allowed to phrase a natural acknowledgement from that recorded truth.
     */
-   responseMode?: "normal" | "state-ack";
+   responseMode?: "normal" | "state-ack" | "grounded" | "clarify" | "mutation-ack";
    /** Machine-readable-ish summary of a deterministic mutation. Never treated
     * as free-form authority over the actual state snapshot. */
    stateReceipt?: string;
+   /** Deterministic title candidate. The model may only improve concise display
+    * wording/capitalization; the client validates semantic overlap. */
+   candidateTitle?: string;
+   /** Recent assistant language is supplied only to avoid repetitive phrasing,
+    * never as schedule authority. */
+   recentReplies?: string[];
+   variationNonce?: string;
    input: string;
    nowIso: string;
    timezoneOffsetMinutes: number;
@@ -36,5 +43,6 @@ export interface KinLLMResponse {
    reply: string;
    actions: KinAction[];
    usedFallback: boolean;
+   canonicalTitle?: string;
    error?: string;
 }

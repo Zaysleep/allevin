@@ -21,6 +21,8 @@ import type {
    LifeState,
    LifeTimingPrecision,
 } from "@/lib/lifeTypes";
+import { canonicalTaskTitleFromPrompt } from "@/lib/allevinConversationIntelligence";
+import { parseRelativeCalendarDate } from "@/lib/lifeTimingCore";
 
 export const LIFE_STATE_STORAGE_KEY = "allevin-life-state-mkxii";
 export const LIFE_STATE_UPDATED_EVENT = "allevin-life-state-updated";
@@ -101,10 +103,18 @@ export function getEmptyLifeState(): LifeState {
 }
 
 function sanitizeItem(raw: Partial<LifeItem>, fallbackSource: LifeItemSource = "user"): LifeItem | null {
-   const title = sanitizeText(raw.title, 180);
-   if (!title) return null;
-
    const now = Date.now();
+   const createdAt = safeTimestamp(raw.createdAt) || now;
+   const storedTitle = sanitizeText(raw.title, 180);
+   if (!storedTitle) return null;
+   const leakedReminderCommand = /\b(?:remind me|don['’]?t let me forget|do not let me forget)\b/i.test(storedTitle);
+   const repairedTitle = leakedReminderCommand ? canonicalTaskTitleFromPrompt(storedTitle) : storedTitle;
+   const title = sanitizeText(repairedTitle, 180) || storedTitle;
+   const hasStoredTiming = Boolean(raw.dueAt || raw.startAt || raw.followUpAt || raw.deferUntil);
+   const repairedRelativeDate = leakedReminderCommand && !hasStoredTiming
+      ? parseRelativeCalendarDate(storedTitle, createdAt)
+      : null;
+   if (repairedRelativeDate) repairedRelativeDate.setHours(12, 0, 0, 0);
    const kind = asKind(raw.kind);
    const state = asState(raw.state, kind === "waiting" ? "waiting" : "active");
 
@@ -117,18 +127,18 @@ function sanitizeItem(raw: Partial<LifeItem>, fallbackSource: LifeItemSource = "
       context: asContext(raw.context),
       importance: asImportance(raw.importance),
       recurrence: asRecurrence(raw.recurrence),
-      timingPrecision: asTimingPrecision(raw.timingPrecision),
-      dueAt: safeTimestamp(raw.dueAt),
+      timingPrecision: repairedRelativeDate ? "day" : asTimingPrecision(raw.timingPrecision),
+      dueAt: safeTimestamp(raw.dueAt) || repairedRelativeDate?.getTime(),
       startAt: safeTimestamp(raw.startAt),
       endAt: safeTimestamp(raw.endAt),
       followUpAt: safeTimestamp(raw.followUpAt),
       deferUntil: safeTimestamp(raw.deferUntil),
       durationMinutes: safeDuration(raw.durationMinutes),
       location: sanitizeText(raw.location, 180) || undefined,
-      allDay: raw.allDay === true,
+      allDay: repairedRelativeDate ? true : raw.allDay === true,
       pinToToday: raw.pinToToday === true,
       source: raw.source === "kin" || raw.source === "calendar" || raw.source === "migration" || raw.source === "user" ? raw.source : fallbackSource,
-      createdAt: safeTimestamp(raw.createdAt) || now,
+      createdAt,
       updatedAt: safeTimestamp(raw.updatedAt) || now,
       completedAt: safeTimestamp(raw.completedAt),
       lastCompletedAt: safeTimestamp(raw.lastCompletedAt),

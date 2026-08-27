@@ -6,6 +6,8 @@
 // ========================================
 
 import type { KinAction, LifeContext, LifeItem, LifeRecurrence, LifeState } from "@/lib/lifeTypes";
+import { analyzeIncompleteConversationRequest, canonicalTaskTitleFromPrompt } from "@/lib/allevinConversationIntelligence";
+import { parseRelativeCalendarDate } from "@/lib/lifeTimingCore";
 
 export interface AttentionItem {
    item: LifeItem;
@@ -204,13 +206,18 @@ function nextWeekday(day: number, includeToday = false) {
    return date;
 }
 
-function parseDateTime(value: string) {
+export function parseLifeDateTime(value: string, nowTimestamp = Date.now()) {
    const lower = normalizePrompt(value);
-   const now = new Date();
+   const now = new Date(nowTimestamp);
    let date: Date | null = null;
    let precision: "exact" | "day" | "window" | "none" = "none";
 
-   if (/\bday after tomorrow\b/.test(lower)) {
+   const relative = parseRelativeCalendarDate(value, nowTimestamp);
+
+   if (relative) {
+      date = relative;
+      precision = "day";
+   } else if (/\bday after tomorrow\b/.test(lower)) {
       date = new Date(now);
       date.setDate(now.getDate() + 2);
       precision = "day";
@@ -299,38 +306,6 @@ function parseRecurrence(value: string): LifeRecurrence {
    if (/\b(?:every|each)\s+(?:week|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b|\bweekly\b/.test(lower)) return "weekly";
    if (/\b(?:every|each)\s+month\b|\bmonthly\b/.test(lower)) return "monthly";
    return "none";
-}
-
-function cleanTaskTitle(value: string) {
-   let clean = value.trim().replace(/[.!?]+$/, "");
-   clean = clean
-      .replace(/^(?:okay[, ]+|alright[, ]+|actually[, ]+)/i, "")
-      // "Remind me at 4:45 today to test notifications" should become
-      // "Test notifications", not "Remind me". Pull the requested action out
-      // before the generic date/time cleanup below runs.
-      .replace(/^(?:can you\s+)?(?:please\s+)?remind me\b.*?\bto\s+/i, "")
-      .replace(/^(?:every|each)\s+(?:day|weekday|week|month|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(?:please\s+)?(?:remind me to|remember to)\s+/i, "")
-      .replace(/^(?:can you\s+)?(?:please\s+)?(?:remind me to|don't let me forget(?: to)?|do not let me forget(?: to)?|remember to|i need(?: to)?|i have to|i've got to|i should|we need(?: to)?|we have to|need to|need)\s+/i, "")
-      // Natural calendar language should not leak command words into the
-      // calendar title or notification copy.
-      .replace(/^(?:add|schedule|book|create|put)\s+(?:my|our|a|an|the)?\s*/i, "")
-      .replace(/^(?:i|we)\s+(?:have|have got|got)\s+(?:a|an|the)?\s*/i, "")
-      .replace(/^i(?:'|’)ve\s+got\s+(?:a|an|the)?\s*/i, "")
-      .replace(/^(?:i|we)\s+want\s+to\s+/i, "")
-      .replace(/^i'?m\s+waiting\s+(?:on|for)\s+/i, "")
-      .replace(/^we'?re\s+waiting\s+(?:on|for)\s+/i, "")
-      .replace(/\b(?:today|tonight|tomorrow|day after tomorrow|next week|next month)\b.*$/i, "")
-      .replace(/\b(?:on|at|around|for)\s+(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b.*$/i, "")
-      .replace(/\s+(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b.*$/i, "")
-      .replace(/\b(?:at|around)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b.*$/i, "")
-      .replace(/\s+(?:sometime\s+)?in\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s*$/i, "")
-      .replace(/\s+(?:sometime|eventually)\s*$/i, "")
-      .replace(/\s+(?:for|on|at|around|by)\s*$/i, "")
-      .trim();
-   if (!clean) clean = value.trim().replace(/[.!?]+$/, "");
-   const responseMatch = clean.match(/^(?:the\s+)?(.+?)\s+to\s+(?:respond|reply)$/i);
-   if (responseMatch?.[1]) clean = `${responseMatch[1]} response`;
-   return clean.charAt(0).toUpperCase() + clean.slice(1);
 }
 
 function findReferencedItem(state: LifeState, query: string) {
@@ -444,12 +419,22 @@ function localQuestionResponse(prompt: string, state: LifeState) {
 export interface LocalKinInterpretation {
    reply: string;
    actions: KinAction[];
+   incomplete?: boolean;
 }
 
 export function interpretKinLocally(prompt: string, state: LifeState): LocalKinInterpretation {
    const raw = prompt.trim();
    const lower = normalizePrompt(raw);
    if (!raw) return { reply: "What's on your mind?", actions: [] };
+
+   const completeness = analyzeIncompleteConversationRequest(raw);
+   if (completeness.incomplete) {
+      return {
+         reply: completeness.clarification || "What detail should I add before I save this?",
+         actions: [],
+         incomplete: true,
+      };
+   }
 
    const completionCue = /\b(?:mark|finish|complete)\s+(.+?)\s+(?:done|complete)|\b(?:i'?m done with|i finished|i completed)\s+(.+)/i.exec(raw);
    if (completionCue) {
@@ -467,7 +452,7 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
    const moveDateCue = /\b(?:move|push|shift)\s+(.+?)\s+(?:to|until)\s+(.+)$/i.exec(raw);
    if (moveDateCue) {
       const target = findReferencedItem(state, moveDateCue[1]);
-      const date = parseDateTime(moveDateCue[2]);
+      const date = parseLifeDateTime(moveDateCue[2]);
       if (target && date.timestamp) {
          return {
             reply: `Okay — ${target.title} moves to ${formatLifeDate(date.timestamp)}${date.allDay ? "" : ` at ${formatLifeTime(date.timestamp)}`}.`,
@@ -496,7 +481,7 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
    const waiting = /\b(?:waiting\s+(?:on|for)|hear back|response from|reply from)\b/i.test(raw);
    const someday = /\b(?:someday|eventually|one day|when i get around to it)\b/i.test(raw);
    const recurrence = parseRecurrence(raw);
-   const date = parseDateTime(raw);
+   const date = parseLifeDateTime(raw);
    const commitmentCue = /\b(?:appointment|meeting|class|lecture|dinner|lunch|breakfast|coffee|flight|event|reservation|interview|dentist|doctor|checkup|therapy|call)\b/i.test(raw);
    // “I have / I’ve got X Friday at 9” is ordinary calendar language even
    // when X is not in a vocabulary list. “I have to X” remains a task. This
@@ -513,7 +498,7 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
 
    if (!actionCue) return { reply: localQuestionResponse(raw, state), actions: [] };
 
-   const title = cleanTaskTitle(raw);
+   const title = canonicalTaskTitleFromPrompt(raw);
    const context = contextFromText(raw);
    const importance = /\b(?:urgent|important|must|deadline|can't forget|cannot forget|due)\b/i.test(lower) ? "high" : "normal";
    const kind = waiting ? "waiting" : recurrence !== "none" ? "routine" : declarativeCommitment ? "commitment" : "task";
@@ -536,5 +521,5 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
    } as const;
 
    const timing = date.timestamp ? ` for ${formatLifeDate(date.timestamp)}${date.allDay ? "" : ` at ${formatLifeTime(date.timestamp)}`}` : someday ? " for later" : waiting ? " in Waiting" : "";
-   return { reply: `Got it — I'll keep ${title}${timing}.`, actions: [{ type: "create_item", item }] };
+   return { reply: `${title}${timing}.`, actions: [{ type: "create_item", item }] };
 }

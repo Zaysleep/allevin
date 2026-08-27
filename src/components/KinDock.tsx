@@ -5,6 +5,8 @@ import type { ChangeEvent, FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { requestKinLLM } from "@/lib/allevinLLMClient";
+import { clearConversationDraft, readConversationDraft, stageConversationDraft } from "@/lib/allevinConversationDraft";
+import { analyzeIncompleteConversationRequest, canonicalTitleIsSafe, looksLikeNewStandaloneRequest, mergeConversationDraft } from "@/lib/allevinConversationIntelligence";
 import { adaptationReplySuffix, captureGeneralDayContext, interpretAdaptiveDayConversation, previewAdaptiveDayConversation, reconcileLifeEventsWithRhythm } from "@/lib/allevinDayAdaptation";
 import { buildRecommendationContext, interpretRecommendationConversation } from "@/lib/allevinRecommendations";
 import { buildLifestyleContext, interpretLifestyleConversation, readLifestyleProfile } from "@/lib/allevinLifestyleProfile";
@@ -24,6 +26,21 @@ export const KIN_FOCUS_EVENT = "allevin-kin-focus";
 
 function isUndoPrompt(prompt: string) {
    return /^(?:undo(?: that)?|put it back|revert that|actually never mind|never mind that)[.!?]?$/i.test(prompt.trim());
+}
+
+function languageVariationNonce() {
+   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function groundedReplyIsSafe(reply: string, receipt: string, recentConversation: KinMessage[]) {
+   const normalizedReply = reply.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
+   if (!normalizedReply) return false;
+   if (/\b(?:this is a good time to begin|get into it|keep the next step simple|you have space for this now|you've got the space for this now|use this window well|keep the transition clean)\b/i.test(normalizedReply)) return false;
+   if (recentConversation.some((message) => message.role === "assistant" && message.content.toLowerCase().replace(/\s+/g, " ").trim() === normalizedReply)) return false;
+
+   const factualTokens = receipt.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)\b|\b\d+(?:\.\d+)?\s+(?:minutes?|hours?|days?|weeks?|months?)\b/gi) || [];
+   return factualTokens.every((token) => normalizedReply.includes(token.toLowerCase().replace(/\s+/g, " ")));
 }
 
 /**
@@ -55,13 +72,15 @@ async function phraseStateAcknowledgement(
    prompt: string,
    stateReceipt: string,
    narrationFacts: string[] = [],
+   recentConversation: KinMessage[] = [],
+   responseMode: "state-ack" | "grounded" | "clarify" = "state-ack",
 ) {
    const lifeState = readLifeState();
    const rhythmState = readDailyRhythm();
    const snapshot = getLifeSnapshot(lifeState);
    const response = await requestKinLLM({
       mode: "kin-life",
-      responseMode: "state-ack",
+      responseMode,
       // The receipt sent to the model is intentionally neutral. The actual
       // adaptation result is already visible in authoritative state below.
       // Feeding implementation-flavored fallback copy ("recovery mode",
@@ -87,6 +106,11 @@ async function phraseStateAcknowledgement(
       // current state is the continuity source, which also prevents a future
       // day's language from leaking into the acknowledgement.
       conversation: [],
+      recentReplies: recentConversation
+         .filter((message) => message.role === "assistant")
+         .slice(-10)
+         .map((message) => message.content),
+      variationNonce: languageVariationNonce(),
    });
 
    // The deterministic receipt remains the offline/provider-failure fallback.
@@ -99,7 +123,43 @@ async function phraseStateAcknowledgement(
    const natural = response.reply
       .replace(/^(?:got it|understood|noted|okay|all right|alright)[.!,:;—-]*\s*/i, "")
       .trim();
-   return natural || stateReceipt;
+   return natural && groundedReplyIsSafe(natural, stateReceipt, recentConversation) ? natural : stateReceipt;
+}
+
+async function prepareMutationLanguage(
+   prompt: string,
+   stateReceipt: string,
+   candidateTitle: string,
+   recentConversation: KinMessage[],
+) {
+   const lifeState = readLifeState();
+   const rhythmState = readDailyRhythm();
+   const response = await requestKinLLM({
+      mode: "kin-life",
+      responseMode: "mutation-ack",
+      stateReceipt,
+      candidateTitle,
+      input: prompt,
+      nowIso: new Date().toISOString(),
+      timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+      displayName: getAllevinDisplayName(""),
+      assistantContext: buildRhythmNarrationContextForPrompt(rhythmState, prompt),
+      voiceStyle: readAllevinTone(),
+      lifeItems: getLifeSnapshot(lifeState).items,
+      conversation: [],
+      recentReplies: recentConversation
+         .filter((message) => message.role === "assistant")
+         .slice(-10)
+         .map((message) => message.content),
+      variationNonce: languageVariationNonce(),
+   });
+
+   return {
+      reply: response.usedFallback || !response.reply || !groundedReplyIsSafe(response.reply, stateReceipt, recentConversation)
+         ? stateReceipt
+         : response.reply,
+      title: canonicalTitleIsSafe(candidateTitle, response.canonicalTitle) || candidateTitle,
+   };
 }
 
 export default function KinDock() {
@@ -177,13 +237,14 @@ export default function KinDock() {
    const quickPrompts = useMemo(() => ["What should I do next?", "When am I free?", "What’s coming up?"], []);
 
    async function send(text: string) {
-      const prompt = text.trim();
-      if (!prompt || busy) return;
+      const submittedPrompt = text.trim();
+      if (!submittedPrompt || busy) return;
       setOpen(true);
       setInput("");
       setBusy(true);
       const conversationBefore = readKinConversation();
-      appendKinMessage("user", prompt);
+      let prompt = submittedPrompt;
+      appendKinMessage("user", submittedPrompt);
 
       try {
          if (isUndoPrompt(prompt)) {
@@ -196,20 +257,61 @@ export default function KinDock() {
          const currentState = readLifeState();
          const currentRhythm = readDailyRhythm();
 
+         const conversationDraft = readConversationDraft();
+         if (conversationDraft && isPendingDecline(submittedPrompt)) {
+            clearConversationDraft();
+            const reply = await phraseStateAcknowledgement(
+               submittedPrompt,
+               "The unfinished request was discarded. Nothing was saved.",
+               [],
+               conversationBefore,
+               "grounded",
+            );
+            appendKinMessage("assistant", reply);
+            return;
+         }
+         if (conversationDraft) {
+            if (looksLikeNewStandaloneRequest(submittedPrompt)) clearConversationDraft();
+            else prompt = mergeConversationDraft(conversationDraft.prompt, submittedPrompt);
+         }
+
+         const completeness = analyzeIncompleteConversationRequest(prompt);
+         if (completeness.incomplete) {
+            stageConversationDraft(prompt);
+            const factualClarification = completeness.clarification || "What detail should I add before I save this?";
+            const reply = await phraseStateAcknowledgement(
+               prompt,
+               factualClarification,
+               [],
+               conversationBefore,
+               "clarify",
+            );
+            appendKinMessage("assistant", reply);
+            return;
+         }
+         if (conversationDraft) clearConversationDraft();
+
          // Significant cascades and explicit conflicts are staged before any
          // state write. Confirmation reuses the deterministic plan; the LLM
          // never becomes the authority for what changed.
          const pending = readPendingAssistantChange();
          if (pending && isPendingDecline(prompt)) {
             clearPendingAssistantChange();
-            appendKinMessage("assistant", "Left it alone.");
+            const reply = await phraseStateAcknowledgement(
+               prompt,
+               "The proposed change was not applied. The schedule remains unchanged.",
+               [],
+               conversationBefore,
+               "grounded",
+            );
+            appendKinMessage("assistant", reply);
             return;
          }
          if (pending && isPendingConfirmation(prompt)) {
             clearPendingAssistantChange();
             if (pending.kind === "adaptation") {
                const confirmed = interpretAdaptiveDayConversation(pending.prompt, currentState, currentRhythm, tone);
-               const reply = await phraseStateAcknowledgement(pending.prompt, confirmed.reply, confirmed.narrationFacts);
+               const reply = await phraseStateAcknowledgement(pending.prompt, confirmed.reply, confirmed.narrationFacts, conversationBefore);
                appendKinMessage("assistant", reply);
                return;
             }
@@ -218,7 +320,9 @@ export default function KinDock() {
             const applied = applyKinActions(pending.actions);
             const reconciled = reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
             const rawReply = pending.reply || (applied.applied.length ? applied.applied.join(". ") : "Done.");
-            appendKinMessage("assistant", `${mergeScheduleRelationReply(rawReply, relations)}${adaptationReplySuffix(reconciled)}`);
+            const factualReply = `${mergeScheduleRelationReply(rawReply, relations)}${adaptationReplySuffix(reconciled)}`;
+            const reply = await phraseStateAcknowledgement(pending.prompt, factualReply, [], conversationBefore);
+            appendKinMessage("assistant", reply);
             return;
          }
 
@@ -232,7 +336,8 @@ export default function KinDock() {
          const contextualMutation = interpretContextualLifeMutation(prompt, currentState, currentRhythm, conversationBefore);
          if (contextualMutation.handled) {
             if (!contextualMutation.actions.length) {
-               appendKinMessage("assistant", contextualMutation.reply);
+               const reply = await phraseStateAcknowledgement(prompt, contextualMutation.reply, [], conversationBefore, "grounded");
+               appendKinMessage("assistant", reply);
                return;
             }
             const conflict = preflightAssistantActions(contextualMutation.actions, currentState, currentRhythm, prompt);
@@ -244,7 +349,9 @@ export default function KinDock() {
             captureAssistantUndo(prompt);
             applyKinActions(contextualMutation.actions);
             const reconciled = reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
-            appendKinMessage("assistant", `${contextualMutation.reply}${adaptationReplySuffix(reconciled)}`);
+            const factualReply = `${contextualMutation.reply}${adaptationReplySuffix(reconciled)}`;
+            const reply = await phraseStateAcknowledgement(prompt, factualReply, [], conversationBefore);
+            appendKinMessage("assistant", reply);
             return;
          }
 
@@ -257,6 +364,7 @@ export default function KinDock() {
                prompt,
                adaptation.reply,
                adaptation.narrationFacts,
+               conversationBefore,
             );
             appendKinMessage("assistant", reply);
             return;
@@ -272,20 +380,22 @@ export default function KinDock() {
          // Do not send them on to the LLM where they could accidentally become
          // fake Calendar commitments (for example, a car being in the shop).
          if (contextReply) {
-            const reply = await phraseStateAcknowledgement(prompt, contextReply);
+            const reply = await phraseStateAcknowledgement(prompt, contextReply, [], conversationBefore);
             appendKinMessage("assistant", reply);
             return;
          }
 
          const lifestyle = interpretLifestyleConversation(prompt, currentState, effectiveRhythm, tone);
          if (lifestyle.handled) {
-            appendKinMessage("assistant", lifestyle.reply);
+            const reply = await phraseStateAcknowledgement(prompt, lifestyle.reply, [], conversationBefore, "grounded");
+            appendKinMessage("assistant", reply);
             return;
          }
 
          const recommendation = interpretRecommendationConversation(prompt, currentState, effectiveRhythm, tone);
          if (recommendation.handled) {
-            appendKinMessage("assistant", recommendation.reply);
+            const reply = await phraseStateAcknowledgement(prompt, recommendation.reply, [], conversationBefore, "grounded");
+            appendKinMessage("assistant", reply);
             return;
          }
 
@@ -295,19 +405,22 @@ export default function KinDock() {
             bedtime: lifestyleProfile.preferredBedtime,
          });
          if (contextualAnswer.handled) {
-            appendKinMessage("assistant", contextualAnswer.reply);
+            const reply = await phraseStateAcknowledgement(prompt, contextualAnswer.reply, [], conversationBefore, "grounded");
+            appendKinMessage("assistant", reply);
             return;
          }
 
          const memoryAnswer = answerMemoryQuestion(prompt, effectiveRhythm, tone);
          if (memoryAnswer.handled) {
-            appendKinMessage("assistant", memoryAnswer.reply);
+            const reply = await phraseStateAcknowledgement(prompt, memoryAnswer.reply, [], conversationBefore, "grounded");
+            appendKinMessage("assistant", reply);
             return;
          }
 
          const dayIntelligence = answerDayIntelligence(prompt, currentState, effectiveRhythm, tone);
          if (dayIntelligence.handled) {
-            appendKinMessage("assistant", dayIntelligence.reply);
+            const reply = await phraseStateAcknowledgement(prompt, dayIntelligence.reply, [], conversationBefore, "grounded");
+            appendKinMessage("assistant", reply);
             return;
          }
 
@@ -317,13 +430,21 @@ export default function KinDock() {
             // A newly added/moved routine may collide with an already-recorded
             // one-off commitment, so re-run the deterministic event reconciler.
             if (rhythmResult.changed) reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
-            appendKinMessage("assistant", rhythmResult.reply);
+            const reply = await phraseStateAcknowledgement(
+               prompt,
+               rhythmResult.reply,
+               [],
+               conversationBefore,
+               rhythmResult.changed ? "state-ack" : "grounded",
+            );
+            appendKinMessage("assistant", reply);
             return;
          }
 
          const deterministicReadback = buildDeterministicLifeReadback(prompt, currentState);
          if (deterministicReadback) {
-            appendKinMessage("assistant", deterministicReadback);
+            const reply = await phraseStateAcknowledgement(prompt, deterministicReadback, [], conversationBefore, "grounded");
+            appendKinMessage("assistant", reply);
             return;
          }
 
@@ -334,30 +455,57 @@ export default function KinDock() {
          // “Remind me at 4:45 to test notifications.”
          const deterministicMutation = interpretKinLocally(prompt, currentState);
          if (deterministicMutation.actions.length) {
+            let mutationActions = deterministicMutation.actions;
+            let preparedReply = "";
+            const createIndex = mutationActions.findIndex((action) => action.type === "create_item" && action.item?.title);
+            if (createIndex >= 0) {
+               const candidateTitle = mutationActions[createIndex].item?.title || "";
+               const preliminaryRelations = assistantScheduleRelations(
+                  mutationActions,
+                  currentState,
+                  effectiveRhythm,
+                  prompt,
+               );
+               const language = await prepareMutationLanguage(
+                  prompt,
+                  mergeScheduleRelationReply(deterministicMutation.reply, preliminaryRelations),
+                  candidateTitle,
+                  conversationBefore,
+               );
+               mutationActions = mutationActions.map((action, index) =>
+                  index === createIndex
+                     ? { ...action, item: { ...action.item, title: language.title } }
+                     : action,
+               );
+               preparedReply = language.reply;
+            }
             const conflict = preflightAssistantActions(
-               deterministicMutation.actions,
+               mutationActions,
                currentState,
                effectiveRhythm,
                prompt,
             );
             if (conflict) {
-               stagePendingAssistantChange({ kind: "actions", prompt, reply: deterministicMutation.reply, actions: deterministicMutation.actions });
+               stagePendingAssistantChange({ kind: "actions", prompt, reply: preparedReply || deterministicMutation.reply, actions: mutationActions });
                appendKinMessage("assistant", `${conflict}\n\nAdd it anyway?`);
                return;
             }
 
             const relations = assistantScheduleRelations(
-               deterministicMutation.actions,
+               mutationActions,
                currentState,
                effectiveRhythm,
                prompt,
             );
             captureAssistantUndo(prompt);
-            const applied = applyKinActions(deterministicMutation.actions);
+            const applied = applyKinActions(mutationActions);
             const reconciled = reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
             const rawReply = deterministicMutation.reply || (applied.applied.length ? applied.applied.join(". ") : "Done.");
-            const reply = mergeScheduleRelationReply(rawReply, relations);
-            appendKinMessage("assistant", `${reply}${adaptationReplySuffix(reconciled)}`);
+            const factualReply = `${mergeScheduleRelationReply(rawReply, relations)}${adaptationReplySuffix(reconciled)}`;
+            const reply = preparedReply
+               ? `${preparedReply}${adaptationReplySuffix(reconciled)}`
+               : await phraseStateAcknowledgement(prompt, factualReply, [], conversationBefore);
+            appendKinMessage("assistant", reply);
             return;
          }
 
@@ -376,6 +524,11 @@ ${buildMemoryContext(effectiveRhythm, tone)}`,
             lifeItems: snapshot.items,
             conversation: conversationForJudgment(prompt, conversationBefore)
                .map((message) => ({ role: message.role, content: message.content })),
+            recentReplies: conversationBefore
+               .filter((message) => message.role === "assistant")
+               .slice(-10)
+               .map((message) => message.content),
+            variationNonce: languageVariationNonce(),
          });
 
          if (!response.usedFallback && (response.reply || response.actions.length)) {
@@ -420,7 +573,7 @@ ${buildMemoryContext(effectiveRhythm, tone)}`,
             if (local.actions.length) captureAssistantUndo(prompt);
             const applied = applyKinActions(local.actions);
             const reconciled = reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
-            const rawReply = local.reply || (applied.applied.length ? applied.applied.join(". ") : "Got it.");
+            const rawReply = local.reply || (applied.applied.length ? applied.applied.join(". ") : "No change was applied.");
             const reply = mergeScheduleRelationReply(rawReply, relations);
             appendKinMessage("assistant", `${reply}${adaptationReplySuffix(reconciled)}`);
          }
@@ -466,7 +619,7 @@ ${buildMemoryContext(effectiveRhythm, tone)}`,
                      <strong>ALLEVIN</strong>
                   </div>
                   <div className="kin-header-actions">
-                     <button className="icon-button" onClick={() => { clearKinConversation(); setMessages([]); }} aria-label="Clear ALLEVIN conversation"><Trash2 size={16} /></button>
+                     <button className="icon-button" onClick={() => { clearKinConversation(); clearConversationDraft(); setMessages([]); }} aria-label="Clear ALLEVIN conversation"><Trash2 size={16} /></button>
                      <button className="icon-button" onClick={() => setOpen(false)} aria-label="Close ALLEVIN"><ChevronDown size={18} /></button>
                   </div>
                </header>

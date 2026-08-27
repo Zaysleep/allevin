@@ -11,11 +11,13 @@ const COPY_CACHE_KEY = "allevin-notification-copy-cache-v1";
 const CACHE_MAX_AGE = 14 * 24 * 60 * 60 * 1000;
 const FALLBACK_CACHE_MAX_AGE = 10 * 60 * 1000;
 const CACHE_LIMIT = 220;
+const DIAGNOSTICS_KEY = "allevin-language-diagnostics-mkxiv-1";
 
 interface CopyCacheEntry {
    body: string;
    createdAt: number;
-   source?: "llm" | "fallback";
+   source?: "llm" | "safety" | "fallback";
+   reason?: string;
 }
 
 interface CopyCache {
@@ -38,7 +40,7 @@ function readCache() {
          Object.entries(parsed.entries)
             .filter(([, value]) => {
                if (!value || typeof value.body !== "string") return false;
-               const maxAge = value.source === "fallback" ? FALLBACK_CACHE_MAX_AGE : CACHE_MAX_AGE;
+               const maxAge = value.source === "llm" ? CACHE_MAX_AGE : FALLBACK_CACHE_MAX_AGE;
                return now - Number(value.createdAt || 0) <= maxAge;
             })
             .sort((left, right) => Number(right[1].createdAt || 0) - Number(left[1].createdAt || 0))
@@ -75,6 +77,20 @@ function randomNonce() {
    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function recordDiagnostics(entries: Array<{ id: string; source: string; reason?: string }>) {
+   if (typeof window === "undefined" || !entries.length) return;
+   try {
+      const current = JSON.parse(window.localStorage.getItem(DIAGNOSTICS_KEY) || "[]") as unknown;
+      const previous = Array.isArray(current) ? current.slice(-80) : [];
+      window.localStorage.setItem(
+         DIAGNOSTICS_KEY,
+         JSON.stringify([...previous, ...entries.map((entry) => ({ ...entry, at: Date.now(), area: "notification-copy" }))].slice(-100)),
+      );
+   } catch {
+      // Diagnostics must never interfere with reminder planning.
+   }
+}
+
 /**
  * Copy is prepared before jobs enter Redis. Delivery therefore never waits for
  * an LLM. The cache also prevents focus/resume schedule syncs from purchasing
@@ -91,10 +107,10 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
       else missing.push(context);
    }
 
-   const generated = new Map<string, { body: string; source: "llm" | "fallback" }>();
+   const generated = new Map<string, { body: string; source: "llm" | "safety"; reason?: string }>();
    if (missing.length) {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 7_000);
+      const timeout = window.setTimeout(() => controller.abort(), 12_000);
       try {
          const response = await fetch("/api/allevin/notifications/copy", {
             method: "POST",
@@ -103,12 +119,16 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
             signal: controller.signal,
          });
          if (response.ok) {
-            const payload = (await response.json()) as { copies?: Array<{ id?: unknown; body?: unknown; source?: unknown }> };
+            const payload = (await response.json()) as { copies?: Array<{ id?: unknown; body?: unknown; source?: unknown; reason?: unknown }> };
             for (const copy of Array.isArray(payload.copies) ? payload.copies : []) {
                const context = missing.find((candidate) => candidate.id === copy.id);
                if (!context) continue;
                const body = validateNotificationBody(copy.body, context);
-               if (body) generated.set(context.id, { body, source: copy.source === "llm" ? "llm" : "fallback" });
+               if (body) generated.set(context.id, {
+                  body,
+                  source: copy.source === "llm" ? "llm" : "safety",
+                  reason: typeof copy.reason === "string" ? copy.reason.slice(0, 80) : undefined,
+               });
             }
          }
       } catch {
@@ -123,7 +143,7 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
       const copy = generated.get(context.id);
       const body = copy?.body || fallbackNotificationBody(context);
       result.set(context.id, body);
-      cache.entries[notificationCopyCacheKey(context)] = { body, createdAt: now, source: copy?.source || "fallback" };
+      cache.entries[notificationCopyCacheKey(context)] = { body, createdAt: now, source: copy?.source || "safety", reason: copy?.reason };
       cache.recentBodies = [...cache.recentBodies.filter((candidate) => candidate !== body), body].slice(-18);
    }
    cache.entries = Object.fromEntries(
@@ -132,5 +152,9 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
          .slice(0, CACHE_LIMIT),
    );
    saveCache(cache);
+   recordDiagnostics(missing.map((context) => {
+      const copy = generated.get(context.id);
+      return { id: context.id, source: copy?.source || "safety", reason: copy?.reason || (copy ? undefined : "client-or-timeout") };
+   }));
    return result;
 }
