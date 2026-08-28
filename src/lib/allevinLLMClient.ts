@@ -4,6 +4,7 @@
 // ========================================
 
 import type { KinLLMRequest, KinLLMResponse } from "@/lib/allevinLLMTypes";
+import { ALLEVIN_BUILD } from "@/lib/allevinBuild";
 
 const LANGUAGE_DIAGNOSTICS_KEY = "allevin-language-diagnostics-mkxv-1";
 
@@ -73,8 +74,9 @@ export async function requestKinLLM(request: KinLLMRequest): Promise<KinLLMRespo
    const fallback: KinLLMResponse = { ok: true, reply: "", actions: [], usedFallback: true };
 
    try {
-      const response = await fetch("/api/allevin/llm", {
+      const response = await fetch(`/api/allevin/llm?client=${encodeURIComponent(ALLEVIN_BUILD.languageProtocol)}`, {
          method: "POST",
+         cache: "no-store",
          headers: { "Content-Type": "application/json" },
          body: JSON.stringify(sanitizeRequest(request)),
       });

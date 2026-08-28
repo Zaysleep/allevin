@@ -16,7 +16,8 @@ import {
    readDailyRhythm,
    type RhythmEntry,
 } from "@/lib/dailyRhythm";
-import { notificationBodyFromCache } from "@/lib/allevinNotificationCopyClient";
+import { notificationBodyFromCache, prepareNotificationBodies } from "@/lib/allevinNotificationCopyClient";
+import type { NotificationCopyContext } from "@/lib/allevinNotificationCopy";
 import {
    buildNotificationTimeline,
    lifeNotificationContext,
@@ -29,7 +30,7 @@ import type { LifeItem, LifeImportance } from "@/lib/lifeTypes";
 import { serverPushIsActive } from "@/lib/allevinServerPushClient";
 
 const NOTIFICATION_LOG_KEY = "allevin-notification-log-mkxii-3";
-const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxiii-contextual-actions";
+const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxvii-contextual-copy";
 let reminderCheckRunning = false;
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 
@@ -86,6 +87,19 @@ async function showNotification(title: string, body: string, tag: string, entryI
       badge: "/allevin-icon-192.png",
       data: { url: "/", entryId },
    });
+}
+
+async function showContextualNotification(
+   context: NotificationCopyContext,
+   title: string,
+   tag: string,
+   entryId?: string,
+) {
+   const cached = notificationBodyFromCache(context);
+   const body = cached || (await prepareNotificationBodies([context])).get(context.id);
+   if (!body) return false;
+   await showNotification(title, body, tag, entryId);
+   return true;
 }
 
 function localReminderPriorityForEntry(entry: RhythmEntry): ReminderPriority {
@@ -169,27 +183,19 @@ export async function runRhythmReminderCheck(now = new Date()) {
          const prepKey = `${key}:${entry.sourceId}:${entry.time}:schedule-prep`;
          if (!hasExplicitTransition && nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
             const context = rhythmNotificationContext({ id: prepKey, entry, date: now, phase: "prep", tone, priority, leadMinutes: lead, timeline });
-            await showNotification(
-               entry.title,
-               notificationBodyFromCache(context),
-               `allevin-${key}-${entry.sourceId}-${entry.time}-schedule-prep`,
-               entry.sourceId,
-            );
-            log.add(prepKey);
-            saveLog(log);
+            if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-schedule-prep`, entry.sourceId)) {
+               log.add(prepKey);
+               saveLog(log);
+            }
          }
 
          const scheduleKey = `${key}:${entry.sourceId}:${entry.time}:schedule-start`;
          if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(scheduleKey)) {
             const context = rhythmNotificationContext({ id: scheduleKey, entry, date: now, phase: "start", tone, priority, leadMinutes: lead, timeline });
-            await showNotification(
-               entry.title,
-               notificationBodyFromCache(context),
-               `allevin-${key}-${entry.sourceId}-${entry.time}-schedule`,
-               entry.sourceId,
-            );
-            log.add(scheduleKey);
-            saveLog(log);
+            if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-schedule`, entry.sourceId)) {
+               log.add(scheduleKey);
+               saveLog(log);
+            }
          }
          continue;
       }
@@ -209,28 +215,20 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const prepKey = `${key}:${entry.sourceId}:${entry.time}:prep`;
       if (nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
          const context = rhythmNotificationContext({ id: prepKey, entry, date: now, phase: "prep", tone, priority, leadMinutes: lead, timeline });
-         await showNotification(
-            entry.title,
-            notificationBodyFromCache(context),
-            `allevin-${key}-${entry.sourceId}-${entry.time}-prep`,
-            entry.sourceId,
-         );
-         log.add(prepKey);
-         saveLog(log);
+         if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-prep`, entry.sourceId)) {
+            log.add(prepKey);
+            saveLog(log);
+         }
       }
 
       const startKey = `${key}:${entry.sourceId}:${entry.time}:start`;
 
       if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(startKey)) {
          const context = rhythmNotificationContext({ id: startKey, entry, date: now, phase: "start", tone, priority, leadMinutes: lead, timeline });
-         await showNotification(
-            entry.title,
-            notificationBodyFromCache(context),
-            `allevin-${key}-${entry.sourceId}-${entry.time}-start`,
-            entry.sourceId,
-         );
-         log.add(startKey);
-         saveLog(log);
+         if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-start`, entry.sourceId)) {
+            log.add(startKey);
+            saveLog(log);
+         }
       }
 
    }
@@ -247,27 +245,19 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const prepKey = `${key}:life:${item.id}:prep`;
       if (nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
          const context = lifeNotificationContext({ id: prepKey, item, phase: "prep", tone, priority, leadMinutes: lead, timeline });
-         await showNotification(
-            item.title,
-            notificationBodyFromCache(context),
-            `allevin-${key}-life-${item.id}-prep`,
-            item.id,
-         );
-         log.add(prepKey);
-         saveLog(log);
+         if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-prep`, item.id)) {
+            log.add(prepKey);
+            saveLog(log);
+         }
       }
 
       const eventKey = `${key}:life:${item.id}:start`;
       if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(eventKey)) {
          const context = lifeNotificationContext({ id: eventKey, item, phase: "start", tone, priority, leadMinutes: lead, timeline });
-         await showNotification(
-            item.title,
-            notificationBodyFromCache(context),
-            `allevin-${key}-life-${item.id}-start`,
-            item.id,
-         );
-         log.add(eventKey);
-         saveLog(log);
+         if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-start`, item.id)) {
+            log.add(eventKey);
+            saveLog(log);
+         }
       }
    }
 

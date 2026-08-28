@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import BackupRestoreSettings from "@/components/BackupRestoreSettings";
 import CalendarWorkspace from "@/components/CalendarWorkspace";
 import KinDock from "@/components/KinDock";
+import LanguageConnectionStatus from "@/components/LanguageConnectionStatus";
 import LifeItemRow from "@/components/LifeItemRow";
 import LifestyleSettingsEditor from "@/components/LifestyleSettingsEditor";
 import LiveClock from "@/components/LiveClock";
@@ -187,6 +188,8 @@ export default function LifeDashboard() {
                   <button className="settings-guide-button" type="button" onClick={() => { setSettingsOpen(false); setOnboardingMode("setup"); }}>Set up ALLEVIN again</button>
                   <button className="settings-guide-button" type="button" onClick={() => { setSettingsOpen(false); setOnboardingMode("install"); }}>Add ALLEVIN to your phone</button>
                </section>
+               <div className="settings-divider" />
+               <LanguageConnectionStatus />
                <div className="settings-divider" />
                <button className="settings-reset" onClick={resetLife}>Clear ALLEVIN data</button>
             </aside>

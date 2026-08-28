@@ -19,6 +19,9 @@ import { getAllevinUserProfile, saveAllevinUserProfile } from "@/lib/allevinUser
 import { ALLEVIN_TONE_STORAGE_KEY, readAllevinTone, saveAllevinTone, type AllevinTone } from "@/lib/allevinVoice";
 import { readLifeState } from "@/lib/lifeStore";
 import { appendKinMessage, readKinConversation } from "@/lib/kinConversation";
+import { arrangeOnboardingRoutineTimes, placeNewOnboardingRoutine, representativeScheduleDraft } from "@/lib/onboardingScheduleCore";
+
+export { representativeScheduleDraft } from "@/lib/onboardingScheduleCore";
 
 export const ALLEVIN_ONBOARDING_STORAGE_KEY = "allevin-onboarding-v1";
 
@@ -114,7 +117,20 @@ function scheduleCategory(category: OnboardingScheduleCategory): RhythmCategory 
 function defaultScheduleTitle(category: OnboardingScheduleCategory) {
    if (category === "work") return "Work";
    if (category === "school") return "Class";
-   return "Regular commitment";
+   return "Regular schedule";
+}
+
+/**
+ * “Arrange for me” is intentionally deterministic. It packs before-routines
+ * backward from the schedule start and after-routines forward from its end.
+ * Users can then adjust ordinary clock fields; they never calculate offsets.
+ */
+export function arrangeOnboardingRoutines(draft: OnboardingDraft): OnboardingDraft {
+   return arrangeOnboardingRoutineTimes(draft);
+}
+
+export function placeAddedOnboardingRoutine(draft: OnboardingDraft, routineId: string): OnboardingDraft {
+   return placeNewOnboardingRoutine(draft, routineId);
 }
 
 function lifestyleChoices(value: string) {
@@ -278,7 +294,10 @@ export function onboardingDraftFromCurrentState(): OnboardingDraft {
       .map((anchor) => {
          const linkedBlock = anchor.scheduleBlockId
             ? scheduleBlocks.find((block) => block.id === anchor.scheduleBlockId)
-            : scheduleBlocks.find((block) => scheduleCategory(block.category) === anchor.scheduleCategory);
+            : representativeScheduleDraft(
+                 scheduleBlocks,
+                 scheduleBlocks.find((block) => scheduleCategory(block.category) === anchor.scheduleCategory)?.category,
+              );
          const offset = anchor.scheduleOffsetMinutes ?? 0;
          const relative = anchor.timingMode === "schedule-relative" && Boolean(linkedBlock);
          return {
@@ -287,7 +306,14 @@ export function onboardingDraftFromCurrentState(): OnboardingDraft {
             timing: relative ? (offset < 0 ? "before" : "after") : "fixed",
             scheduleBlockId: linkedBlock?.id,
             days: anchor.dayRule === "everyday" ? [...ALL_DAYS] : [...(anchor.days || [])],
-            time: anchor.time,
+            // Reconstruct the visible example clock from the stored relative
+            // offset and the representative schedule instead of trusting an
+            // old example time that may have belonged to another shift.
+            time: relative && linkedBlock
+               ? clockFromMinutes(
+                    minutesFromClock(offset < 0 ? linkedBlock.start : linkedBlock.end) + offset,
+                 )
+               : anchor.time,
             offsetMinutes: relative ? Math.max(5, Math.abs(offset)) : 30,
             durationMinutes: anchor.durationMinutes,
          };
@@ -321,13 +347,13 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
    if (!cleanName) throw new Error("Add the name you want ALLEVIN to use first.");
 
    const incompleteSchedule = draft.scheduleBlocks.find((block) => !block.days.length || !block.start || !block.end);
-   if (incompleteSchedule) throw new Error("Choose at least one day, a start time, and an end time for each regular commitment.");
+   if (incompleteSchedule) throw new Error("Choose at least one day, a start time, and an end time for each regular schedule.");
 
    const untitledRoutine = draft.routines.find((routine) => !sanitizeText(routine.title, 120));
    if (untitledRoutine) throw new Error("Give each routine a name, or remove the empty routine before continuing.");
 
    const unlinkedRelativeRoutine = draft.routines.find((routine) => routine.timing !== "fixed" && !draft.scheduleBlocks.some((block) => block.id === routine.scheduleBlockId));
-   if (unlinkedRelativeRoutine) throw new Error(`Choose which regular commitment ${sanitizeText(unlinkedRelativeRoutine.title, 120)} should happen ${unlinkedRelativeRoutine.timing}.`);
+   if (unlinkedRelativeRoutine) throw new Error(`Choose which regular schedule ${sanitizeText(unlinkedRelativeRoutine.title, 120)} should happen ${unlinkedRelativeRoutine.timing}.`);
 
    const scheduleBlocks: RhythmScheduleBlock[] = draft.scheduleBlocks
       .filter((block) => block.days.length && block.start && block.end)
@@ -349,7 +375,7 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
          const linked = scheduleBlocks.find((block) => block.id === routine.scheduleBlockId);
 
          if (routine.timing !== "fixed" && linked) {
-            // The user supplies an ordinary normal-day clock. ALLEVIN derives
+            // The user supplies an ordinary representative-day clock. ALLEVIN derives
             // the relative offset internally and never asks them to calculate
             // raw minutes from a schedule boundary.
             const signedOffset = signedRoutineOffset(routine, linked);

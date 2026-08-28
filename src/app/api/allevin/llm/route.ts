@@ -8,12 +8,33 @@
 import { NextResponse } from "next/server";
 
 import { openAICompletionOptions, providerFailureIsRetryable, providerFailureReason } from "@/lib/allevinOpenAIRequest";
+import { ALLEVIN_BUILD } from "@/lib/allevinBuild";
 
 import type { KinLLMRequest, KinLLMResponse } from "@/lib/allevinLLMTypes";
 import type { KinAction, KinActionItemInput, LifeContext, LifeImportance, LifeItemKind, LifeItemState, LifeRecurrence, LifeTimingPrecision } from "@/lib/lifeTypes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function noStoreJson(body: unknown, init?: ResponseInit) {
+   const headers = new Headers(init?.headers);
+   headers.set("Cache-Control", "no-store, max-age=0");
+   headers.set("X-ALLEVIN-Build", ALLEVIN_BUILD.version);
+   return NextResponse.json(body, { ...init, headers });
+}
+
+/**
+ * A read-only production parity check. It reveals only whether the runtime has
+ * its server-side language configuration; secret values never leave Vercel.
+ */
+export async function GET() {
+   return noStoreJson({
+      ok: true,
+      build: ALLEVIN_BUILD.version,
+      protocol: ALLEVIN_BUILD.languageProtocol,
+      configured: Boolean(process.env.OPENAI_API_KEY?.trim()),
+   });
+}
 
 const VALID_CONTEXTS: LifeContext[] = ["personal", "work", "school", "kin-software", "home", "errand", "car", "finance", "health", "other"];
 const VALID_KINDS: LifeItemKind[] = ["task", "commitment", "waiting", "routine", "note"];

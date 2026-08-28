@@ -33,6 +33,12 @@ function languageVariationNonce() {
    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function languageConnectionReply(changeSaved: boolean) {
+   return changeSaved
+      ? "The change is saved, but my personal response couldn’t connect. Check Personal language in Settings and try again."
+      : "I couldn’t reach personal language just now. Check Personal language in Settings and try again.";
+}
+
 function groundedReplyIsSafe(
    reply: string,
    receipt: string,
@@ -147,7 +153,10 @@ async function phraseStateAcknowledgement(
       if (natural && groundedReplyIsSafe(natural, stateReceipt, recentConversation)) return natural;
       rejectedReply = natural || response.reply;
    }
-   return stateReceipt;
+   // A failed language call must not masquerade as an intentionally robotic
+   // answer. Deterministic state remains safe, while the UI tells the user why
+   // the personal response is missing and where to verify the deployment.
+   return responseMode === "state-ack" ? languageConnectionReply(true) : stateReceipt;
 }
 
 async function prepareMutationLanguage(
@@ -191,7 +200,7 @@ async function prepareMutationLanguage(
       rejectedReply = response.reply;
    }
 
-   return { reply: stateReceipt, title: refinedTitle };
+   return { reply: languageConnectionReply(true), title: refinedTitle };
 }
 
 export default function KinDock() {
@@ -203,7 +212,7 @@ export default function KinDock() {
    const scrollRef = useRef<HTMLDivElement>(null);
 
    useEffect(() => {
-      setMessages(readKinConversation());
+      const initialRefresh = window.setTimeout(() => setMessages(readKinConversation()), 0);
       const refresh = () => setMessages(readKinConversation());
       const focusAllevin = () => {
          setOpen(true);
@@ -212,6 +221,7 @@ export default function KinDock() {
       window.addEventListener(KIN_CONVERSATION_UPDATED_EVENT, refresh);
       window.addEventListener(KIN_FOCUS_EVENT, focusAllevin);
       return () => {
+         window.clearTimeout(initialRefresh);
          window.removeEventListener(KIN_CONVERSATION_UPDATED_EVENT, refresh);
          window.removeEventListener(KIN_FOCUS_EVENT, focusAllevin);
       };

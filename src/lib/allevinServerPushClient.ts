@@ -1,7 +1,7 @@
 "use client";
 
 import { buildRhythmForDate, localDateKey, minutesFromClock, readDailyRhythm, type RhythmEntry } from "@/lib/dailyRhythm";
-import { fallbackNotificationBody, type NotificationCopyContext } from "@/lib/allevinNotificationCopy";
+import type { NotificationCopyContext } from "@/lib/allevinNotificationCopy";
 import { prepareNotificationBodies } from "@/lib/allevinNotificationCopyClient";
 import {
    buildNotificationTimeline,
@@ -16,6 +16,8 @@ import type { LifeImportance, LifeItem } from "@/lib/lifeTypes";
 export const SERVER_PUSH_ACTIVE_KEY = "allevin-server-push-active-v1";
 const DEVICE_ID_KEY = "allevin-push-device-id-v1";
 const HORIZON_HOURS = 48;
+let copyRetryTimer: number | undefined;
+let copyRetryAttempts = 0;
 
 type ReminderPhase = "prep" | "start";
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
@@ -136,7 +138,7 @@ function addTwoPhaseJobs({
          deviceId: device,
          dueAt: prepAt,
          title,
-         body: fallbackNotificationBody(copyContext),
+         body: "",
          tag: `allevin-${dateKey}-${sourceId}-prep`,
          url: "/",
          entryId: sourceId,
@@ -155,7 +157,7 @@ function addTwoPhaseJobs({
          deviceId: device,
          dueAt: startAt,
          title,
-         body: fallbackNotificationBody(copyContext),
+         body: "",
          tag: `allevin-${dateKey}-${sourceId}-start`,
          url: "/",
          entryId: sourceId,
@@ -250,12 +252,21 @@ function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxiii-contextual-actions", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxvii-contextual-copy", {
       scope: "/",
       updateViaCache: "none",
    });
    await registration.update();
    return registration;
+}
+
+function queueCopyRetry() {
+   if (copyRetryTimer !== undefined || copyRetryAttempts >= 3) return;
+   copyRetryAttempts += 1;
+   copyRetryTimer = window.setTimeout(() => {
+      copyRetryTimer = undefined;
+      void syncServerNotificationSchedule();
+   }, 20_000);
 }
 
 async function ensurePushSubscription() {
@@ -280,10 +291,18 @@ export async function syncServerNotificationSchedule() {
       const device = deviceId();
       const jobs = buildPushPlan(device);
       const bodies = await prepareNotificationBodies(jobs.map((job) => job.copyContext));
-      const preparedJobs = jobs.map(({ copyContext, ...job }) => ({
-         ...job,
-         body: bodies.get(copyContext.id) || fallbackNotificationBody(copyContext),
-      }));
+      const preparedJobs = jobs.flatMap(({ copyContext, ...job }) => {
+         const body = bodies.get(copyContext.id);
+         return body ? [{ ...job, body }] : [];
+      });
+      if (preparedJobs.length < jobs.length) queueCopyRetry();
+      else {
+         copyRetryAttempts = 0;
+         if (copyRetryTimer !== undefined) {
+            window.clearTimeout(copyRetryTimer);
+            copyRetryTimer = undefined;
+         }
+      }
       const subscription = await ensurePushSubscription();
       const response = await fetch("/api/allevin/push/sync", {
          method: "POST",

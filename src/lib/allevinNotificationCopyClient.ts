@@ -1,22 +1,20 @@
 "use client";
 
 import {
-   fallbackNotificationBody,
    notificationCopyCacheKey,
    validateNotificationBody,
    type NotificationCopyContext,
 } from "./allevinNotificationCopy";
 
-const COPY_CACHE_KEY = "allevin-notification-copy-cache-v2";
+const COPY_CACHE_KEY = "allevin-notification-copy-cache-v3";
 const CACHE_MAX_AGE = 14 * 24 * 60 * 60 * 1000;
-const FALLBACK_CACHE_MAX_AGE = 10 * 60 * 1000;
 const CACHE_LIMIT = 220;
 const DIAGNOSTICS_KEY = "allevin-language-diagnostics-mkxv-1";
 
 interface CopyCacheEntry {
    body: string;
    createdAt: number;
-   source?: "llm" | "safety" | "fallback";
+   source: "llm";
    reason?: string;
 }
 
@@ -39,9 +37,8 @@ function readCache() {
       const entries = Object.fromEntries(
          Object.entries(parsed.entries)
             .filter(([, value]) => {
-               if (!value || typeof value.body !== "string") return false;
-               const maxAge = value.source === "llm" ? CACHE_MAX_AGE : FALLBACK_CACHE_MAX_AGE;
-               return now - Number(value.createdAt || 0) <= maxAge;
+               if (!value || value.source !== "llm" || typeof value.body !== "string") return false;
+               return now - Number(value.createdAt || 0) <= CACHE_MAX_AGE;
             })
             .sort((left, right) => Number(right[1].createdAt || 0) - Number(left[1].createdAt || 0))
             .slice(0, CACHE_LIMIT),
@@ -68,8 +65,9 @@ function saveCache(cache: CopyCache) {
 }
 
 export function notificationBodyFromCache(context: NotificationCopyContext) {
-   const cached = readCache().entries[notificationCopyCacheKey(context)]?.body;
-   return validateNotificationBody(cached, context) || fallbackNotificationBody(context);
+   const cached = readCache().entries[notificationCopyCacheKey(context)];
+   if (cached?.source !== "llm") return null;
+   return validateNotificationBody(cached.body, context);
 }
 
 function randomNonce() {
@@ -107,34 +105,38 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
       else missing.push(context);
    }
 
-   const generated = new Map<string, { body: string; source: "llm" | "safety"; reason?: string }>();
+   const generated = new Map<string, { body: string; source: "llm"; reason?: string }>();
    const requestChunk = async (chunk: NotificationCopyContext[], chunkIndex: number) => {
-      const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 25_000);
-      try {
-         const response = await fetch("/api/allevin/notifications/copy", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contexts: chunk, recentBodies: cache.recentBodies.slice(-12), variationNonce: `${randomNonce()}-${chunkIndex}` }),
-            signal: controller.signal,
-         });
-         if (response.ok) {
-            const payload = (await response.json()) as { copies?: Array<{ id?: unknown; body?: unknown; source?: unknown; reason?: unknown }> };
-            for (const copy of Array.isArray(payload.copies) ? payload.copies : []) {
-               const context = chunk.find((candidate) => candidate.id === copy.id);
-               if (!context) continue;
-               const body = validateNotificationBody(copy.body, context);
-               if (body) generated.set(context.id, {
-                  body,
-                  source: copy.source === "llm" ? "llm" : "safety",
-                  reason: typeof copy.reason === "string" ? copy.reason.slice(0, 80) : undefined,
-               });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+         const controller = new AbortController();
+         const timeout = window.setTimeout(() => controller.abort(), 25_000);
+         try {
+            const response = await fetch("/api/allevin/notifications/copy", {
+               method: "POST",
+               headers: { "Content-Type": "application/json" },
+               body: JSON.stringify({ contexts: chunk, recentBodies: cache.recentBodies.slice(-12), variationNonce: `${randomNonce()}-${chunkIndex}-${attempt}` }),
+               cache: "no-store",
+               signal: controller.signal,
+            });
+            if (response.ok) {
+               const payload = (await response.json()) as { copies?: Array<{ id?: unknown; body?: unknown; source?: unknown; reason?: unknown }> };
+               for (const copy of Array.isArray(payload.copies) ? payload.copies : []) {
+                  const context = chunk.find((candidate) => candidate.id === copy.id);
+                  if (!context || copy.source !== "llm") continue;
+                  const body = validateNotificationBody(copy.body, context);
+                  if (body) generated.set(context.id, {
+                     body,
+                     source: "llm",
+                     reason: typeof copy.reason === "string" ? copy.reason.slice(0, 80) : undefined,
+                  });
+               }
             }
+         } catch {
+            // A second attempt below handles a brief provider or network miss.
+         } finally {
+            window.clearTimeout(timeout);
          }
-      } catch {
-         // A missing/slow provider must never block notification planning.
-      } finally {
-         window.clearTimeout(timeout);
+         if (chunk.every((context) => generated.has(context.id))) return;
       }
    };
 
@@ -150,10 +152,10 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
    const now = Date.now();
    for (const context of missing) {
       const copy = generated.get(context.id);
-      const body = copy?.body || fallbackNotificationBody(context);
-      result.set(context.id, body);
-      cache.entries[notificationCopyCacheKey(context)] = { body, createdAt: now, source: copy?.source || "safety", reason: copy?.reason };
-      cache.recentBodies = [...cache.recentBodies.filter((candidate) => candidate !== body), body].slice(-18);
+      if (!copy) continue;
+      result.set(context.id, copy.body);
+      cache.entries[notificationCopyCacheKey(context)] = { body: copy.body, createdAt: now, source: "llm", reason: copy.reason };
+      cache.recentBodies = [...cache.recentBodies.filter((candidate) => candidate !== copy.body), copy.body].slice(-18);
    }
    cache.entries = Object.fromEntries(
       Object.entries(cache.entries)
@@ -163,7 +165,7 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
    saveCache(cache);
    recordDiagnostics(missing.map((context) => {
       const copy = generated.get(context.id);
-      return { id: context.id, source: copy?.source || "safety", reason: copy?.reason || (copy ? undefined : "client-or-timeout") };
+      return { id: context.id, source: copy?.source || "missing", reason: copy?.reason || (copy ? undefined : "client-or-timeout") };
    }));
    return result;
 }

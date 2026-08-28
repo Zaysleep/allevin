@@ -5,7 +5,7 @@
  * can wake the installed PWA later without changing the client UI contract.
  */
 
-const SW_VERSION = "mkxiii-contextual-actions";
+const SW_VERSION = "mkxvii-contextual-copy";
 
 self.addEventListener("install", () => {
   // Promote a newly deployed worker immediately. ALLEVIN stores user state in
@@ -41,7 +41,7 @@ self.addEventListener("push", (event) => {
   const title = payload.title || "ALLEVIN";
   const actionTarget = payload.data?.actionTarget;
   const options = {
-    body: payload.body || "Something changed in your day.",
+    body: typeof payload.body === "string" ? payload.body : "",
     tag: payload.tag || `allevin-push-${Date.now()}`,
     icon: "/allevin-icon-192.png",
     badge: "/allevin-icon-192.png",

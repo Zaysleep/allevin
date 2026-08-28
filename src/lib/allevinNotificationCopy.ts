@@ -18,6 +18,13 @@ export interface NotificationUpcomingContext {
    minutesFromCurrentEnd: number;
 }
 
+export interface NotificationPreviousContext {
+   title: string;
+   category: string;
+   endedAtLabel: string;
+   minutesBeforeCurrent: number;
+}
+
 export interface NotificationCopyContext {
    id: string;
    occurrenceKey: string;
@@ -28,6 +35,10 @@ export interface NotificationCopyContext {
    priority: 1 | 2 | 3 | 4 | 5;
    leadMinutes: number;
    durationMinutes: number;
+   startsAtLabel: string;
+   endsAtLabel: string;
+   timeOfDay: "morning" | "afternoon" | "evening" | "night";
+   previous?: NotificationPreviousContext;
    next?: NotificationUpcomingContext;
 }
 
@@ -55,6 +66,8 @@ const DISALLOWED_COPY = [
    "you’ve got the space for this now",
    "get into it",
    "future-you",
+   "scheduled reminder is due now",
+   "scheduled in",
    "notification phase",
    "priority level",
    "deterministic engine",
@@ -73,10 +86,6 @@ function normalized(value: string) {
    return value.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function minuteLabel(minutes: number) {
-   return Math.max(1, Math.round(minutes));
-}
-
 function localClockLabel(timestamp: number) {
    const date = new Date(timestamp);
    const hours = date.getHours();
@@ -84,6 +93,14 @@ function localClockLabel(timestamp: number) {
    const suffix = hours >= 12 ? "PM" : "AM";
    const hour = hours % 12 || 12;
    return `${hour}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function localTimeOfDay(timestamp: number): NotificationCopyContext["timeOfDay"] {
+   const hour = new Date(timestamp).getHours();
+   if (hour < 5 || hour >= 22) return "night";
+   if (hour < 12) return "morning";
+   if (hour < 17) return "afternoon";
+   return "evening";
 }
 
 /**
@@ -123,6 +140,10 @@ export function createNotificationCopyContext({
       .filter((item) => item.id !== timelineId && item.startAt > startAt + 60_000 && normalized(item.title) !== normalized(safeTitle))
       .sort((left, right) => left.startAt - right.startAt)
       .find((item) => item.startAt - startAt <= 6 * 60 * 60 * 1000);
+   const previous = [...timeline]
+      .filter((item) => item.id !== timelineId && item.endAt <= startAt && normalized(item.title) !== normalized(safeTitle))
+      .sort((left, right) => right.endAt - left.endAt)
+      .find((item) => startAt - item.endAt <= 6 * 60 * 60 * 1000);
 
    return {
       id: cleanInline(id, 320),
@@ -134,6 +155,17 @@ export function createNotificationCopyContext({
       priority,
       leadMinutes: Math.max(0, Math.min(60, Math.round(leadMinutes || 0))),
       durationMinutes: Math.max(0, Math.min(1440, Math.round((endAt - startAt) / 60_000))),
+      startsAtLabel: localClockLabel(startAt),
+      endsAtLabel: localClockLabel(endAt),
+      timeOfDay: localTimeOfDay(startAt),
+      previous: previous
+         ? {
+              title: cleanInline(previous.title, 160),
+              category: cleanInline(previous.category, 80) || "general",
+              endedAtLabel: localClockLabel(previous.endAt),
+              minutesBeforeCurrent: Math.max(0, Math.round((startAt - previous.endAt) / 60_000)),
+           }
+         : undefined,
       next: next
          ? {
               title: cleanInline(next.title, 160),
@@ -156,6 +188,10 @@ export function notificationCopyCacheKey(context: NotificationCopyContext) {
       priority: context.priority,
       leadMinutes: context.leadMinutes,
       durationMinutes: context.durationMinutes,
+      startsAtLabel: context.startsAtLabel,
+      endsAtLabel: context.endsAtLabel,
+      timeOfDay: context.timeOfDay,
+      previous: context.previous,
       next: context.next,
    });
    let hash = 2166136261;
@@ -186,13 +222,4 @@ export function validateNotificationBody(value: unknown, context: NotificationCo
    if ((body.match(/[.!?]/g) || []).length > 2) return null;
    if (/^[#*\-]|```|\b(?:phase|priority|schedule engine)\b/i.test(body)) return null;
    return body;
-}
-
-export function fallbackNotificationBody(context: NotificationCopyContext) {
-   const lead = minuteLabel(context.leadMinutes);
-   if (context.phase === "prep") {
-      return `Scheduled in ${lead} minutes.`;
-   }
-   if (context.next) return `Next: ${context.next.title} at ${context.next.startsAtLabel}.`;
-   return "Scheduled reminder is due now.";
 }

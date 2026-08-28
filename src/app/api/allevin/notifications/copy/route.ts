@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 
 import {
-   fallbackNotificationBody,
    validateNotificationBody,
    type NotificationCopyContext,
 } from "@/lib/allevinNotificationCopy";
@@ -13,8 +12,9 @@ export const dynamic = "force-dynamic";
 
 type CopyResponse = {
    ok: true;
-   copies: Array<{ id: string; body: string; source: "llm" | "safety"; reason?: NotificationCopyFailureReason }>;
-   usedFallback: boolean;
+   copies: Array<{ id: string; body: string; source: "llm" }>;
+   complete: boolean;
+   failureReason?: NotificationCopyFailureReason;
 };
 
 type NotificationCopyFailureReason =
@@ -56,6 +56,11 @@ function sanitizeContext(value: unknown): NotificationCopyContext | null {
 
    const nextRaw = raw.next;
    const nextTitle = clean(nextRaw?.title, 160);
+   const previousRaw = raw.previous;
+   const previousTitle = clean(previousRaw?.title, 160);
+   const timeOfDay = raw.timeOfDay === "morning" || raw.timeOfDay === "afternoon" || raw.timeOfDay === "evening" || raw.timeOfDay === "night"
+      ? raw.timeOfDay
+      : "afternoon";
    return {
       id,
       occurrenceKey,
@@ -66,6 +71,17 @@ function sanitizeContext(value: unknown): NotificationCopyContext | null {
       priority,
       leadMinutes: safeInteger(raw.leadMinutes, 0, 60),
       durationMinutes: safeInteger(raw.durationMinutes, 0, 1440),
+      startsAtLabel: clean(raw.startsAtLabel, 24),
+      endsAtLabel: clean(raw.endsAtLabel, 24),
+      timeOfDay,
+      previous: previousRaw && previousTitle
+         ? {
+              title: previousTitle,
+              category: clean(previousRaw.category, 80) || "general",
+              endedAtLabel: clean(previousRaw.endedAtLabel, 24),
+              minutesBeforeCurrent: safeInteger(previousRaw.minutesBeforeCurrent, 0, 360),
+           }
+         : undefined,
       next: nextRaw && nextTitle
          ? {
               title: nextTitle,
@@ -87,11 +103,12 @@ function parseJson(content: string) {
    }
 }
 
-function fallbackResponse(contexts: NotificationCopyContext[], reason: NotificationCopyFailureReason): CopyResponse {
+function unavailableResponse(reason: NotificationCopyFailureReason): CopyResponse {
    return {
       ok: true,
-      copies: contexts.map((context) => ({ id: context.id, body: fallbackNotificationBody(context), source: "safety" as const, reason })),
-      usedFallback: true,
+      copies: [],
+      complete: false,
+      failureReason: reason,
    };
 }
 
@@ -107,8 +124,19 @@ function buildPrompt(
       category: context.category,
       phase: context.phase,
       tone: context.tone,
+      startsAtLocalTime: context.startsAtLabel,
+      endsAtLocalTime: context.endsAtLabel,
+      timeOfDay: context.timeOfDay,
       minutesBeforeStart: context.phase === "prep" ? context.leadMinutes : 0,
       durationMinutes: context.durationMinutes,
+      previousVerifiedItem: context.previous
+         ? {
+              title: context.previous.title,
+              category: context.previous.category,
+              endedAtLocalTime: context.previous.endedAtLabel,
+              minutesBeforeCurrentBegins: context.previous.minutesBeforeCurrent,
+           }
+         : null,
       nextVerifiedItem: context.next
          ? {
               title: context.next.title,
@@ -134,10 +162,12 @@ COPY RULES
 - The visible title is already shown above the body. Never repeat the exact visible title anywhere in the body.
 - Write one or two short sentences, 18–180 characters total.
 - Sound like a thoughtful personal assistant who understands why this ordinary moment matters.
+- Use the supplied local time and time of day when they make the message feel naturally situated, but do not mechanically announce the clock.
 - Use contractions and natural spoken rhythm when appropriate.
 - Infer the ordinary human purpose supported by the visible title and category: preparation, rest, recovery, nourishment, movement, focus, care, connection, relief, or protecting time. Express that purpose naturally when it makes the reminder more useful. Never invent a personal motive or emotional state.
 - Say what matters now, connect it to what comes next when useful, and offer at most one practical suggestion.
 - Mention a next item only when nextVerifiedItem is provided. Never invent an event, commute, location, preference, urgency, completion, conflict, or available time.
+- Mention or allude to a previous item only when previousVerifiedItem is provided. Use it to support a natural handoff—for example, leaving work behind before an evening routine—without claiming the previous item was completed.
 - If the next item is 60 or more minutes away, state its supplied startsAtLocalTime instead of expressing the gap as a large number of minutes. Never make the user convert 60+ minutes into a clock time.
 - If the next item is under 60 minutes away, a natural minute countdown is acceptable.
 - A negative gapAfterCurrentEndsMinutes means the verified next item begins while the current item is still underway. Do not call that a conflict.
@@ -274,7 +304,7 @@ export async function POST(request: Request) {
    const variationNonce = clean(payload?.variationNonce, 120) || String(Date.now());
    const apiKey = process.env.OPENAI_API_KEY;
    const model = process.env.ALLEVIN_LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
-   if (!apiKey) return NextResponse.json(fallbackResponse(contexts, "missing-key"));
+   if (!apiKey) return NextResponse.json(unavailableResponse("missing-key"));
 
    try {
       const accepted = new Map<string, string>();
@@ -312,14 +342,17 @@ export async function POST(request: Request) {
          remaining = rejected;
       }
 
-      const copies = contexts.map((context) => {
+      const copies = contexts.flatMap((context) => {
          const body = accepted.get(context.id);
-         return body
-            ? { id: context.id, body, source: "llm" as const }
-            : { id: context.id, body: fallbackNotificationBody(context), source: "safety" as const, reason: failureReason };
+         return body ? [{ id: context.id, body, source: "llm" as const }] : [];
       });
-      return NextResponse.json({ ok: true, copies, usedFallback: remaining.length > 0 } satisfies CopyResponse);
+      return NextResponse.json({
+         ok: true,
+         copies,
+         complete: remaining.length === 0,
+         ...(remaining.length ? { failureReason } : {}),
+      } satisfies CopyResponse);
    } catch {
-      return NextResponse.json(fallbackResponse(contexts, "exception"));
+      return NextResponse.json(unavailableResponse("exception"));
    }
 }
