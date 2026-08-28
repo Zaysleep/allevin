@@ -28,11 +28,41 @@ function noStoreJson(body: unknown, init?: ResponseInit) {
  * its server-side language configuration; secret values never leave Vercel.
  */
 export async function GET() {
+   const apiKey = process.env.OPENAI_API_KEY?.trim();
+   const model = (process.env.ALLEVIN_LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
+   let providerReady = false;
+   let providerReason = apiKey ? "provider-unavailable" : "provider-configuration";
+
+   // A present environment variable is not the same as a working language
+   // connection. The model lookup is token-free and verifies the deployed key
+   // can actually reach the selected or compatible fallback model without
+   // exposing either value.
+   if (apiKey) {
+      try {
+         const healthModels = model === "gpt-4o-mini" ? [model] : [model, "gpt-4o-mini"];
+         for (const healthModel of healthModels) {
+            const provider = await fetch(`https://api.openai.com/v1/models/${encodeURIComponent(healthModel)}`, {
+               headers: { Authorization: `Bearer ${apiKey}` },
+               cache: "no-store",
+               signal: AbortSignal.timeout(6000),
+            });
+            providerReady = provider.ok;
+            providerReason = provider.ok ? "" : providerFailureReason(provider.status);
+            await provider.text();
+            if (provider.ok || provider.status === 401 || provider.status === 403 || provider.status === 429) break;
+         }
+      } catch {
+         providerReason = "provider-unavailable";
+      }
+   }
+
    return noStoreJson({
       ok: true,
       build: ALLEVIN_BUILD.version,
       protocol: ALLEVIN_BUILD.languageProtocol,
-      configured: Boolean(process.env.OPENAI_API_KEY?.trim()),
+      configured: Boolean(apiKey),
+      providerReady,
+      providerReason,
    });
 }
 
@@ -644,8 +674,8 @@ export async function POST(request: Request) {
 
    if (!payload) return NextResponse.json({ ok: false, reply: "", actions: [], usedFallback: true, error: "Invalid ALLEVIN request." } satisfies KinLLMResponse, { status: 400 });
 
-   const apiKey = process.env.OPENAI_API_KEY;
-   const model = process.env.ALLEVIN_LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
+   const apiKey = process.env.OPENAI_API_KEY?.trim();
+   const model = (process.env.ALLEVIN_LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
    if (!apiKey) return NextResponse.json({ ok: true, reply: "", actions: [], usedFallback: true, error: "No server AI key configured." } satisfies KinLLMResponse);
 
    try {
@@ -675,33 +705,52 @@ export async function POST(request: Request) {
               },
            }
          : { type: "json_object" };
-      const requestProvider = () => fetch("https://api.openai.com/v1/chat/completions", {
+      const requestProvider = (requestModel: string) => fetch("https://api.openai.com/v1/chat/completions", {
          method: "POST",
          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
          body: JSON.stringify({
-            model,
-            ...openAICompletionOptions(model, 700, phraseOnly ? 0.9 : 0.3),
+            model: requestModel,
+            ...openAICompletionOptions(requestModel, phraseOnly ? 1400 : 1200, phraseOnly ? 0.9 : 0.3),
             response_format: responseFormat,
             messages: buildPrompt(payload),
          }),
          cache: "no-store",
       });
 
-      let provider = await requestProvider();
-      if (!provider.ok && providerFailureIsRetryable(provider.status)) {
-         await provider.text();
-         provider = await requestProvider();
+      // Some configured models can be reachable yet return no usable content
+      // for this small structured-copy task (for example after consuming a low
+      // completion budget on reasoning). Preserve the chosen model first, then
+      // use a compatible language model only when that response is unusable.
+      const fallbackModel = "gpt-4o-mini";
+      const models = model === fallbackModel ? [model] : [model, fallbackModel];
+      let content = "";
+      let lastReason = "AI provider returned no content.";
+
+      for (const requestModel of models) {
+         let provider = await requestProvider(requestModel);
+         if (!provider.ok && providerFailureIsRetryable(provider.status)) {
+            await provider.text();
+            provider = await requestProvider(requestModel);
+         }
+
+         if (!provider.ok) {
+            lastReason = providerFailureReason(provider.status);
+            await provider.text();
+            // Authentication and rate failures affect the whole account; a
+            // second model cannot repair them. Model/format failures can.
+            if (provider.status === 401 || provider.status === 403 || provider.status === 429 || provider.status >= 500) break;
+            continue;
+         }
+
+         const data = await provider.json();
+         const candidate = data?.choices?.[0]?.message?.content;
+         if (typeof candidate === "string" && candidate.trim()) {
+            content = candidate;
+            break;
+         }
       }
 
-      if (!provider.ok) {
-         const reason = providerFailureReason(provider.status);
-         await provider.text();
-         return NextResponse.json({ ok: true, reply: "", actions: [], usedFallback: true, error: reason } satisfies KinLLMResponse);
-      }
-
-      const data = await provider.json();
-      const content = data?.choices?.[0]?.message?.content;
-      if (typeof content !== "string" || !content.trim()) return NextResponse.json({ ok: true, reply: "", actions: [], usedFallback: true, error: "AI provider returned no content." } satisfies KinLLMResponse);
+      if (!content) return noStoreJson({ ok: true, reply: "", actions: [], usedFallback: true, error: lastReason } satisfies KinLLMResponse);
 
       const parsed = parseJson(content) as Record<string, unknown>;
       const sanitizedActions = sanitizeActions(parsed.actions);
@@ -717,8 +766,8 @@ export async function POST(request: Request) {
             ? clean(parsed.canonicalTitle, 180) || undefined
             : undefined,
       };
-      return NextResponse.json(result);
+      return noStoreJson(result);
    } catch {
-      return NextResponse.json({ ok: true, reply: "", actions: [], usedFallback: true, error: "ALLEVIN used the local interpreter." } satisfies KinLLMResponse);
+      return noStoreJson({ ok: true, reply: "", actions: [], usedFallback: true, error: "provider-unavailable" } satisfies KinLLMResponse);
    }
 }

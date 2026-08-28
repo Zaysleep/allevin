@@ -8,6 +8,14 @@ import { ALLEVIN_BUILD } from "@/lib/allevinBuild";
 
 const LANGUAGE_DIAGNOSTICS_KEY = "allevin-language-diagnostics-mkxv-1";
 
+export type LanguageDiagnostic = {
+   at: number;
+   area: string;
+   mode: string;
+   source: "llm" | "provider" | "network" | "validation" | "safety";
+   reason?: string;
+};
+
 function clean(value: unknown, limit = 6000) {
    return String(value ?? "")
       .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
@@ -47,26 +55,61 @@ function sanitizeRequest(request: KinLLMRequest): KinLLMRequest {
    };
 }
 
-function recordLanguageDiagnostic(request: KinLLMRequest, source: "llm" | "safety", reason?: string) {
+function appendLanguageDiagnostic(entry: LanguageDiagnostic) {
    if (typeof window === "undefined") return;
    try {
       const parsed = JSON.parse(window.localStorage.getItem(LANGUAGE_DIAGNOSTICS_KEY) || "[]") as unknown;
       const previous = Array.isArray(parsed) ? parsed.slice(-80) : [];
       window.localStorage.setItem(
          LANGUAGE_DIAGNOSTICS_KEY,
-         JSON.stringify([
-            ...previous,
-            {
-               at: Date.now(),
-               area: "chat-language",
-               mode: request.responseMode || "normal",
-               source,
-               reason: clean(reason, 160) || undefined,
-            },
-         ].slice(-100)),
+         JSON.stringify([...previous, entry].slice(-100)),
       );
    } catch {
       // Diagnostics must never interfere with conversation.
+   }
+}
+
+function recordLanguageDiagnostic(
+   request: KinLLMRequest,
+   source: LanguageDiagnostic["source"],
+   reason?: string,
+) {
+   appendLanguageDiagnostic({
+      at: Date.now(),
+      area: "chat-language",
+      mode: request.responseMode || "normal",
+      source,
+      reason: clean(reason, 160) || undefined,
+   });
+}
+
+/**
+ * The provider may answer successfully while the browser rejects wording that
+ * does not preserve deterministic schedule truth. Record that separately so
+ * Settings never mislabels a validation failure as a missing API connection.
+ */
+export function recordLanguageValidationFailure(mode: KinLLMRequest["responseMode"], reason: string) {
+   appendLanguageDiagnostic({
+      at: Date.now(),
+      area: "chat-language",
+      mode: mode || "normal",
+      source: "validation",
+      reason: clean(reason, 160) || undefined,
+   });
+}
+
+export function readLatestLanguageDiagnostic(): LanguageDiagnostic | null {
+   if (typeof window === "undefined") return null;
+   try {
+      const parsed = JSON.parse(window.localStorage.getItem(LANGUAGE_DIAGNOSTICS_KEY) || "[]") as unknown;
+      if (!Array.isArray(parsed)) return null;
+      const latest = parsed.at(-1);
+      if (!latest || typeof latest !== "object") return null;
+      const value = latest as Partial<LanguageDiagnostic>;
+      if (typeof value.at !== "number" || typeof value.source !== "string") return null;
+      return value as LanguageDiagnostic;
+   } catch {
+      return null;
    }
 }
 
@@ -81,7 +124,7 @@ export async function requestKinLLM(request: KinLLMRequest): Promise<KinLLMRespo
          body: JSON.stringify(sanitizeRequest(request)),
       });
       if (!response.ok) {
-         recordLanguageDiagnostic(request, "safety", `http-${response.status}`);
+         recordLanguageDiagnostic(request, "network", `http-${response.status}`);
          return fallback;
       }
       const parsed = (await response.json()) as Partial<KinLLMResponse>;
@@ -93,10 +136,10 @@ export async function requestKinLLM(request: KinLLMRequest): Promise<KinLLMRespo
          canonicalTitle: clean(parsed.canonicalTitle, 180) || undefined,
          error: clean(parsed.error, 240) || undefined,
       };
-      recordLanguageDiagnostic(request, result.usedFallback ? "safety" : "llm", result.error);
+      recordLanguageDiagnostic(request, result.usedFallback ? "provider" : "llm", result.error);
       return result;
    } catch {
-      recordLanguageDiagnostic(request, "safety", "client-or-network");
+      recordLanguageDiagnostic(request, "network", "client-or-network");
       return fallback;
    }
 }

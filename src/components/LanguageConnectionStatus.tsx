@@ -3,14 +3,17 @@
 import { useEffect, useState } from "react";
 
 import { ALLEVIN_BUILD } from "@/lib/allevinBuild";
+import { readLatestLanguageDiagnostic } from "@/lib/allevinLLMClient";
 
 type LanguageStatus = {
    build?: string;
    protocol?: string;
    configured?: boolean;
+   providerReady?: boolean;
+   providerReason?: string;
 };
 
-type ConnectionState = "checking" | "ready" | "update" | "configuration" | "unavailable";
+type ConnectionState = "checking" | "ready" | "update" | "configuration" | "provider" | "recent-failure" | "unavailable";
 
 /**
  * This is deliberately tucked into Settings. It gives a production tester a
@@ -39,8 +42,12 @@ export default function LanguageConnectionStatus() {
             setState("update");
          } else if (!status.configured) {
             setState("configuration");
+         } else if (!status.providerReady) {
+            setState("provider");
          } else {
-            setState("ready");
+            const latest = readLatestLanguageDiagnostic();
+            const recentFailure = latest && Date.now() - latest.at < 15 * 60 * 1000 && latest.source !== "llm";
+            setState(recentFailure ? "recent-failure" : "ready");
          }
       } catch {
          setState("unavailable");
@@ -58,6 +65,10 @@ export default function LanguageConnectionStatus() {
          ? "This app and the deployed assistant are on different versions."
          : state === "configuration"
             ? "The deployed assistant is missing its language connection."
+            : state === "provider"
+               ? "Personal language is configured, but the provider or selected model could not be reached."
+               : state === "recent-failure"
+                  ? "The connection is available, but the last personal response did not complete."
             : state === "unavailable"
                ? "The deployed assistant could not be reached."
                : "Checking personal language…";

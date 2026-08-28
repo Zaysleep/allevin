@@ -4,7 +4,7 @@ import { ArrowUp, ChevronDown, MessageSquare, Trash2 } from "lucide-react";
 import type { ChangeEvent, FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { requestKinLLM } from "@/lib/allevinLLMClient";
+import { recordLanguageValidationFailure, requestKinLLM } from "@/lib/allevinLLMClient";
 import { clearConversationDraft, readConversationDraft, stageConversationDraft } from "@/lib/allevinConversationDraft";
 import { analyzeIncompleteConversationRequest, canonicalTitleIsSafe, looksLikeNewStandaloneRequest, mergeConversationDraft } from "@/lib/allevinConversationIntelligence";
 import { adaptationReplySuffix, captureGeneralDayContext, interpretAdaptiveDayConversation, previewAdaptiveDayConversation, reconcileLifeEventsWithRhythm } from "@/lib/allevinDayAdaptation";
@@ -39,11 +39,24 @@ function languageConnectionReply(changeSaved: boolean) {
       : "I couldn’t reach personal language just now. Check Personal language in Settings and try again.";
 }
 
+function smallNumberWord(value: number) {
+   const small = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+   const tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty"];
+   if (value >= 0 && value < small.length) return small[value];
+   if (value >= 20 && value <= 69) {
+      const ten = Math.floor(value / 10);
+      const one = value % 10;
+      return one ? `${tens[ten]}-${small[one]}` : tens[ten];
+   }
+   return "";
+}
+
 function groundedReplyIsSafe(
    reply: string,
    receipt: string,
    recentConversation: KinMessage[],
    candidateTitle = "",
+   originalPrompt = "",
 ) {
    const normalizedReply = reply.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
    if (!normalizedReply) return false;
@@ -55,14 +68,37 @@ function groundedReplyIsSafe(
 
    const normalizedTitle = candidateTitle.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
    const comparableReply = normalizedReply.replace(/[^a-z0-9]+/g, " ").trim();
-   if (normalizedTitle && comparableReply.startsWith(normalizedTitle) && comparableReply.length <= normalizedTitle.length + 55) return false;
+   // Reject a bare copied title, but do not reject a useful sentence merely
+   // because it naturally begins with the action. The former length threshold
+   // incorrectly discarded personal replies such as “Move the laundry … so it
+   // doesn’t sit forgotten” and later reported that as a connection failure.
+   if (normalizedTitle && comparableReply === normalizedTitle) return false;
 
    // Clock facts are strict, but natural phrasing may say "this morning"
    // instead of repeating the literal AM suffix. This keeps truth intact while
    // no longer rejecting the human wording MK XV is trying to produce.
    const clocks = receipt.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)\b/gi) || [];
+   const relativeMatch = originalPrompt.match(/\b(?:in|after)\s+(\d+)\s+(minutes?|hours?|days?|weeks?)\b/i);
+   const relativeTiming = relativeMatch?.[0].toLowerCase().replace(/\s+/g, " ");
+   const relativeWord = relativeMatch ? smallNumberWord(Number(relativeMatch[1])) : "";
+   const relativeUnit = relativeMatch?.[2].toLowerCase() || "";
+   const keepsRelativeTiming = Boolean(
+      relativeTiming && (
+         normalizedReply.includes(relativeTiming) ||
+         normalizedReply.includes(`${relativeMatch?.[1]} ${relativeUnit} from now`) ||
+         (relativeWord && (
+            normalizedReply.includes(`${relativeWord} ${relativeUnit}`) ||
+            normalizedReply.includes(`${relativeWord}-${relativeUnit.replace(/s$/, "")}`)
+         ))
+      ),
+   );
    for (const clock of clocks) {
       const parts = clock.match(/(\d{1,2}:\d{2})\s*(AM|PM)/i);
+      // A relative reminder can truthfully be confirmed either in the user's
+      // own relative language (“in 4 minutes”) or with the resolved clock. The
+      // old rule required the clock only, which rejected otherwise excellent
+      // contextual acknowledgements.
+      if (clocks.length === 1 && keepsRelativeTiming) continue;
       if (!parts || !normalizedReply.includes(parts[1].toLowerCase())) return false;
       const suffix = parts[2].toLowerCase();
       const matchingDaypart = suffix === "am"
@@ -70,8 +106,7 @@ function groundedReplyIsSafe(
          : /\b(?:pm|afternoon|evening|tonight)\b/.test(normalizedReply);
       if (!matchingDaypart) return false;
    }
-   const durations = receipt.match(/\b\d+(?:\.\d+)?\s+(?:minutes?|hours?|days?|weeks?|months?)\b/gi) || [];
-   return durations.every((token) => normalizedReply.includes(token.toLowerCase().replace(/\s+/g, " ")));
+   return true;
 }
 
 /**
@@ -150,12 +185,13 @@ async function phraseStateAcknowledgement(
       const natural = response.reply
          .replace(/^(?:got it|understood|noted|okay|all right|alright)[.!,:;—-]*\s*/i, "")
          .trim();
-      if (natural && groundedReplyIsSafe(natural, stateReceipt, recentConversation)) return natural;
+      if (natural && groundedReplyIsSafe(natural, stateReceipt, recentConversation, "", prompt)) return natural;
       rejectedReply = natural || response.reply;
    }
    // A failed language call must not masquerade as an intentionally robotic
    // answer. Deterministic state remains safe, while the UI tells the user why
    // the personal response is missing and where to verify the deployment.
+   if (responseMode === "state-ack" && rejectedReply) recordLanguageValidationFailure(responseMode, "generated-copy-rejected");
    return responseMode === "state-ack" ? languageConnectionReply(true) : stateReceipt;
 }
 
@@ -194,12 +230,13 @@ async function prepareMutationLanguage(
       });
       refinedTitle = canonicalTitleIsSafe(candidateTitle, response.canonicalTitle) || refinedTitle;
       if (response.usedFallback || !response.reply) continue;
-      if (groundedReplyIsSafe(response.reply, stateReceipt, recentConversation, candidateTitle)) {
+      if (groundedReplyIsSafe(response.reply, stateReceipt, recentConversation, candidateTitle, prompt)) {
          return { reply: response.reply, title: refinedTitle };
       }
       rejectedReply = response.reply;
    }
 
+   if (rejectedReply) recordLanguageValidationFailure("mutation-ack", "generated-copy-rejected");
    return { reply: languageConnectionReply(true), title: refinedTitle };
 }
 
