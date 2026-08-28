@@ -19,7 +19,7 @@ assert.match(dock, /buildMemoryContext/);
 assert.match(onboarding, /When would you usually start/);
 assert.match(onboarding, /Add ALLEVIN to your phone/);
 assert.doesNotMatch(onboarding, /PWA environment|service worker|manifest/i);
-assert.match(engine, /possessionCommitment/);
+assert.match(engine, /promptDescribesCommitment/);
 assert.match(worker, /running-late/);
 assert.match(worker, /actionTarget/);
 assert.match(pushRun, /actionTarget/);

@@ -33,14 +33,39 @@ function languageVariationNonce() {
    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function groundedReplyIsSafe(reply: string, receipt: string, recentConversation: KinMessage[]) {
+function groundedReplyIsSafe(
+   reply: string,
+   receipt: string,
+   recentConversation: KinMessage[],
+   candidateTitle = "",
+) {
    const normalizedReply = reply.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
    if (!normalizedReply) return false;
    if (/\b(?:this is a good time to begin|get into it|keep the next step simple|you have space for this now|you've got the space for this now|use this window well|keep the transition clean)\b/i.test(normalizedReply)) return false;
    if (recentConversation.some((message) => message.role === "assistant" && message.content.toLowerCase().replace(/\s+/g, " ").trim() === normalizedReply)) return false;
 
-   const factualTokens = receipt.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)\b|\b\d+(?:\.\d+)?\s+(?:minutes?|hours?|days?|weeks?|months?)\b/gi) || [];
-   return factualTokens.every((token) => normalizedReply.includes(token.toLowerCase().replace(/\s+/g, " ")));
+   const normalizedReceipt = receipt.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
+   if (normalizedReply === normalizedReceipt) return false;
+
+   const normalizedTitle = candidateTitle.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
+   const comparableReply = normalizedReply.replace(/[^a-z0-9]+/g, " ").trim();
+   if (normalizedTitle && comparableReply.startsWith(normalizedTitle) && comparableReply.length <= normalizedTitle.length + 55) return false;
+
+   // Clock facts are strict, but natural phrasing may say "this morning"
+   // instead of repeating the literal AM suffix. This keeps truth intact while
+   // no longer rejecting the human wording MK XV is trying to produce.
+   const clocks = receipt.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)\b/gi) || [];
+   for (const clock of clocks) {
+      const parts = clock.match(/(\d{1,2}:\d{2})\s*(AM|PM)/i);
+      if (!parts || !normalizedReply.includes(parts[1].toLowerCase())) return false;
+      const suffix = parts[2].toLowerCase();
+      const matchingDaypart = suffix === "am"
+         ? /\b(?:am|morning)\b/.test(normalizedReply)
+         : /\b(?:pm|afternoon|evening|tonight)\b/.test(normalizedReply);
+      if (!matchingDaypart) return false;
+   }
+   const durations = receipt.match(/\b\d+(?:\.\d+)?\s+(?:minutes?|hours?|days?|weeks?|months?)\b/gi) || [];
+   return durations.every((token) => normalizedReply.includes(token.toLowerCase().replace(/\s+/g, " ")));
 }
 
 /**
@@ -78,52 +103,51 @@ async function phraseStateAcknowledgement(
    const lifeState = readLifeState();
    const rhythmState = readDailyRhythm();
    const snapshot = getLifeSnapshot(lifeState);
-   const response = await requestKinLLM({
-      mode: "kin-life",
-      responseMode,
-      // The receipt sent to the model is intentionally neutral. The actual
-      // adaptation result is already visible in authoritative state below.
-      // Feeding implementation-flavored fallback copy ("recovery mode",
-      // "occurrence", etc.) made the model echo those phrases back to users.
-      stateReceipt: narrationFacts.length
-         ? [
-              "The requested state change was applied successfully.",
-              "Use these facts as factual anchors, not as copy:",
-              ...narrationFacts.map((fact) => `- ${fact}`),
-           ].join("\n")
-         : "The requested temporary day-state change was applied successfully. Describe only the practical consequence supported by the authoritative state.",
-      input: prompt,
-      nowIso: new Date().toISOString(),
-      timezoneOffsetMinutes: new Date().getTimezoneOffset(),
-      displayName: getAllevinDisplayName(""),
-      // A state acknowledgement only needs the visible result of that change.
-      // Lifestyle/recommendation memory is intentionally omitted so unrelated
-      // preferences cannot color a simple factual acknowledgement.
-      assistantContext: buildRhythmNarrationContextForPrompt(rhythmState, prompt),
-      voiceStyle: readAllevinTone(),
-      lifeItems: snapshot.items,
-      // Acknowledging a completed mutation does not need prior prose. The
-      // current state is the continuity source, which also prevents a future
-      // day's language from leaking into the acknowledgement.
-      conversation: [],
-      recentReplies: recentConversation
-         .filter((message) => message.role === "assistant")
-         .slice(-10)
-         .map((message) => message.content),
-      variationNonce: languageVariationNonce(),
-   });
+   const recentReplies = recentConversation
+      .filter((message) => message.role === "assistant")
+      .slice(-10)
+      .map((message) => message.content);
+   let rejectedReply = "";
 
-   // The deterministic receipt remains the offline/provider-failure fallback.
-   // It is never allowed to make a second mutation; the server forces actions
-   // to [] for state-ack requests.
-   if (response.usedFallback || !response.reply) return stateReceipt;
+   // A second targeted attempt is cheaper and more useful than immediately
+   // exposing a machine receipt when the first response is repetitive. The
+   // retry still receives only verified state and can never mutate anything.
+   for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await requestKinLLM({
+         mode: "kin-life",
+         responseMode,
+         // The receipt sent to the model is intentionally neutral. The actual
+         // adaptation result is already visible in authoritative state below.
+         // Feeding implementation-flavored fallback copy ("recovery mode",
+         // "occurrence", etc.) made the model echo those phrases back to users.
+         stateReceipt: narrationFacts.length
+            ? [
+                 "The requested state change was applied successfully.",
+                 "Use these facts as factual anchors, not as copy:",
+                 ...narrationFacts.map((fact) => `- ${fact}`),
+              ].join("\n")
+            : stateReceipt,
+         input: prompt,
+         nowIso: new Date().toISOString(),
+         timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+         displayName: getAllevinDisplayName(""),
+         assistantContext: buildRhythmNarrationContextForPrompt(rhythmState, prompt),
+         voiceStyle: readAllevinTone(),
+         lifeItems: snapshot.items,
+         conversation: [],
+         recentReplies: [...recentReplies, ...(rejectedReply ? [rejectedReply] : [])],
+         variationNonce: languageVariationNonce(),
+         rejectedReply: rejectedReply || undefined,
+      });
+      if (response.usedFallback || !response.reply) continue;
 
-   // Short acknowledgement filler makes ALLEVIN sound like a ticketing system.
-   // Strip only generic lead-ins; the model still owns the substantive wording.
-   const natural = response.reply
-      .replace(/^(?:got it|understood|noted|okay|all right|alright)[.!,:;—-]*\s*/i, "")
-      .trim();
-   return natural && groundedReplyIsSafe(natural, stateReceipt, recentConversation) ? natural : stateReceipt;
+      const natural = response.reply
+         .replace(/^(?:got it|understood|noted|okay|all right|alright)[.!,:;—-]*\s*/i, "")
+         .trim();
+      if (natural && groundedReplyIsSafe(natural, stateReceipt, recentConversation)) return natural;
+      rejectedReply = natural || response.reply;
+   }
+   return stateReceipt;
 }
 
 async function prepareMutationLanguage(
@@ -134,32 +158,40 @@ async function prepareMutationLanguage(
 ) {
    const lifeState = readLifeState();
    const rhythmState = readDailyRhythm();
-   const response = await requestKinLLM({
-      mode: "kin-life",
-      responseMode: "mutation-ack",
-      stateReceipt,
-      candidateTitle,
-      input: prompt,
-      nowIso: new Date().toISOString(),
-      timezoneOffsetMinutes: new Date().getTimezoneOffset(),
-      displayName: getAllevinDisplayName(""),
-      assistantContext: buildRhythmNarrationContextForPrompt(rhythmState, prompt),
-      voiceStyle: readAllevinTone(),
-      lifeItems: getLifeSnapshot(lifeState).items,
-      conversation: [],
-      recentReplies: recentConversation
-         .filter((message) => message.role === "assistant")
-         .slice(-10)
-         .map((message) => message.content),
-      variationNonce: languageVariationNonce(),
-   });
+   const recentReplies = recentConversation
+      .filter((message) => message.role === "assistant")
+      .slice(-10)
+      .map((message) => message.content);
+   let rejectedReply = "";
+   let refinedTitle = candidateTitle;
 
-   return {
-      reply: response.usedFallback || !response.reply || !groundedReplyIsSafe(response.reply, stateReceipt, recentConversation)
-         ? stateReceipt
-         : response.reply,
-      title: canonicalTitleIsSafe(candidateTitle, response.canonicalTitle) || candidateTitle,
-   };
+   for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await requestKinLLM({
+         mode: "kin-life",
+         responseMode: "mutation-ack",
+         stateReceipt,
+         candidateTitle,
+         input: prompt,
+         nowIso: new Date().toISOString(),
+         timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+         displayName: getAllevinDisplayName(""),
+         assistantContext: buildRhythmNarrationContextForPrompt(rhythmState, prompt),
+         voiceStyle: readAllevinTone(),
+         lifeItems: getLifeSnapshot(lifeState).items,
+         conversation: [],
+         recentReplies: [...recentReplies, ...(rejectedReply ? [rejectedReply] : [])],
+         variationNonce: languageVariationNonce(),
+         rejectedReply: rejectedReply || undefined,
+      });
+      refinedTitle = canonicalTitleIsSafe(candidateTitle, response.canonicalTitle) || refinedTitle;
+      if (response.usedFallback || !response.reply) continue;
+      if (groundedReplyIsSafe(response.reply, stateReceipt, recentConversation, candidateTitle)) {
+         return { reply: response.reply, title: refinedTitle };
+      }
+      rejectedReply = response.reply;
+   }
+
+   return { reply: stateReceipt, title: refinedTitle };
 }
 
 export default function KinDock() {

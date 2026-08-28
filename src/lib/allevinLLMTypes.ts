@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK XII — Kin LLM Contract
+// ALLEVIN MK XV — Kin LLM Contract
 // Small transport boundary between the client and the server-only AI provider.
 // ========================================
 
@@ -28,6 +28,9 @@ export interface KinLLMRequest {
     * never as schedule authority. */
    recentReplies?: string[];
    variationNonce?: string;
+   /** When a first phrasing attempt is rejected locally, the second request
+    * receives only the failed wording—not a new source of schedule truth. */
+   rejectedReply?: string;
    input: string;
    nowIso: string;
    timezoneOffsetMinutes: number;

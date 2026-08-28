@@ -6,8 +6,8 @@
 // ========================================
 
 import type { KinAction, LifeContext, LifeItem, LifeRecurrence, LifeState } from "@/lib/lifeTypes";
-import { analyzeIncompleteConversationRequest, canonicalTaskTitleFromPrompt } from "@/lib/allevinConversationIntelligence";
-import { parseRelativeCalendarDate } from "@/lib/lifeTimingCore";
+import { analyzeIncompleteConversationRequest, canonicalTaskTitleFromPrompt, promptDescribesCommitment } from "@/lib/allevinConversationIntelligence";
+import { parseRelativeCalendarDate, parseRelativeClockMoment } from "@/lib/lifeTimingCore";
 
 export interface AttentionItem {
    item: LifeItem;
@@ -186,14 +186,19 @@ function parseClockTime(value: string) {
    if (/\bnoon\b/.test(lower)) return { hours: 12, minutes: 0 };
    if (/\bmidnight\b/.test(lower)) return { hours: 0, minutes: 0 };
 
-   const match = lower.match(/\b(?:at|around)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+   const match = lower.match(/\b(?:at|around|for)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
    if (!match) return null;
    let hours = Number(match[1]);
    const minutes = Number(match[2] || 0);
-   const suffix = match[3];
+   let suffix = match[3];
+   if (!suffix && /\b(?:morning|before noon)\b/.test(lower)) suffix = "am";
+   if (!suffix && /\b(?:afternoon|evening|tonight|after noon)\b/.test(lower)) suffix = "pm";
    if (suffix === "pm" && hours < 12) hours += 12;
    if (suffix === "am" && hours === 12) hours = 0;
-   if (!suffix && hours <= 7) hours += 12;
+   // Bare 1–12 clock times are blocked by conversation completeness before
+   // parsing. Returning null here is a second safety guard against silent AM/PM
+   // guesses from any future caller that bypasses the chat draft flow.
+   if (!suffix && hours >= 1 && hours <= 12) return null;
    if (hours > 23 || minutes > 59) return null;
    return { hours, minutes };
 }
@@ -211,6 +216,11 @@ export function parseLifeDateTime(value: string, nowTimestamp = Date.now()) {
    const now = new Date(nowTimestamp);
    let date: Date | null = null;
    let precision: "exact" | "day" | "window" | "none" = "none";
+
+   const relativeClock = parseRelativeClockMoment(value, nowTimestamp);
+   if (relativeClock) {
+      return { timestamp: relativeClock.getTime(), allDay: false, precision: "exact" as const };
+   }
 
    const relative = parseRelativeCalendarDate(value, nowTimestamp);
 
@@ -287,13 +297,19 @@ export function parseLifeDateTime(value: string, nowTimestamp = Date.now()) {
       precision = "day";
    }
 
-   if (!date) return { timestamp: undefined, allDay: true, precision: "none" as const };
-
    const clock = parseClockTime(value);
    if (clock) {
+      const dateWasExplicit = Boolean(date);
+      if (!date) date = new Date(now);
       date.setHours(clock.hours, clock.minutes, 0, 0);
+      // "Remind me at 8:30 PM" means the next matching local clock. If that
+      // time has already passed today, schedule tomorrow instead of silently
+      // creating an overdue reminder.
+      if (!dateWasExplicit && date.getTime() <= nowTimestamp) date.setDate(date.getDate() + 1);
       return { timestamp: date.getTime(), allDay: false, precision: "exact" as const };
    }
+
+   if (!date) return { timestamp: undefined, allDay: true, precision: "none" as const };
 
    date.setHours(12, 0, 0, 0);
    return { timestamp: date.getTime(), allDay: true, precision };
@@ -482,19 +498,20 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
    const someday = /\b(?:someday|eventually|one day|when i get around to it)\b/i.test(raw);
    const recurrence = parseRecurrence(raw);
    const date = parseLifeDateTime(raw);
-   const commitmentCue = /\b(?:appointment|meeting|class|lecture|dinner|lunch|breakfast|coffee|flight|event|reservation|interview|dentist|doctor|checkup|therapy|call)\b/i.test(raw);
    // “I have / I’ve got X Friday at 9” is ordinary calendar language even
    // when X is not in a vocabulary list. “I have to X” remains a task. This
    // broadens creation without teaching users a magic command or hardcoding
    // their personal examples.
-   const possessionCommitment = Boolean(date.timestamp) && /^(?:i\s+have(?!\s+to\b)|i(?:'|’)ve\s+got|we\s+have(?!\s+to\b)|we(?:'|’)ve\s+got)\b/i.test(raw.trim());
-   const declarativeCommitment = Boolean(date.timestamp) && (commitmentCue || possessionCommitment);
+   // "Remind me to pack lunch" is a point-in-time task, not a lunch event.
+   // The shared classifier keeps that distinction identical in tests and in
+   // the mutation path that ultimately drives routine reconciliation.
+   const declarativeCommitment = promptDescribesCommitment(raw, Boolean(date.timestamp));
    const actionCue =
       waiting ||
       someday ||
       recurrence !== "none" ||
       declarativeCommitment ||
-      /\b(?:remind me|don't let me forget|do not let me forget|i need(?: to)?|i have to|i should|we need(?: to)?|we have to|need(?: to)?|add|create|put|pick up|buy|call|email|submit|pay|renew|schedule|book|order|return|send|finish|complete|do)\b/i.test(raw);
+      /\b(?:remind me|set (?:a )?reminder|don't let me forget|do not let me forget|i need(?: to)?|i have to|i should|we need(?: to)?|we have to|need(?: to)?|add|create|put|pick up|buy|call|email|submit|pay|renew|schedule|book|order|return|send|finish|complete|do)\b/i.test(raw);
 
    if (!actionCue) return { reply: localQuestionResponse(raw, state), actions: [] };
 

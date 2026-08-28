@@ -1,11 +1,11 @@
 // ========================================
-// ALLEVIN MK XII — Kin LLM Client
+// ALLEVIN MK XV — Kin LLM Client
 // Browser-safe helper. The API key remains server-side.
 // ========================================
 
 import type { KinLLMRequest, KinLLMResponse } from "@/lib/allevinLLMTypes";
 
-const LANGUAGE_DIAGNOSTICS_KEY = "allevin-language-diagnostics-mkxiv-1";
+const LANGUAGE_DIAGNOSTICS_KEY = "allevin-language-diagnostics-mkxv-1";
 
 function clean(value: unknown, limit = 6000) {
    return String(value ?? "")
@@ -29,6 +29,7 @@ function sanitizeRequest(request: KinLLMRequest): KinLLMRequest {
          ? request.recentReplies.slice(-12).map((reply) => clean(reply, 1000)).filter(Boolean)
          : [],
       variationNonce: clean(request.variationNonce, 120) || undefined,
+      rejectedReply: clean(request.rejectedReply, 1000) || undefined,
       input: clean(request.input, 6000),
       nowIso: clean(request.nowIso, 80),
       timezoneOffsetMinutes: Number.isFinite(request.timezoneOffsetMinutes) ? request.timezoneOffsetMinutes : 0,

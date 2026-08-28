@@ -7,6 +7,8 @@
 
 import { NextResponse } from "next/server";
 
+import { openAICompletionOptions, providerFailureIsRetryable, providerFailureReason } from "@/lib/allevinOpenAIRequest";
+
 import type { KinLLMRequest, KinLLMResponse } from "@/lib/allevinLLMTypes";
 import type { KinAction, KinActionItemInput, LifeContext, LifeImportance, LifeItemKind, LifeItemState, LifeRecurrence, LifeTimingPrecision } from "@/lib/lifeTypes";
 
@@ -103,6 +105,7 @@ function sanitizeRequest(raw: unknown): KinLLMRequest | null {
          ? value.recentReplies.slice(-12).map((reply) => clean(reply, 1000)).filter(Boolean)
          : [],
       variationNonce: clean(value.variationNonce, 120) || undefined,
+      rejectedReply: clean(value.rejectedReply, 1000) || undefined,
       input,
       nowIso: clean(value.nowIso, 80) || new Date().toISOString(),
       timezoneOffsetMinutes: typeof value.timezoneOffsetMinutes === "number" && Number.isFinite(value.timezoneOffsetMinutes) ? value.timezoneOffsetMinutes : 0,
@@ -570,6 +573,10 @@ ${JSON.stringify(request.conversation, null, 2)}
 RECENT REPLIES TO AVOID REPEATING
 ${JSON.stringify(request.recentReplies || [], null, 2)}
 
+${request.rejectedReply ? `REJECTED WORDING FROM A PRIOR ATTEMPT
+${request.rejectedReply}
+Write a materially different response. Do not repeat or lightly paraphrase the rejected wording.` : ""}
+
 VARIATION NONCE
 ${request.variationNonce || "not supplied"}
 
@@ -589,7 +596,7 @@ GROUNDED RESPONSE RULES
 - Keep it to one or two compact sentences unless clarification is genuinely needed.
 ${request.responseMode === "clarify" ? "- The request is incomplete. Ask only for the missing detail. Do not imply that anything was saved." : ""}
 ${request.responseMode === "grounded" ? "- Answer from the supplied factual receipt. Do not turn a simple answer into a confirmation or advice unless the facts support it." : ""}
-${request.responseMode === "mutation-ack" ? `- The deterministic action will be applied only after client validation. Phrase the reply as the successful result.\n- Improve CANDIDATE TITLE into a concise calendar title that preserves the same action and subject. Remove command/timing scaffolding, preserve proper names and brands, and do not add facts.\nCANDIDATE TITLE\n${request.candidateTitle || ""}` : ""}
+${request.responseMode === "mutation-ack" ? `- The deterministic action will be applied only after client validation. Phrase the reply as the successful result.\n- Do not turn the reply into CANDIDATE TITLE plus a date/time receipt. Respond to why the request helps in this moment, then confirm the verified time naturally.\n- Improve CANDIDATE TITLE into a concise calendar title that preserves the same action and subject. Remove command/timing scaffolding, preserve proper names and brands, and do not add facts.\nCANDIDATE TITLE\n${request.candidateTitle || ""}` : ""}
 ` : ""}
 USER
 ${request.input}`,
@@ -647,21 +654,28 @@ export async function POST(request: Request) {
               },
            }
          : { type: "json_object" };
-      const provider = await fetch("https://api.openai.com/v1/chat/completions", {
+      const requestProvider = () => fetch("https://api.openai.com/v1/chat/completions", {
          method: "POST",
          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
          body: JSON.stringify({
             model,
-            temperature: phraseOnly ? 0.9 : 0.3,
-            max_tokens: 700,
+            ...openAICompletionOptions(model, 700, phraseOnly ? 0.9 : 0.3),
             response_format: responseFormat,
             messages: buildPrompt(payload),
          }),
+         cache: "no-store",
       });
 
-      if (!provider.ok) {
+      let provider = await requestProvider();
+      if (!provider.ok && providerFailureIsRetryable(provider.status)) {
          await provider.text();
-         return NextResponse.json({ ok: true, reply: "", actions: [], usedFallback: true, error: "AI provider unavailable." } satisfies KinLLMResponse);
+         provider = await requestProvider();
+      }
+
+      if (!provider.ok) {
+         const reason = providerFailureReason(provider.status);
+         await provider.text();
+         return NextResponse.json({ ok: true, reply: "", actions: [], usedFallback: true, error: reason } satisfies KinLLMResponse);
       }
 
       const data = await provider.json();

@@ -1,5 +1,5 @@
 // ========================================
-// ALLEVIN MK XIV — Conversation Intelligence
+// ALLEVIN MK XV — Conversation Intelligence
 // Deterministic completeness and title guards. The model may improve phrasing
 // and capitalization, but it cannot turn an unfinished thought into life state.
 // ========================================
@@ -7,7 +7,13 @@
 export interface IncompleteConversationRequest {
    incomplete: boolean;
    clarification?: string;
-   reason?: "ellipsis" | "dangling-word" | "missing-object";
+   reason?: "ellipsis" | "dangling-word" | "missing-object" | "missing-meridiem";
+}
+
+export interface AmbiguousClockRequest {
+   ambiguous: boolean;
+   clockLabel?: string;
+   clarification?: string;
 }
 
 const DANGLING_WORDS = new Set([
@@ -91,14 +97,14 @@ export function canonicalTaskTitleFromPrompt(value: string) {
    if (!raw) return "";
 
    const reminder = raw.match(
-      /\b(?:remind\s+me|remember|don['’]?t\s+let\s+me\s+forget|do\s+not\s+let\s+me\s+forget)\b[\s\S]*?\bto\s+(.+)$/i,
+      /\b(?:remind\s+me|set\s+(?:a\s+)?reminder|remember|don['’]?t\s+let\s+me\s+forget|do\s+not\s+let\s+me\s+forget)\b[\s\S]*?\bto\s+(.+)$/i,
    );
    let title = reminder?.[1] || raw;
 
    title = title
       .replace(/^(?:okay[, ]+|alright[, ]+|actually[, ]+)/i, "")
       .replace(/^(?:in\s+(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:days?|weeks?|months?)|today|tonight|tomorrow|next\s+(?:week|month))[, ]+/i, "")
-      .replace(/^(?:can you\s+)?(?:please\s+)?(?:remind me to|remember to|don['’]?t let me forget(?: to)?|do not let me forget(?: to)?|i need(?: to)?|i have to|i['’]?ve got to|i should|we need(?: to)?|we have to|need to|need)\s+/i, "")
+      .replace(/^(?:can you\s+)?(?:please\s+)?(?:remind me to|set (?:a )?reminder to|remember to|don['’]?t let me forget(?: to)?|do not let me forget(?: to)?|i need(?: to)?|i have to|i['’]?ve got to|i should|we need(?: to)?|we have to|need to|need)\s+/i, "")
       .replace(/^(?:add|schedule|book|create|put)\s+(?:my|our|a|an|the)?\s*/i, "")
       .replace(/^(?:i|we)\s+(?:have|have got|got)\s+(?:a|an|the)?\s*/i, "")
       .replace(/^i(?:'|’)ve\s+got\s+(?:a|an|the)?\s*/i, "")
@@ -116,11 +122,67 @@ export function canonicalTaskTitleFromPrompt(value: string) {
    return titleCaseFirst(title);
 }
 
+export function isExplicitReminderRequest(value: string) {
+   return /\b(?:remind\s+me|set\s+(?:a\s+)?reminder|don['’]?t\s+let\s+me\s+forget|do\s+not\s+let\s+me\s+forget)\b/i.test(inline(value));
+}
+
+/**
+ * Distinguish a scheduled event from a point-in-time reminder. Activity words
+ * such as lunch and call are not enough by themselves: "pack lunch" and
+ * "call Mom" are tasks, while "lunch with Sam" and "I have a call" are real
+ * calendar commitments.
+ */
+export function promptDescribesCommitment(value: string, hasTimestamp: boolean) {
+   if (!hasTimestamp || isExplicitReminderRequest(value)) return false;
+   const raw = inline(value);
+   const explicitEvent =
+      /\b(?:appointment|meeting|class|lecture|flight|event|reservation|interview|dentist|doctor|checkup|therapy)\b/i.test(raw) ||
+      /\b(?:breakfast|brunch|lunch|dinner|coffee)\s+with\b/i.test(raw);
+   const possession = /^(?:i\s+have(?!\s+to\b)|i(?:'|’)ve\s+got|we\s+have(?!\s+to\b)|we(?:'|’)ve\s+got)\b/i.test(raw.trim());
+   return explicitEvent || possession;
+}
+
 function relativeTimingPhrase(value: string) {
    const normalizedValue = normalized(value);
    const relative = normalizedValue.match(/\bin\s+(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:day|week|month)s?\b/)?.[0];
    if (relative) return relative;
    return normalizedValue.match(/\b(?:today|tonight|tomorrow|day after tomorrow|next week|next month)\b/)?.[0] || "";
+}
+
+function clockMatches(value: string) {
+   return [...value.matchAll(/\b(?:at|around|for)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/gi)];
+}
+
+/**
+ * A bare 1–12 hour is genuinely ambiguous. ALLEVIN must not silently choose a
+ * half of the day simply because a historical parser favored common evening
+ * hours. Explicit dayparts remain sufficient: "tonight at 8:30" is PM and
+ * "tomorrow morning at 8:30" is AM.
+ */
+export function analyzeAmbiguousClockRequest(value: string): AmbiguousClockRequest {
+   const raw = inline(value);
+   if (!raw || !/\b(?:remind|reminder|schedule|book|add|create|move|shift|appointment|meeting|call)\b/i.test(raw)) {
+      return { ambiguous: false };
+   }
+
+   const lower = normalized(raw);
+   const hasMorningContext = /\b(?:morning|before noon)\b/.test(lower);
+   const hasEveningContext = /\b(?:afternoon|evening|tonight|after noon)\b/.test(lower);
+   if (hasMorningContext || hasEveningContext || /\b(?:noon|midnight)\b/.test(lower)) return { ambiguous: false };
+
+   for (const match of clockMatches(raw)) {
+      const hour = Number(match[1]);
+      const minutes = Number(match[2] || 0);
+      const meridiem = match[3]?.toLowerCase();
+      if (meridiem || hour === 0 || hour > 12 || minutes > 59) continue;
+      const clockLabel = `${hour}:${String(minutes).padStart(2, "0")}`;
+      return {
+         ambiguous: true,
+         clockLabel,
+         clarification: `Do you mean ${clockLabel} AM or ${clockLabel} PM?`,
+      };
+   }
+   return { ambiguous: false };
 }
 
 function clarificationFor(value: string) {
@@ -146,7 +208,7 @@ function actionNeedsObject(title: string) {
 export function analyzeIncompleteConversationRequest(value: string): IncompleteConversationRequest {
    const raw = inline(value);
    if (!raw) return { incomplete: false };
-   const looksActionable = /\b(?:remind me|remember|don['’]?t let me forget|i need|i have to|add|create|schedule|book|buy|order|pick up|pickup|call|email|send|submit|pay|renew|return)\b/i.test(raw);
+   const looksActionable = /\b(?:remind me|set (?:a )?reminder|remember|don['’]?t let me forget|i need|i have to|add|create|schedule|book|buy|order|pick up|pickup|call|email|send|submit|pay|renew|return)\b/i.test(raw);
    if (!looksActionable) return { incomplete: false };
 
    const withoutPunctuation = raw.replace(/[.!?]+$/, "").trim();
@@ -162,6 +224,10 @@ export function analyzeIncompleteConversationRequest(value: string): IncompleteC
    if (actionNeedsObject(title)) {
       return { incomplete: true, clarification: clarificationFor(raw), reason: "missing-object" };
    }
+   const clock = analyzeAmbiguousClockRequest(raw);
+   if (clock.ambiguous) {
+      return { incomplete: true, clarification: clock.clarification, reason: "missing-meridiem" };
+   }
    return { incomplete: false };
 }
 
@@ -170,11 +236,22 @@ export function mergeConversationDraft(originalPrompt: string, continuation: str
    const next = inline(continuation);
    if (!base) return next;
    if (!next) return base;
+   if (/^(?:a\.?m\.?|p\.?m\.?)$/i.test(next)) {
+      const suffix = /^a/i.test(next) ? "AM" : "PM";
+      for (const match of clockMatches(base)) {
+         const hour = Number(match[1]);
+         if (match[3] || hour === 0 || hour > 12) continue;
+         const start = match.index ?? -1;
+         if (start < 0) continue;
+         const end = start + match[0].length;
+         return `${base.slice(0, end).trimEnd()} ${suffix} ${base.slice(end).trimStart()}`.replace(/\s+/g, " ").trim();
+      }
+   }
    return `${base} ${next}`.replace(/\s+/g, " ").trim();
 }
 
 export function looksLikeNewStandaloneRequest(value: string) {
-   return /^(?:actually[, ]+|instead[, ]+)?(?:remind me|don['’]?t let me forget|add|create|schedule|book|move|cancel|remove|delete|mark|complete)\b/i.test(inline(value));
+   return /^(?:actually[, ]+|instead[, ]+)?(?:remind me|set (?:a )?reminder|don['’]?t let me forget|add|create|schedule|book|move|cancel|remove|delete|mark|complete)\b/i.test(inline(value));
 }
 
 export function canonicalTitleIsSafe(candidate: string, refined: unknown) {

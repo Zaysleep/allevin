@@ -7,11 +7,11 @@ import {
    type NotificationCopyContext,
 } from "./allevinNotificationCopy";
 
-const COPY_CACHE_KEY = "allevin-notification-copy-cache-v1";
+const COPY_CACHE_KEY = "allevin-notification-copy-cache-v2";
 const CACHE_MAX_AGE = 14 * 24 * 60 * 60 * 1000;
 const FALLBACK_CACHE_MAX_AGE = 10 * 60 * 1000;
 const CACHE_LIMIT = 220;
-const DIAGNOSTICS_KEY = "allevin-language-diagnostics-mkxiv-1";
+const DIAGNOSTICS_KEY = "allevin-language-diagnostics-mkxv-1";
 
 interface CopyCacheEntry {
    body: string;
@@ -108,20 +108,20 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
    }
 
    const generated = new Map<string, { body: string; source: "llm" | "safety"; reason?: string }>();
-   if (missing.length) {
+   const requestChunk = async (chunk: NotificationCopyContext[], chunkIndex: number) => {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 12_000);
+      const timeout = window.setTimeout(() => controller.abort(), 25_000);
       try {
          const response = await fetch("/api/allevin/notifications/copy", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contexts: missing.slice(0, 48), recentBodies: cache.recentBodies.slice(-12), variationNonce: randomNonce() }),
+            body: JSON.stringify({ contexts: chunk, recentBodies: cache.recentBodies.slice(-12), variationNonce: `${randomNonce()}-${chunkIndex}` }),
             signal: controller.signal,
          });
          if (response.ok) {
             const payload = (await response.json()) as { copies?: Array<{ id?: unknown; body?: unknown; source?: unknown; reason?: unknown }> };
             for (const copy of Array.isArray(payload.copies) ? payload.copies : []) {
-               const context = missing.find((candidate) => candidate.id === copy.id);
+               const context = chunk.find((candidate) => candidate.id === copy.id);
                if (!context) continue;
                const body = validateNotificationBody(copy.body, context);
                if (body) generated.set(context.id, {
@@ -136,6 +136,15 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
       } finally {
          window.clearTimeout(timeout);
       }
+   };
+
+   if (missing.length) {
+      // Jobs arrive ordered by due time. The nearest eight are completed first
+      // so a reminder created five minutes away never waits behind the entire
+      // 48-hour plan. Remaining small batches can then prepare concurrently.
+      const chunks = Array.from({ length: Math.ceil(missing.length / 8) }, (_, index) => missing.slice(index * 8, index * 8 + 8));
+      await requestChunk(chunks[0], 0);
+      await Promise.all(chunks.slice(1).map((chunk, index) => requestChunk(chunk, index + 1)));
    }
 
    const now = Date.now();

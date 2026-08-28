@@ -13,6 +13,23 @@ const RELATIVE_AMOUNT_WORDS: Record<string, number> = {
    ten: 10,
 };
 
+/**
+ * Resolve short relative reminders from the current local instant. These are
+ * clock moments, unlike calendar offsets such as "in a month," so they retain
+ * neither all-day semantics nor a guessed AM/PM value.
+ */
+export function parseRelativeClockMoment(value: string, nowTimestamp = Date.now()) {
+   const lower = value.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ").trim();
+   const relative = lower.match(/\bin\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(minute|hour)s?\b/);
+   if (!relative) return null;
+
+   const amount = Math.max(1, Math.min(24 * 60, RELATIVE_AMOUNT_WORDS[relative[1]] || Number(relative[1]) || 1));
+   const minutes = relative[2] === "hour" ? amount * 60 : amount;
+   const date = new Date(nowTimestamp + minutes * 60_000);
+   date.setSeconds(0, 0);
+   return date;
+}
+
 /** Resolve "in a month" style offsets while preserving the local day. */
 export function parseRelativeCalendarDate(value: string, nowTimestamp = Date.now()) {
    const lower = value.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ").trim();
