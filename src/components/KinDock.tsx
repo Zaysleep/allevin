@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { recordLanguageValidationFailure, requestKinLLM } from "@/lib/allevinLLMClient";
 import { clearConversationDraft, readConversationDraft, stageConversationDraft } from "@/lib/allevinConversationDraft";
-import { analyzeIncompleteConversationRequest, canonicalTitleIsSafe, looksLikeNewStandaloneRequest, mergeConversationDraft } from "@/lib/allevinConversationIntelligence";
+import { analyzeIncompleteConversationRequest, canonicalTitleIsSafe, looksLikeNewStandaloneRequest, mergeConversationDraft, replyPreservesClockFact } from "@/lib/allevinConversationIntelligence";
 import { adaptationReplySuffix, captureGeneralDayContext, interpretAdaptiveDayConversation, previewAdaptiveDayConversation, reconcileLifeEventsWithRhythm } from "@/lib/allevinDayAdaptation";
 import { buildRecommendationContext, interpretRecommendationConversation } from "@/lib/allevinRecommendations";
 import { buildLifestyleContext, interpretLifestyleConversation, readLifestyleProfile } from "@/lib/allevinLifestyleProfile";
@@ -60,7 +60,7 @@ function groundedReplyIsSafe(
 ) {
    const normalizedReply = reply.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
    if (!normalizedReply) return false;
-   if (/\b(?:this is a good time to begin|get into it|keep the next step simple|you have space for this now|you've got the space for this now|use this window well|keep the transition clean)\b/i.test(normalizedReply)) return false;
+   if (/\b(?:this is a good time to begin|get into it|keep the next step simple|you have space for this now|you've got the space for this now|use this window well|keep the transition clean|reminder (?:is )?set|scheduled reminder|stay on track|create a time buffer)\b/i.test(normalizedReply)) return false;
    if (recentConversation.some((message) => message.role === "assistant" && message.content.toLowerCase().replace(/\s+/g, " ").trim() === normalizedReply)) return false;
 
    const normalizedReceipt = receipt.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
@@ -93,18 +93,12 @@ function groundedReplyIsSafe(
       ),
    );
    for (const clock of clocks) {
-      const parts = clock.match(/(\d{1,2}:\d{2})\s*(AM|PM)/i);
       // A relative reminder can truthfully be confirmed either in the user's
       // own relative language (“in 4 minutes”) or with the resolved clock. The
       // old rule required the clock only, which rejected otherwise excellent
       // contextual acknowledgements.
       if (clocks.length === 1 && keepsRelativeTiming) continue;
-      if (!parts || !normalizedReply.includes(parts[1].toLowerCase())) return false;
-      const suffix = parts[2].toLowerCase();
-      const matchingDaypart = suffix === "am"
-         ? /\b(?:am|morning)\b/.test(normalizedReply)
-         : /\b(?:pm|afternoon|evening|tonight)\b/.test(normalizedReply);
-      if (!matchingDaypart) return false;
+      if (!replyPreservesClockFact(normalizedReply, clock)) return false;
    }
    return true;
 }
@@ -149,6 +143,7 @@ async function phraseStateAcknowledgement(
       .slice(-10)
       .map((message) => message.content);
    let rejectedReply = "";
+   let providerUnavailable = false;
 
    // A second targeted attempt is cheaper and more useful than immediately
    // exposing a machine receipt when the first response is repetitive. The
@@ -180,7 +175,10 @@ async function phraseStateAcknowledgement(
          variationNonce: languageVariationNonce(),
          rejectedReply: rejectedReply || undefined,
       });
-      if (response.usedFallback || !response.reply) continue;
+      if (response.usedFallback || !response.reply) {
+         providerUnavailable = providerUnavailable || response.usedFallback;
+         continue;
+      }
 
       const natural = response.reply
          .replace(/^(?:got it|understood|noted|okay|all right|alright)[.!,:;—-]*\s*/i, "")
@@ -188,11 +186,9 @@ async function phraseStateAcknowledgement(
       if (natural && groundedReplyIsSafe(natural, stateReceipt, recentConversation, "", prompt)) return natural;
       rejectedReply = natural || response.reply;
    }
-   // A failed language call must not masquerade as an intentionally robotic
-   // answer. Deterministic state remains safe, while the UI tells the user why
-   // the personal response is missing and where to verify the deployment.
    if (responseMode === "state-ack" && rejectedReply) recordLanguageValidationFailure(responseMode, "generated-copy-rejected");
-   return responseMode === "state-ack" ? languageConnectionReply(true) : stateReceipt;
+   if (responseMode === "state-ack" && providerUnavailable && !rejectedReply) return languageConnectionReply(true);
+   return stateReceipt;
 }
 
 async function prepareMutationLanguage(
@@ -209,6 +205,7 @@ async function prepareMutationLanguage(
       .map((message) => message.content);
    let rejectedReply = "";
    let refinedTitle = candidateTitle;
+   let providerUnavailable = false;
 
    for (let attempt = 0; attempt < 2; attempt += 1) {
       const response = await requestKinLLM({
@@ -229,7 +226,10 @@ async function prepareMutationLanguage(
          rejectedReply: rejectedReply || undefined,
       });
       refinedTitle = canonicalTitleIsSafe(candidateTitle, response.canonicalTitle) || refinedTitle;
-      if (response.usedFallback || !response.reply) continue;
+      if (response.usedFallback || !response.reply) {
+         providerUnavailable = providerUnavailable || response.usedFallback;
+         continue;
+      }
       if (groundedReplyIsSafe(response.reply, stateReceipt, recentConversation, candidateTitle, prompt)) {
          return { reply: response.reply, title: refinedTitle };
       }
@@ -237,7 +237,10 @@ async function prepareMutationLanguage(
    }
 
    if (rejectedReply) recordLanguageValidationFailure("mutation-ack", "generated-copy-rejected");
-   return { reply: languageConnectionReply(true), title: refinedTitle };
+   return {
+      reply: providerUnavailable && !rejectedReply ? languageConnectionReply(true) : stateReceipt,
+      title: refinedTitle,
+   };
 }
 
 export default function KinDock() {

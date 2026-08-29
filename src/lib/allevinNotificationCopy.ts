@@ -29,6 +29,7 @@ export interface NotificationCopyContext {
    id: string;
    occurrenceKey: string;
    title: string;
+   reason?: string;
    category: string;
    phase: NotificationCopyPhase;
    tone: AllevinTone;
@@ -67,6 +68,9 @@ const DISALLOWED_COPY = [
    "get into it",
    "future-you",
    "scheduled reminder is due now",
+   "reminder set",
+   "stay on track",
+   "before your morning unfolds",
    "scheduled in",
    "notification phase",
    "priority level",
@@ -112,6 +116,7 @@ export function createNotificationCopyContext({
    id,
    occurrenceKey,
    title,
+   reason,
    category,
    phase,
    tone,
@@ -125,6 +130,7 @@ export function createNotificationCopyContext({
    id: string;
    occurrenceKey: string;
    title: string;
+   reason?: string;
    category: string;
    phase: NotificationCopyPhase;
    tone: AllevinTone;
@@ -149,6 +155,7 @@ export function createNotificationCopyContext({
       id: cleanInline(id, 320),
       occurrenceKey: cleanInline(occurrenceKey, 360),
       title: safeTitle,
+      reason: cleanInline(reason, 220) || undefined,
       category: cleanInline(category, 80) || "general",
       phase,
       tone,
@@ -182,6 +189,7 @@ export function notificationCopyCacheKey(context: NotificationCopyContext) {
    const raw = JSON.stringify({
       occurrenceKey: context.occurrenceKey,
       title: context.title,
+      reason: context.reason,
       category: context.category,
       phase: context.phase,
       tone: context.tone,
@@ -212,6 +220,8 @@ export function validateNotificationBody(value: unknown, context: NotificationCo
    if (body.length < 18 || body.length > 220) return null;
    const lower = body.toLowerCase().replace(/[’]/g, "'");
    if (DISALLOWED_COPY.some((phrase) => lower.includes(phrase))) return null;
+   if (/\b(?:you(?:'ve| have) got|there(?:'s| is)|about)\b[^.!?]{0,35}\b(?:for this task|for this reminder|to do this)\b/i.test(lower)) return null;
+   if (/\b(?:this task|this reminder)\b/i.test(lower)) return null;
    const currentTitle = normalized(context.title);
    if (currentTitle.length >= 4 && normalized(body).includes(currentTitle)) return null;
    if (

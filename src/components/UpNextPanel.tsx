@@ -49,6 +49,15 @@ export default function UpNextPanel({
       }
 
       setFlexibleSuggestion(null);
+      // A long schedule block such as Work already says what is happening.
+      // Adding a generic productivity card underneath it made the assistant
+      // feel robotic, so stay quiet unless there is a concrete activity where
+      // contextual guidance can genuinely help.
+      if (next.rhythm?.kind === "schedule") {
+         setSuggestion(null);
+         setNarratedSuggestion(null);
+         return;
+      }
       const category = suggestionCategoryForUpNext(next);
       const minutes = minutesAvailableForUpNext(next, nowMs);
       setSuggestion(getProactiveRecommendation(`${next.dateKey}:${next.id}`, category, minutes, next.title));
@@ -64,7 +73,10 @@ export default function UpNextPanel({
       // copy is presentation, so let the server-side model phrase that exact
       // lane around the actual Up Next subject. This keeps any routine, class,
       // errand, or custom activity from receiving generic transition text.
-      setNarratedSuggestion(suggestion);
+      // Do not flash the deterministic template while personal copy loads.
+      // If the language request fails, the clean Up Next fact remains useful
+      // on its own and no filler card is shown.
+      setNarratedSuggestion(null);
       let cancelled = false;
       const tone = readAllevinTone();
       const minutes = minutesAvailableForUpNext(next, nowMs);
@@ -137,15 +149,10 @@ export default function UpNextPanel({
                      <h3>{flexibleSuggestion.choice}</h3>
                   </div>
                </div>
-               <aside className="up-next-suggestion" aria-label="ALLEVIN recommendation">
-                  <strong>{flexibleSuggestion.title}</strong>
-                  <p>{flexibleSuggestion.detail}</p>
-               </aside>
             </div>
          ) : (
             <div className="up-next-clear">
-               <strong>You’re clear.</strong>
-               <span>Don’t pick a fight with the empty space just because it’s there.</span>
+               <strong>Nothing needs your attention right now.</strong>
             </div>
          )}
       </section>

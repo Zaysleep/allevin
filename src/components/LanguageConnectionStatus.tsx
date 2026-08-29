@@ -46,7 +46,7 @@ export default function LanguageConnectionStatus() {
             setState("provider");
          } else {
             const latest = readLatestLanguageDiagnostic();
-            const recentFailure = latest && Date.now() - latest.at < 15 * 60 * 1000 && latest.source !== "llm";
+            const recentFailure = latest && Date.now() - latest.at < 15 * 60 * 1000 && (latest.source === "provider" || latest.source === "network");
             setState(recentFailure ? "recent-failure" : "ready");
          }
       } catch {
@@ -68,7 +68,7 @@ export default function LanguageConnectionStatus() {
             : state === "provider"
                ? "Personal language is configured, but the provider or selected model could not be reached."
                : state === "recent-failure"
-                  ? "The connection is available, but the last personal response did not complete."
+                  ? "Personal language is connected, but the last provider request did not complete."
             : state === "unavailable"
                ? "The deployed assistant could not be reached."
                : "Checking personal language…";

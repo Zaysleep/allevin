@@ -1334,6 +1334,90 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .settings-language-status small { color: var(--muted); font-size: .64rem; }
 .settings-language-status button { flex: 0 0 auto; min-height: 34px; border: 1px solid var(--line-strong); border-radius: 0; background: transparent; color: var(--ink); padding: 0 10px; font-size: .68rem; font-weight: 740; }
 
+/* ========================================
+   MK XVIII — Focused settings screen
+   One section opens at a time so phone users never have to scan a single,
+   crowded form containing every part of their life at once.
+   ======================================== */
+.settings-screen-active { overflow: hidden; }
+.settings-screen {
+   position: fixed;
+   inset: 0;
+   z-index: 160;
+   overflow-y: auto;
+   overscroll-behavior: contain;
+   background: var(--paper-strong);
+   color: var(--ink);
+}
+.settings-screen-header {
+   position: sticky;
+   top: 0;
+   z-index: 2;
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   width: min(820px, calc(100% - 64px));
+   min-height: 94px;
+   margin: 0 auto;
+   border-bottom: 1px solid var(--line-strong);
+   background: var(--paper-strong);
+}
+.settings-screen-header > div { display: flex; align-items: baseline; gap: 16px; }
+.settings-screen-header span { color: var(--muted); font-size: .64rem; font-weight: 820; letter-spacing: .14em; }
+.settings-screen-header h2 { margin: 0; font-size: clamp(1.55rem, 3vw, 2rem); letter-spacing: -.035em; }
+.settings-screen-body { width: min(820px, calc(100% - 64px)); margin: 0 auto; padding: 34px 0 72px; }
+.settings-accordion { border-bottom: 1px solid var(--line-strong); }
+.settings-accordion:first-child { border-top: 1px solid var(--line-strong); }
+.settings-accordion-trigger {
+   width: 100%;
+   min-height: 88px;
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 24px;
+   border: 0;
+   border-radius: 0;
+   background: transparent;
+   padding: 20px 4px;
+   color: var(--ink);
+   text-align: left;
+}
+.settings-accordion-trigger > span { min-width: 0; display: grid; gap: 6px; }
+.settings-accordion-trigger strong { font-size: 1.02rem; letter-spacing: -.015em; }
+.settings-accordion-trigger small { overflow: hidden; color: var(--muted); font-size: .76rem; font-weight: 500; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.settings-accordion-trigger svg { flex: 0 0 auto; color: var(--muted); transition: transform .18s ease; }
+.settings-accordion-open .settings-accordion-trigger svg { transform: rotate(180deg); }
+.settings-accordion-panel { padding: 4px 4px 30px; }
+.settings-accordion-panel .settings-group-heading > strong { display: none; }
+.settings-accordion-panel .settings-field { margin-top: 14px; }
+.settings-accordion-panel .settings-save { max-width: 240px; }
+.settings-accordion-panel .settings-summary-row { min-height: 64px; }
+.settings-reminder-row > div { min-width: 0; display: grid; gap: 5px; }
+.settings-reminder-row > div > span { color: var(--muted); font-size: .74rem; line-height: 1.45; }
+.settings-notification-test { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 22px; }
+.settings-notification-test label { display: grid; gap: 7px; color: var(--muted); font-size: .72rem; font-weight: 700; }
+.settings-notification-test input { width: 100%; min-height: 42px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--paper); padding: 0 11px; color: var(--ink); }
+.settings-notification-test p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .72rem; }
+.settings-language-status { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 22px; }
+.settings-data-actions { display: grid; gap: 10px; margin-top: 22px; border-top: 1px solid var(--line); padding-top: 22px; }
+.settings-data-actions .settings-reset { justify-self: start; margin-top: 12px; }
+.app-update-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 12px 0 0; border-left: 2px solid var(--accent); padding: 10px 0 10px 14px; color: var(--muted); font-size: .74rem; }
+.app-update-notice button { border: 0; border-bottom: 1px solid var(--accent); border-radius: 0; background: transparent; padding: 0 0 2px; color: var(--accent); font-size: .72rem; font-weight: 760; }
+
+@media (max-width: 620px) {
+   .settings-screen-header,
+   .settings-screen-body { width: calc(100% - 40px); }
+   .settings-screen-header { min-height: calc(78px + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); }
+   .settings-screen-body { padding-top: 22px; padding-bottom: calc(48px + env(safe-area-inset-bottom)); }
+   .settings-accordion-trigger { min-height: 82px; padding: 18px 0; }
+   .settings-accordion-panel { padding-right: 0; padding-left: 0; }
+   .settings-notification-test { grid-template-columns: 1fr; }
+   .settings-notification-test .settings-inline-button { justify-content: center; }
+   .settings-screen input,
+   .settings-screen select { font-size: 16px; }
+   .settings-summary-row-editable { grid-template-columns: minmax(0,1fr) auto 64px; }
+}
+
 @media (max-width: 620px) {
    .onboarding-shell { padding: 0; }
    .onboarding-card { min-height: 100dvh; border: 0; box-shadow: none; }

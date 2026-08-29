@@ -134,6 +134,7 @@ export function lifeNotificationContext({
       id,
       occurrenceKey: `${dateKey}:life:${item.id}:${phase}:${startAt}`,
       title: item.title,
+      reason: item.details,
       category: item.context === "personal" ? item.kind : item.context,
       phase,
       tone,

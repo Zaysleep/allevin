@@ -98,8 +98,10 @@ Rules:
 - The ASSIGNED RECOMMENDATION is authoritative. Preserve its underlying lane/focus; you may rephrase it, never replace it with a different recommendation.
 - The title should usually be 3–8 words and should name the subject or make the subject unmistakable.
 - The detail should be directly useful for the subject and available time. Prefer one clear action or framing.
+- Sound like a thoughtful personal assistant responding to this exact moment. Specific and ordinary is better than clever or motivational.
+- If the assigned recommendation is generic, translate only its useful core into natural language. Never expose productivity-framework wording.
 - Never invent equipment, location, dietary restrictions, medical claims, urgency, or user-specific facts that were not supplied.
-- Avoid generic filler such as “protect the next transition”, “prepare for the next commitment”, “stay on track”, “you've got this”, or dashboard/state-machine language.
+- Avoid generic filler such as “protect the next transition”, “prepare for the next commitment”, “stay on track”, “create a time buffer”, “you've got this”, or dashboard/state-machine language.
 - Do not mention that you are an AI, a recommendation engine, or that an assignment is stored.
 - Voice: ${voice}
 - Keep the whole card compact. This sits in a phone-sized Up Next surface.`,

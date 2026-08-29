@@ -13,7 +13,7 @@ function periodLabel(period: LifestylePeriod) {
    return "Any time";
 }
 
-export default function LifestyleSettingsEditor() {
+export default function LifestyleSettingsEditor({ view = "all" }: { view?: "all" | "lifestyle" | "choices" }) {
    const [bedtime, setBedtime] = useState("");
    const [commute, setCommute] = useState("");
    const [sets, setSets] = useState<FlexibleChoiceSet[]>([]);
@@ -58,6 +58,7 @@ export default function LifestyleSettingsEditor() {
 
    return (
       <section className="settings-group">
+         {view !== "choices" ? <>
          <div className="settings-group-heading">
             <strong>Lifestyle</strong>
          </div>
@@ -79,9 +80,11 @@ export default function LifestyleSettingsEditor() {
          <button className="settings-inline-button" type="button" onClick={saveBasics}>
             Save lifestyle
          </button>
+         </> : null}
 
-         <div className="settings-divider" />
+         {view === "all" ? <div className="settings-divider" /> : null}
 
+         {view !== "lifestyle" ? <>
          <div className="settings-group-heading">
             <strong>Flexible choices</strong>
          </div>
@@ -122,6 +125,7 @@ export default function LifestyleSettingsEditor() {
                <Plus size={14} /> Save choices
             </button>
          </div>
+         </> : null}
       </section>
    );
 }

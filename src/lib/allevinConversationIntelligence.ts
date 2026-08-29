@@ -75,6 +75,26 @@ function normalized(value: string) {
       .trim();
 }
 
+/**
+ * A model may express the same verified wall-clock fact in ordinary speech.
+ * Treat 11 AM, 11:00 AM, and 11 this morning as equivalent while still
+ * requiring the exact minute whenever it is not :00.
+ */
+export function replyPreservesClockFact(reply: string, clockFact: string) {
+   const fact = inline(clockFact, 40).match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+   if (!fact) return false;
+   const normalizedReply = reply.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
+   const hour = Number(fact[1]);
+   const minutes = Number(fact[2]);
+   const clockPattern = minutes === 0
+      ? new RegExp(`\\b${hour}(?::00)?\\b`)
+      : new RegExp(`\\b${hour}:${String(minutes).padStart(2, "0")}\\b`);
+   if (!clockPattern.test(normalizedReply)) return false;
+   return fact[3].toLowerCase() === "am"
+      ? /\b(?:am|morning)\b/.test(normalizedReply)
+      : /\b(?:pm|afternoon|evening|tonight)\b/.test(normalizedReply);
+}
+
 function titleCaseFirst(value: string) {
    return value ? `${value.charAt(0).toUpperCase()}${value.slice(1)}` : value;
 }
@@ -113,6 +133,11 @@ export function canonicalTaskTitleFromPrompt(value: string) {
       .replace(/^we['’]?re\s+waiting\s+(?:on|for)\s+/i, "");
 
    title = stripTrailingTiming(title)
+      // Keep the visible calendar title focused on the action. The user's
+      // reason still belongs in the prompt and notification context, but a
+      // clause such as "so the clothes don't wrinkle" should not become a
+      // two-line title that the notification body then has to repeat.
+      .replace(/\s+so(?:\s+that)?\s+(?:i|we|my|our|the|it|they|he|she)\b[\s\S]*$/i, "")
       .replace(/\s+(?:sometime|eventually)\s*$/i, "")
       .replace(/\s+/g, " ")
       .trim();
@@ -120,6 +145,13 @@ export function canonicalTaskTitleFromPrompt(value: string) {
    const responseMatch = title.match(/^(?:the\s+)?(.+?)\s+to\s+(?:respond|reply)$/i);
    if (responseMatch?.[1]) title = `${responseMatch[1]} response`;
    return titleCaseFirst(title);
+}
+
+/** Preserve a concise user-supplied reason separately from the visible title. */
+export function taskReasonFromPrompt(value: string) {
+   const raw = inline(value, 600).replace(/[.!?]+$/, "").trim();
+   const match = raw.match(/\b((?:so(?:\s+that)?|because)\s+[^.!?]+)$/i);
+   return match?.[1]?.trim().slice(0, 220) || "";
 }
 
 export function isExplicitReminderRequest(value: string) {

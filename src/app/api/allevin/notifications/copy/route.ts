@@ -65,6 +65,7 @@ function sanitizeContext(value: unknown): NotificationCopyContext | null {
       id,
       occurrenceKey,
       title,
+      reason: clean(raw.reason, 220) || undefined,
       category: clean(raw.category, 80) || "general",
       phase,
       tone,
@@ -121,6 +122,7 @@ function buildPrompt(
    const facts = contexts.map((context) => ({
       id: context.id,
       visibleTitle: context.title,
+      userSuppliedReason: context.reason || null,
       category: context.category,
       phase: context.phase,
       tone: context.tone,
@@ -128,7 +130,6 @@ function buildPrompt(
       endsAtLocalTime: context.endsAtLabel,
       timeOfDay: context.timeOfDay,
       minutesBeforeStart: context.phase === "prep" ? context.leadMinutes : 0,
-      durationMinutes: context.durationMinutes,
       previousVerifiedItem: context.previous
          ? {
               title: context.previous.title,
@@ -160,13 +161,17 @@ Return JSON exactly shaped as {"copies":[{"id":"exact supplied id","body":"notif
 COPY RULES
 - Write one distinct body for every supplied id. Preserve each id exactly.
 - The visible title is already shown above the body. Never repeat the exact visible title anywhere in the body.
+- When userSuppliedReason is present, preserve its meaning naturally. It is the strongest clue to why the reminder matters, but do not repeat it word for word.
 - Write one or two short sentences, 18–180 characters total.
 - Sound like a thoughtful personal assistant who understands why this ordinary moment matters.
+- Aim for the same quality as a useful human nudge: situational, specific, calm, and immediately helpful without trying to sound clever.
 - Use the supplied local time and time of day when they make the message feel naturally situated, but do not mechanically announce the clock.
 - Use contractions and natural spoken rhythm when appropriate.
 - Infer the ordinary human purpose supported by the visible title and category: preparation, rest, recovery, nourishment, movement, focus, care, connection, relief, or protecting time. Express that purpose naturally when it makes the reminder more useful. Never invent a personal motive or emotional state.
 - Say what matters now, connect it to what comes next when useful, and offer at most one practical suggestion.
 - Mention a next item only when nextVerifiedItem is provided. Never invent an event, commute, location, preference, urgency, completion, conflict, or available time.
+- A gap before the next item is not the duration of the current task. Never say the user has a number of minutes "for this task" or imply that open schedule time is required task time.
+- Do not call it "this task" or "this reminder." Speak naturally about the action or its immediate purpose.
 - Mention or allude to a previous item only when previousVerifiedItem is provided. Use it to support a natural handoff—for example, leaving work behind before an evening routine—without claiming the previous item was completed.
 - If the next item is 60 or more minutes away, state its supplied startsAtLocalTime instead of expressing the gap as a large number of minutes. Never make the user convert 60+ minutes into a clock time.
 - If the next item is under 60 minutes away, a natural minute countdown is acceptable.
@@ -176,6 +181,7 @@ COPY RULES
 - Most messages should be straightforward. Dry/playful personality may appear occasionally, never in every message.
 - No insults, guilt, hype, productivity language, slogans, emojis, the user's name, or fictional-character imitation.
 - Do not force advice into the message. A broadly grounded benefit is allowed when it follows directly from the action—for example, winding down supports rest or preparing early reduces rushing.
+- The body should add value beyond the visible title. Do not paraphrase the title and stop; add one grounded, useful thought when the action supports one.
 - Avoid these stale phrases and ideas: "you're up," "get it handled," "time to switch over," "use this window well," "keep the transition clean," "this is a good time to begin," "get into it," "keep the next step simple," "you have space for this now," clocks negotiating, calendars freelancing, clearing runways, chaos having hobbies, future-you, and "no ceremony."
 - Do not write a generic sentence that could be attached unchanged to unrelated activities. The body must reflect the supplied action or its supported purpose without repeating the exact visible title.
 - Do not recommend making food portable, changing the plan, shortening an item, traveling, or preparing equipment unless that exact fact is supplied.

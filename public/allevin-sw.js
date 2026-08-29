@@ -5,7 +5,7 @@
  * can wake the installed PWA later without changing the client UI contract.
  */
 
-const SW_VERSION = "mkxvii-language-health-2";
+const SW_VERSION = "mkxviii-human-assistant-1";
 
 self.addEventListener("install", () => {
   // Promote a newly deployed worker immediately. ALLEVIN stores user state in

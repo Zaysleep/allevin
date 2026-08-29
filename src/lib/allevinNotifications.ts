@@ -17,7 +17,7 @@ import {
    type RhythmEntry,
 } from "@/lib/dailyRhythm";
 import { notificationBodyFromCache, prepareNotificationBodies } from "@/lib/allevinNotificationCopyClient";
-import type { NotificationCopyContext } from "@/lib/allevinNotificationCopy";
+import { createNotificationCopyContext, type NotificationCopyContext } from "@/lib/allevinNotificationCopy";
 import {
    buildNotificationTimeline,
    lifeNotificationContext,
@@ -30,7 +30,7 @@ import type { LifeItem, LifeImportance } from "@/lib/lifeTypes";
 import { serverPushIsActive } from "@/lib/allevinServerPushClient";
 
 const NOTIFICATION_LOG_KEY = "allevin-notification-log-mkxii-3";
-const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxvii-contextual-copy";
+const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxviii-human-assistant-1";
 let reminderCheckRunning = false;
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 
@@ -87,6 +87,37 @@ async function showNotification(title: string, body: string, tag: string, entryI
       badge: "/allevin-icon-192.png",
       data: { url: "/", entryId },
    });
+}
+
+/**
+ * Sends a real, model-phrased local notification from Settings. The user picks
+ * the subject, so this checks the same contextual-copy path as an ordinary
+ * reminder without adding a fake calendar item or waiting for the scheduler.
+ */
+export async function sendAllevinTestNotification(subject: string) {
+   const title = subject.replace(/\s+/g, " ").trim().slice(0, 120);
+   if (!title || !canNotify() || Notification.permission !== "granted") return false;
+
+   const now = Date.now();
+   const id = `settings-test-${now}`;
+   const context = createNotificationCopyContext({
+      id,
+      occurrenceKey: id,
+      title,
+      category: "personal",
+      phase: "start",
+      tone: readAllevinTone(),
+      priority: 3,
+      leadMinutes: 0,
+      startAt: now,
+      endAt: now + 30 * 60_000,
+      timelineId: id,
+      timeline: [],
+   });
+   const body = notificationBodyFromCache(context) || (await prepareNotificationBodies([context])).get(context.id);
+   if (!body) return false;
+   await showNotification(title, body, `allevin-settings-test-${now}`);
+   return true;
 }
 
 async function showContextualNotification(

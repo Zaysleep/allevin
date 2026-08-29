@@ -6,7 +6,7 @@
 // ========================================
 
 import type { KinAction, LifeContext, LifeItem, LifeRecurrence, LifeState } from "@/lib/lifeTypes";
-import { analyzeIncompleteConversationRequest, canonicalTaskTitleFromPrompt, promptDescribesCommitment } from "@/lib/allevinConversationIntelligence";
+import { analyzeIncompleteConversationRequest, canonicalTaskTitleFromPrompt, promptDescribesCommitment, taskReasonFromPrompt } from "@/lib/allevinConversationIntelligence";
 import { parseRelativeCalendarDate, parseRelativeClockMoment } from "@/lib/lifeTimingCore";
 
 export interface AttentionItem {
@@ -524,6 +524,7 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
 
    const item = {
       title,
+      details: taskReasonFromPrompt(raw) || undefined,
       kind,
       state: stateValue,
       context,

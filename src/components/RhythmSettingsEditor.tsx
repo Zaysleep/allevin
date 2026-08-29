@@ -133,10 +133,12 @@ export default function RhythmSettingsEditor({
    state,
    initialScheduleId,
    initialAnchorId,
+   view = "all",
 }: {
    state: DailyRhythmState;
    initialScheduleId?: string;
    initialAnchorId?: string;
+   view?: "all" | "schedule" | "routines";
 }) {
    const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft | null>(null);
    const [anchorDraft, setAnchorDraft] = useState<AnchorDraft | null>(null);
@@ -157,6 +159,8 @@ export default function RhythmSettingsEditor({
    }, [state.scheduleBlocks]);
 
    const defaultScheduleReference = scheduleReferences[0]?.value || "";
+   const showSchedule = view === "all" || view === "schedule";
+   const showRoutines = view === "all" || view === "routines";
 
    useEffect(() => {
       if (initialScheduleId) {
@@ -250,7 +254,7 @@ export default function RhythmSettingsEditor({
 
    return (
       <div className="rhythm-settings-editor">
-         <section className="settings-group">
+         {showSchedule ? <section className="settings-group">
             <div className="settings-group-heading">
                <strong>Schedule</strong>
                <button
@@ -359,11 +363,11 @@ export default function RhythmSettingsEditor({
                   </div>
                </div>
             ) : null}
-         </section>
+         </section> : null}
 
-         <div className="settings-divider" />
+         {view === "all" ? <div className="settings-divider" /> : null}
 
-         <section className="settings-group">
+         {showRoutines ? <section className="settings-group">
             <div className="settings-group-heading">
                <strong>Routine</strong>
                <button
@@ -616,7 +620,7 @@ export default function RhythmSettingsEditor({
                   </div>
                </div>
             ) : null}
-         </section>
+         </section> : null}
       </div>
    );
 }

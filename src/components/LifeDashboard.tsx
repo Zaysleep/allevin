@@ -1,22 +1,18 @@
 "use client";
 
 import { ChevronDown, ChevronRight, Settings2 } from "lucide-react";
-import type { ChangeEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 
-import BackupRestoreSettings from "@/components/BackupRestoreSettings";
 import CalendarWorkspace from "@/components/CalendarWorkspace";
+import AppUpdateNotice from "@/components/AppUpdateNotice";
 import KinDock from "@/components/KinDock";
-import LanguageConnectionStatus from "@/components/LanguageConnectionStatus";
 import LifeItemRow from "@/components/LifeItemRow";
-import LifestyleSettingsEditor from "@/components/LifestyleSettingsEditor";
 import LiveClock from "@/components/LiveClock";
 import OnboardingFlow from "@/components/OnboardingFlow";
-import RhythmSettingsEditor from "@/components/RhythmSettingsEditor";
+import SettingsScreen from "@/components/SettingsScreen";
 import UpNextPanel from "@/components/UpNextPanel";
 import { useDailyRhythm } from "@/hooks/useDailyRhythm";
 import { useLifeState } from "@/hooks/useLifeState";
-import { getFreshAllevinHeroLine } from "@/lib/allevinHeroLine";
 import { readOnboardingStatus, shouldShowNewUserOnboarding, type OnboardingMode } from "@/lib/allevinOnboarding";
 import { getAllevinDisplayName, resetAllevinLifeWorkspace, saveAllevinUserProfile } from "@/lib/allevinUserProfile";
 import { readAllevinTone, saveAllevinTone, type AllevinTone } from "@/lib/allevinVoice";
@@ -49,18 +45,12 @@ export default function LifeDashboard() {
    const [footerInfo, setFooterInfo] = useState<FooterInfo>(null);
    const [comingUpOpen, setComingUpOpen] = useState(false);
    const [nowMs, setNowMs] = useState(() => Date.now());
-   const [heroLine, setHeroLine] = useState("");
    const [onboardingMode, setOnboardingMode] = useState<OnboardingMode | null>(null);
    const [firstRunOnboarding, setFirstRunOnboarding] = useState(false);
 
    useEffect(() => {
       setName(getAllevinDisplayName(""));
       setTone(readAllevinTone());
-
-      // The hero line is selected once per page load. Its history is stored in
-      // the browser, so refreshing produces a different line without creating
-      // an AI request, loading state, or stale server-side cache.
-      setHeroLine(getFreshAllevinHeroLine());
 
       // New users should meet ALLEVIN before they meet an empty dashboard.
       // Existing users are never forced through setup after an upgrade; they
@@ -118,7 +108,6 @@ export default function LifeDashboard() {
    function saveProfile() {
       saveAllevinUserProfile(name);
       saveAllevinTone(tone);
-      setSettingsOpen(false);
    }
 
    function resetLife() {
@@ -136,7 +125,6 @@ export default function LifeDashboard() {
       setOnboardingMode(null);
       setName(getAllevinDisplayName(""));
       setTone(readAllevinTone());
-      setHeroLine(getFreshAllevinHeroLine());
    }
 
    if (!hydrated) return <main className="life-app"><div className="life-loading">Opening ALLEVIN…</div></main>;
@@ -164,36 +152,24 @@ export default function LifeDashboard() {
                <button className="icon-button topbar-settings" onClick={() => setSettingsOpen((value) => !value)} aria-label="ALLEVIN settings"><Settings2 size={18} /></button>
             </div>
          </header>
+         <AppUpdateNotice />
 
-         {settingsOpen ? (
-            <aside className="settings-panel">
-               <div className="settings-panel-head"><h2>Settings</h2><button className="icon-button" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button></div>
-               <label className="settings-field"><span>Name</span><input value={name} onChange={(event: ChangeEvent<HTMLInputElement>) => setName(event.target.value)} placeholder="Your name" maxLength={40} /></label>
-               <label className="settings-field"><span>Tone</span><select value={tone} onChange={(event: ChangeEvent<HTMLSelectElement>) => setTone(event.target.value as AllevinTone)}><option value="direct">Direct</option><option value="balanced">Balanced</option><option value="calm">Gentle</option></select></label>
-               <button className="settings-save" onClick={saveProfile}>Save</button>
-               <div className="settings-divider" />
-               <RhythmSettingsEditor state={rhythm.state} />
-               <div className="settings-divider" />
-               <LifestyleSettingsEditor />
-               <div className="settings-divider" />
-               <BackupRestoreSettings />
-               <div className="settings-divider" />
-               <div className="settings-reminder-row">
-                  <strong>Reminders</strong>
-                  {rhythm.notificationPermission === "granted" ? <button className="settings-inline-button" onClick={() => rhythm.setRemindersEnabled(!rhythm.state.remindersEnabled)}>{rhythm.state.remindersEnabled ? "On" : "Off"}</button> : <button className="settings-inline-button" onClick={() => void rhythm.enableReminders()}>Enable</button>}
-               </div>
-               <div className="settings-divider" />
-               <section className="settings-group settings-help-group">
-                  <div className="settings-group-heading"><strong>Help</strong></div>
-                  <button className="settings-guide-button" type="button" onClick={() => { setSettingsOpen(false); setOnboardingMode("setup"); }}>Set up ALLEVIN again</button>
-                  <button className="settings-guide-button" type="button" onClick={() => { setSettingsOpen(false); setOnboardingMode("install"); }}>Add ALLEVIN to your phone</button>
-               </section>
-               <div className="settings-divider" />
-               <LanguageConnectionStatus />
-               <div className="settings-divider" />
-               <button className="settings-reset" onClick={resetLife}>Clear ALLEVIN data</button>
-            </aside>
-         ) : null}
+         <SettingsScreen
+            open={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+            name={name}
+            tone={tone}
+            onNameChange={setName}
+            onToneChange={setTone}
+            onSaveProfile={saveProfile}
+            rhythmState={rhythm.state}
+            notificationPermission={rhythm.notificationPermission}
+            onEnableReminders={rhythm.enableReminders}
+            onSetRemindersEnabled={rhythm.setRemindersEnabled}
+            onOpenSetup={() => { setSettingsOpen(false); setOnboardingMode("setup"); }}
+            onOpenInstall={() => { setSettingsOpen(false); setOnboardingMode("install"); }}
+            onReset={resetLife}
+         />
 
          {onboardingMode ? (
             <OnboardingFlow
@@ -207,7 +183,6 @@ export default function LifeDashboard() {
 
          <section className="life-hero">
             <h1>{getDayGreeting()}{greetingName ? `, ${greetingName}` : ""}.</h1>
-            {heroLine ? <p className="life-hero-line">{heroLine}</p> : null}
          </section>
 
          <section className="day-ledger" aria-label="Daily page">
