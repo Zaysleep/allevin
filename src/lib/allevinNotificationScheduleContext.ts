@@ -47,7 +47,7 @@ export function timedLifeItemsForDate(items: LifeItem[], date: Date) {
    return items.filter((item) => {
       const startAt = lifeStartAt(item);
       return item.state === "active" &&
-         (item.kind === "commitment" || item.kind === "task") &&
+         (item.kind === "commitment" || item.kind === "task" || (item.kind === "routine" && item.recurrence !== "none")) &&
          item.timingPrecision === "exact" &&
          !item.allDay &&
          Boolean(startAt) &&
@@ -119,6 +119,7 @@ export function lifeNotificationContext({
    priority,
    leadMinutes,
    timeline,
+   occurrenceAt,
 }: {
    id: string;
    item: LifeItem;
@@ -127,8 +128,9 @@ export function lifeNotificationContext({
    priority: ReminderPriority;
    leadMinutes: number;
    timeline: NotificationTimelineItem[];
+   occurrenceAt?: number;
 }): NotificationCopyContext {
-   const startAt = lifeStartAt(item);
+   const startAt = occurrenceAt || lifeStartAt(item);
    const dateKey = localDateKey(new Date(startAt));
    return createNotificationCopyContext({
       id,
@@ -141,7 +143,9 @@ export function lifeNotificationContext({
       priority,
       leadMinutes,
       startAt,
-      endAt: lifeEndAt(item),
+      endAt: occurrenceAt
+         ? occurrenceAt + Math.max(5, item.durationMinutes || 30) * 60_000
+         : lifeEndAt(item),
       timelineId: `life:${item.id}`,
       timeline,
    });

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import {
    validateNotificationBody,
+   validateNotificationTitle,
    type NotificationCopyContext,
 } from "@/lib/allevinNotificationCopy";
 import { openAICompletionOptions, providerFailureIsRetryable, providerFailureReason } from "@/lib/allevinOpenAIRequest";
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 type CopyResponse = {
    ok: true;
-   copies: Array<{ id: string; body: string; source: "llm" }>;
+   copies: Array<{ id: string; title: string; body: string; source: "llm" }>;
    complete: boolean;
    failureReason?: NotificationCopyFailureReason;
 };
@@ -104,6 +105,17 @@ function parseJson(content: string) {
    }
 }
 
+function copyIsTooSimilar(candidate: string, recent: string[]) {
+   const tokens = new Set(clean(candidate, 220).toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((token) => token.length > 2));
+   if (!tokens.size) return true;
+   return recent.some((body) => {
+      const other = new Set(clean(body, 220).toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((token) => token.length > 2));
+      const overlap = [...tokens].filter((token) => other.has(token)).length;
+      const union = new Set([...tokens, ...other]).size;
+      return union > 0 && overlap / union >= 0.72;
+   });
+}
+
 function unavailableResponse(reason: NotificationCopyFailureReason): CopyResponse {
    return {
       ok: true,
@@ -156,11 +168,13 @@ function buildPrompt(
 
 ALLEVIN's deterministic schedule engine has already selected the item, delivery time, PREP/START phase, duration, next event, and transition gap. Those supplied facts are authoritative. You only phrase them.
 
-Return JSON exactly shaped as {"copies":[{"id":"exact supplied id","body":"notification body"}]}.
+Return JSON exactly shaped as {"copies":[{"id":"exact supplied id","title":"short notification title","body":"notification body"}]}.
 
 COPY RULES
 - Write one distinct body for every supplied id. Preserve each id exactly.
-- The visible title is already shown above the body. Never repeat the exact visible title anywhere in the body.
+- Write a short natural title grounded in visibleTitle. Keep at least one meaningful word from visibleTitle so the title cannot drift.
+- Never use generic title words such as reminder, notification, scheduled, task, or due now.
+- The title will be shown above the body. Never repeat the generated title or exact visibleTitle in the body.
 - When userSuppliedReason is present, preserve its meaning naturally. It is the strongest clue to why the reminder matters, but do not repeat it word for word.
 - Write one or two short sentences, 18–180 characters total.
 - Sound like a thoughtful personal assistant who understands why this ordinary moment matters.
@@ -243,9 +257,10 @@ async function requestProviderCopies({
                            additionalProperties: false,
                            properties: {
                               id: { type: "string" },
+                              title: { type: "string" },
                               body: { type: "string" },
                            },
-                           required: ["id", "body"],
+                           required: ["id", "title", "body"],
                         },
                      },
                   },
@@ -279,8 +294,8 @@ async function requestProviderCopies({
    const byId = new Map<string, unknown>();
    for (const raw of rawCopies) {
       if (!raw || typeof raw !== "object") continue;
-      const copy = raw as { id?: unknown; body?: unknown };
-      byId.set(clean(copy.id, 320), copy.body);
+      const copy = raw as { id?: unknown; title?: unknown; body?: unknown };
+      byId.set(clean(copy.id, 320), { title: copy.title, body: copy.body });
    }
    return { byId };
 }
@@ -313,7 +328,7 @@ export async function POST(request: Request) {
    if (!apiKey) return NextResponse.json(unavailableResponse("missing-key"));
 
    try {
-      const accepted = new Map<string, string>();
+      const accepted = new Map<string, { title: string; body: string }>();
       const usedBodies = new Set(recentBodies.map((body) => body.toLowerCase()));
       let remaining = [...contexts];
       let failureReason: NotificationCopyFailureReason = "validation";
@@ -326,7 +341,7 @@ export async function POST(request: Request) {
             apiKey,
             model,
             contexts: remaining,
-            recentBodies: [...recentBodies, ...accepted.values()],
+            recentBodies: [...recentBodies, ...[...accepted.values()].map((copy) => copy.body)],
             variationNonce: `${variationNonce}-${attempt + 1}`,
             retryAttempt: attempt > 0,
          });
@@ -337,20 +352,22 @@ export async function POST(request: Request) {
 
          const rejected: NotificationCopyContext[] = [];
          for (const context of remaining) {
-            const body = validateNotificationBody(provider.byId.get(context.id), context);
-            if (!body || usedBodies.has(body.toLowerCase())) {
+            const rawCopy = provider.byId.get(context.id) as { title?: unknown; body?: unknown } | undefined;
+            const title = validateNotificationTitle(rawCopy?.title, context);
+            const body = title ? validateNotificationBody(rawCopy?.body, { ...context, title }) : null;
+            if (!body || usedBodies.has(body.toLowerCase()) || copyIsTooSimilar(body, [...recentBodies, ...[...accepted.values()].map((copy) => copy.body)])) {
                rejected.push(context);
                continue;
             }
-            accepted.set(context.id, body);
+            accepted.set(context.id, { title: title!, body });
             usedBodies.add(body.toLowerCase());
          }
          remaining = rejected;
       }
 
       const copies = contexts.flatMap((context) => {
-         const body = accepted.get(context.id);
-         return body ? [{ id: context.id, body, source: "llm" as const }] : [];
+         const copy = accepted.get(context.id);
+         return copy ? [{ id: context.id, ...copy, source: "llm" as const }] : [];
       });
       return NextResponse.json({
          ok: true,

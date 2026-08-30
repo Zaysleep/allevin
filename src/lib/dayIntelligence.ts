@@ -3,7 +3,6 @@ import { rhythmVoice } from "@/lib/allevinVoice";
 import { buildRhythmForDate, formatClock, minutesFromClock, type DailyRhythmState } from "@/lib/dailyRhythm";
 import { buildLifeViews, formatLifeDate } from "@/lib/lifeEngine";
 import type { KinAction, LifeItem, LifeState } from "@/lib/lifeTypes";
-import { readLifestyleProfile } from "@/lib/allevinLifestyleProfile";
 
 export interface DayIntelligenceResult {
    handled: boolean;
@@ -613,7 +612,7 @@ export function preflightAssistantActions(
          return `${proposed.title || "That"} overlaps ${itemConflict.title}. I left the schedule unchanged.`;
       }
 
-      const travelMinutes = readLifestyleProfile().commuteMinutes || 0;
+      const travelMinutes = 0;
       const neighbors = state.items
          .filter((item) => item.state === "active" && item.kind === "commitment" && item.startAt)
          .filter((item) => !action.targetId || item.id !== action.targetId)

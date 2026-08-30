@@ -2,18 +2,16 @@
 
 import { ChevronDown, X } from "lucide-react";
 import type { ChangeEvent, ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import BackupRestoreSettings from "@/components/BackupRestoreSettings";
 import LanguageConnectionStatus from "@/components/LanguageConnectionStatus";
-import LifestyleSettingsEditor from "@/components/LifestyleSettingsEditor";
 import RhythmSettingsEditor from "@/components/RhythmSettingsEditor";
 import { sendAllevinTestNotification } from "@/lib/allevinNotifications";
-import { readLifestyleProfile } from "@/lib/allevinLifestyleProfile";
 import { formatClock, type DailyRhythmState } from "@/lib/dailyRhythm";
 import type { AllevinTone } from "@/lib/allevinVoice";
 
-type SettingsSection = "profile" | "schedule" | "routines" | "lifestyle" | "choices" | "notifications" | "data";
+type SettingsSection = "profile" | "schedule" | "routines" | "notifications" | "data";
 
 function AccordionSection({
    id,
@@ -88,7 +86,6 @@ export default function SettingsScreen({
    const [active, setActive] = useState<SettingsSection | null>("profile");
    const [testSubject, setTestSubject] = useState("Take a quick break from the screen");
    const [testMessage, setTestMessage] = useState("");
-   const lifestyle = useMemo(() => open ? readLifestyleProfile() : null, [open]);
 
    useEffect(() => {
       if (!open) return;
@@ -108,12 +105,7 @@ export default function SettingsScreen({
    const firstSchedule = rhythmState.scheduleBlocks[0];
    const scheduleSummary = firstSchedule
       ? `${firstSchedule.title} · ${daySummary(firstSchedule.days)} · ${formatClock(firstSchedule.start)}–${formatClock(firstSchedule.end)}`
-      : "No regular schedule yet";
-   const choiceSummary = lifestyle?.flexibleChoiceSets.flatMap((set) => set.choices).slice(0, 3).join(", ") || "No flexible choices yet";
-   const lifestyleSummary = [
-      lifestyle?.preferredBedtime ? `Bedtime ${formatClock(lifestyle.preferredBedtime)}` : "No bedtime",
-      lifestyle?.commuteMinutes ? `${lifestyle.commuteMinutes}-min travel` : "No travel time",
-   ].join(" · ");
+      : rhythmState.bedtime ? `Bedtime · ${formatClock(rhythmState.bedtime)}` : "No regular schedule yet";
    const toggle = (id: SettingsSection) => setActive((current) => current === id ? null : id);
 
    return (
@@ -136,14 +128,6 @@ export default function SettingsScreen({
 
             <AccordionSection id="routines" title="Routines" summary={`${rhythmState.anchors.length} ${rhythmState.anchors.length === 1 ? "routine" : "routines"}`} open={active === "routines"} onToggle={toggle}>
                <RhythmSettingsEditor state={rhythmState} view="routines" />
-            </AccordionSection>
-
-            <AccordionSection id="lifestyle" title="Lifestyle" summary={lifestyleSummary} open={active === "lifestyle"} onToggle={toggle}>
-               <LifestyleSettingsEditor view="lifestyle" />
-            </AccordionSection>
-
-            <AccordionSection id="choices" title="Flexible choices" summary={choiceSummary} open={active === "choices"} onToggle={toggle}>
-               <LifestyleSettingsEditor view="choices" />
             </AccordionSection>
 
             <AccordionSection id="notifications" title="Notifications" summary={`${rhythmState.remindersEnabled ? "On" : "Off"} · Personal language`} open={active === "notifications"} onToggle={toggle}>

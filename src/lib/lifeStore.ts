@@ -17,6 +17,7 @@ import type {
    LifeItemSource,
    LifeItemState,
    LifeRecurrence,
+   LifeRepeatRule,
    LifeSnapshot,
    LifeState,
    LifeTimingPrecision,
@@ -35,7 +36,7 @@ const KIN_ACTION_CONTEXTS: LifeContext[] = ["personal", "work", "school", "kin-s
 const KIN_ACTION_KINDS: LifeItemKind[] = ["task", "commitment", "waiting", "routine", "note"];
 const KIN_ACTION_STATES: LifeItemState[] = ["active", "waiting", "someday", "done", "archived"];
 const KIN_ACTION_IMPORTANCE: LifeImportance[] = ["low", "normal", "high"];
-const KIN_ACTION_RECURRENCES: LifeRecurrence[] = ["none", "daily", "weekdays", "weekly", "monthly"];
+const KIN_ACTION_RECURRENCES: LifeRecurrence[] = ["none", "interval", "daily", "weekdays", "weekly", "monthly"];
 const KIN_ACTION_TIMING: LifeTimingPrecision[] = ["exact", "day", "window", "someday", "none"];
 
 function makeId(prefix: string) {
@@ -61,6 +62,33 @@ function safeTimestamp(value: unknown) {
 function safeDuration(value: unknown) {
    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
    return Math.max(5, Math.min(720, Math.round(value)));
+}
+
+function safeRepeatRule(value: unknown): LifeRepeatRule | undefined {
+   if (!value || typeof value !== "object") return undefined;
+   const raw = value as Partial<LifeRepeatRule>;
+   const intervalMinutes = Math.round(Number(raw.intervalMinutes));
+   const windowStartMinutes = Math.round(Number(raw.windowStartMinutes));
+   const windowEndMinutes = Math.round(Number(raw.windowEndMinutes));
+   const seriesStartedAt = safeTimestamp(raw.seriesStartedAt);
+   if (
+      !Number.isFinite(intervalMinutes) || intervalMinutes < 5 || intervalMinutes > 7 * 24 * 60 ||
+      !Number.isFinite(windowStartMinutes) || windowStartMinutes < 0 || windowStartMinutes > 1439 ||
+      !Number.isFinite(windowEndMinutes) || windowEndMinutes < 1 || windowEndMinutes > 1440 ||
+      windowEndMinutes <= windowStartMinutes ||
+      !seriesStartedAt
+   ) return undefined;
+   return {
+      intervalMinutes,
+      cadence: raw.cadence === "flexible" ? "flexible" : "exact",
+      scope: raw.scope === "today" ? "today" : "every-day",
+      windowStartMinutes,
+      windowEndMinutes,
+      seriesStartedAt,
+      seriesEndsAt: safeTimestamp(raw.seriesEndsAt),
+      stopWhenCompleted: raw.stopWhenCompleted === true,
+      paused: raw.paused === true,
+   };
 }
 
 function asContext(value: unknown, fallback: LifeContext = "personal"): LifeContext {
@@ -127,6 +155,7 @@ function sanitizeItem(raw: Partial<LifeItem>, fallbackSource: LifeItemSource = "
       context: asContext(raw.context),
       importance: asImportance(raw.importance),
       recurrence: asRecurrence(raw.recurrence),
+      repeatRule: safeRepeatRule(raw.repeatRule),
       timingPrecision: repairedRelativeDate ? "day" : asTimingPrecision(raw.timingPrecision),
       dueAt: safeTimestamp(raw.dueAt) || repairedRelativeDate?.getTime(),
       startAt: safeTimestamp(raw.startAt),
@@ -190,7 +219,20 @@ export function readLifeState(): LifeState {
    try {
       const stored = window.localStorage.getItem(LIFE_STATE_STORAGE_KEY);
       if (!stored) return getEmptyLifeState();
-      return sanitizeState(JSON.parse(stored));
+      const state = sanitizeState(JSON.parse(stored));
+      const now = Date.now();
+      for (const item of state.items) {
+         if (item.state !== "active" || item.recurrence !== "interval" || !item.repeatRule || item.repeatRule.paused) continue;
+         const current = item.dueAt || item.startAt || 0;
+         // Keep the just-due occurrence visible long enough for the foreground
+         // checker to deliver it; after that, jump directly to the next future
+         // occurrence instead of replaying anything missed while offline.
+         if (current > now - 2 * 60_000) continue;
+         const next = nextLifeOccurrence(item, now + 1);
+         if (next) item.dueAt = next;
+         else if (item.repeatRule.scope === "today") item.state = "done";
+      }
+      return state;
    } catch {
       return getEmptyLifeState();
    }
@@ -230,6 +272,7 @@ function normalizeActionInput(input?: KinActionItemInput, current?: LifeItem): P
       context: input.context ? asContext(input.context, current?.context || "personal") : current?.context,
       importance: input.importance ? asImportance(input.importance, current?.importance || "normal") : current?.importance,
       recurrence: input.recurrence ? asRecurrence(input.recurrence, current?.recurrence || "none") : current?.recurrence,
+      repeatRule: input.repeatRule !== undefined ? safeRepeatRule(input.repeatRule) : current?.repeatRule,
       timingPrecision: input.timingPrecision ? asTimingPrecision(input.timingPrecision, current?.timingPrecision || "none") : current?.timingPrecision,
       dueAt: input.dueAt !== undefined ? safeTimestamp(input.dueAt) : current?.dueAt,
       startAt: input.startAt !== undefined ? safeTimestamp(input.startAt) : current?.startAt,
@@ -257,6 +300,9 @@ function findItem(state: LifeState, targetId?: string, targetQuery?: string) {
 }
 
 function nextRecurrenceTimestamp(item: LifeItem, from = Date.now()) {
+   if (item.recurrence === "interval" && item.repeatRule) {
+      return nextLifeOccurrence(item, Math.max(from, (item.dueAt || item.startAt || from) + 1)) || from;
+   }
    const base = new Date(item.dueAt || item.startAt || from);
    const next = new Date(base);
 
@@ -269,6 +315,74 @@ function nextRecurrenceTimestamp(item: LifeItem, from = Date.now()) {
    }
 
    return next.getTime();
+}
+
+function atLocalMinutes(date: Date, minutes: number) {
+   const target = new Date(date);
+   target.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+   return target.getTime();
+}
+
+/** Return the first future occurrence without replaying anything missed offline. */
+export function nextLifeOccurrence(item: LifeItem, after = Date.now()) {
+   const rule = item.repeatRule;
+   if (item.recurrence !== "interval" || !rule || rule.paused) return item.startAt || item.dueAt;
+   const hardEnd = Math.min(rule.seriesEndsAt || Number.MAX_SAFE_INTEGER, after + 370 * 86_400_000);
+   const day = new Date(after);
+   day.setHours(0, 0, 0, 0);
+
+   for (let offset = 0; offset < 370; offset += 1) {
+      const date = new Date(day);
+      date.setDate(day.getDate() + offset);
+      if (rule.scope === "today" && date.toDateString() !== new Date(rule.seriesStartedAt).toDateString()) return undefined;
+      const start = atLocalMinutes(date, rule.windowStartMinutes);
+      const end = atLocalMinutes(date, rule.windowEndMinutes);
+      if (start > hardEnd) return undefined;
+      const anchor = Math.max(start, rule.seriesStartedAt);
+      const elapsed = Math.max(0, after - anchor);
+      const steps = Math.ceil(elapsed / (rule.intervalMinutes * 60_000));
+      const candidate = anchor + steps * rule.intervalMinutes * 60_000;
+      if (candidate >= after && candidate <= end && candidate <= hardEnd) return candidate;
+   }
+   return undefined;
+}
+
+/** Expand only the requested horizon. The series itself stays a single item. */
+export function lifeOccurrencesBetween(item: LifeItem, from: number, to: number) {
+   if (item.recurrence === "none" || (item.recurrence === "interval" && !item.repeatRule)) {
+      const once = item.startAt || item.dueAt;
+      return once && once >= from && once <= to ? [once] : [];
+   }
+   if (item.recurrence !== "interval" || !item.repeatRule) {
+      const base = item.startAt || item.dueAt;
+      if (!base) return [];
+      const result: number[] = [];
+      const cursor = new Date(base);
+      const advance = () => {
+         if (item.recurrence === "daily") cursor.setDate(cursor.getDate() + 1);
+         else if (item.recurrence === "weekly") cursor.setDate(cursor.getDate() + 7);
+         else if (item.recurrence === "monthly") cursor.setMonth(cursor.getMonth() + 1);
+         else if (item.recurrence === "weekdays") {
+            cursor.setDate(cursor.getDate() + 1);
+            while (cursor.getDay() === 0 || cursor.getDay() === 6) cursor.setDate(cursor.getDate() + 1);
+         }
+      };
+      for (let count = 0; count < 400 && cursor.getTime() < from; count += 1) advance();
+      for (let count = 0; count < 160 && cursor.getTime() <= to; count += 1) {
+         result.push(cursor.getTime());
+         advance();
+      }
+      return result;
+   }
+   const result: number[] = [];
+   let cursor = Math.max(from, Date.now() + 5_000);
+   for (let count = 0; count < 160; count += 1) {
+      const occurrence = nextLifeOccurrence(item, cursor);
+      if (!occurrence || occurrence > to) break;
+      result.push(occurrence);
+      cursor = occurrence + 1;
+   }
+   return result;
 }
 
 export function createLifeItem(input: KinActionItemInput, source: LifeItemSource = "user") {
@@ -309,6 +423,13 @@ export function completeLifeItem(itemId: string) {
    if (!item) return current;
 
    if (item.kind === "routine" && item.recurrence !== "none") {
+      if (item.repeatRule?.stopWhenCompleted) {
+         item.state = "done";
+         item.completedAt = Date.now();
+         item.updatedAt = Date.now();
+         pushActivity(current, item, "completed", "Recurring reminder completed");
+         return writeLifeState(current);
+      }
       const nextAt = nextRecurrenceTimestamp(item);
       item.lastCompletedAt = Date.now();
       item.updatedAt = Date.now();
@@ -456,6 +577,7 @@ export function getLifeSnapshot(state: LifeState = readLifeState()): LifeSnapsho
             deferUntil: item.deferUntil,
             durationMinutes: item.durationMinutes,
             recurrence: item.recurrence,
+            repeatRule: item.repeatRule,
             allDay: item.allDay,
             pinToToday: item.pinToToday,
             details: item.details || undefined,

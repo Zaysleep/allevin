@@ -9,6 +9,7 @@ import {
 export const DAILY_RHYTHM_UPDATED_EVENT = "allevin-daily-rhythm-updated";
 export const DAILY_RHYTHM_STORAGE_KEY = "allevin-daily-rhythm-mkxii-2";
 const LEGACY_DAILY_RHYTHM_STORAGE_KEY = "allevin-daily-rhythm-mkxii-1";
+const LEGACY_LIFESTYLE_STORAGE_KEY = "allevin-lifestyle-profile-mkxii-1";
 
 export type RhythmDay = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export type RhythmAnchorId = string;
@@ -99,6 +100,7 @@ export interface ScheduleException {
 
 export interface DailyRhythmState {
    version: 2;
+   bedtime?: string;
    scheduleBlocks: RhythmScheduleBlock[];
    anchors: RhythmAnchor[];
    remindersEnabled: boolean;
@@ -139,6 +141,7 @@ function makeId(prefix: string) {
 export function defaultDailyRhythm(): DailyRhythmState {
    return {
       version: 2,
+      bedtime: undefined,
       scheduleBlocks: [],
       anchors: [],
       remindersEnabled: false,
@@ -213,6 +216,7 @@ function migrateLegacy(raw: Record<string, unknown>): DailyRhythmState {
 
    return {
       version: 2,
+      bedtime: undefined,
       scheduleBlocks,
       anchors,
       remindersEnabled: raw.remindersEnabled === true,
@@ -388,6 +392,9 @@ function normalizeRhythm(raw: unknown): DailyRhythmState {
 
    return {
       version: 2,
+      bedtime: typeof value.bedtime === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value.bedtime)
+         ? value.bedtime
+         : undefined,
       scheduleBlocks,
       anchors,
       remindersEnabled: value.remindersEnabled === true,
@@ -406,15 +413,31 @@ function normalizeRhythm(raw: unknown): DailyRhythmState {
 export function readDailyRhythm() {
    if (!isBrowser()) return defaultDailyRhythm();
    try {
+      let legacyBedtime: string | undefined;
+      try {
+         const lifestyle = JSON.parse(window.localStorage.getItem(LEGACY_LIFESTYLE_STORAGE_KEY) || "null") as { preferredBedtime?: unknown } | null;
+         if (typeof lifestyle?.preferredBedtime === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(lifestyle.preferredBedtime)) {
+            legacyBedtime = lifestyle.preferredBedtime;
+         }
+      } catch {
+         legacyBedtime = undefined;
+      }
       const current = window.localStorage.getItem(DAILY_RHYTHM_STORAGE_KEY);
-      if (current) return normalizeRhythm(JSON.parse(current));
+      if (current) {
+         const normalized = normalizeRhythm(JSON.parse(current));
+         if (!normalized.bedtime && legacyBedtime) {
+            normalized.bedtime = legacyBedtime;
+            window.localStorage.setItem(DAILY_RHYTHM_STORAGE_KEY, JSON.stringify(normalized));
+         }
+         return normalized;
+      }
       const legacy = window.localStorage.getItem(LEGACY_DAILY_RHYTHM_STORAGE_KEY);
       if (legacy) {
          const migrated = normalizeRhythm(JSON.parse(legacy));
          window.localStorage.setItem(DAILY_RHYTHM_STORAGE_KEY, JSON.stringify(migrated));
          return migrated;
       }
-      return defaultDailyRhythm();
+      return { ...defaultDailyRhythm(), bedtime: legacyBedtime };
    } catch {
       return defaultDailyRhythm();
    }

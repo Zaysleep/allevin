@@ -5,7 +5,7 @@
  * can wake the installed PWA later without changing the client UI contract.
  */
 
-const SW_VERSION = "mkxviii-human-assistant-1";
+const SW_VERSION = "mkxix-recurring-care-2";
 
 self.addEventListener("install", () => {
   // Promote a newly deployed worker immediately. ALLEVIN stores user state in
@@ -39,7 +39,6 @@ self.addEventListener("push", (event) => {
   }
 
   const title = payload.title || "ALLEVIN";
-  const actionTarget = payload.data?.actionTarget;
   const options = {
     body: typeof payload.body === "string" ? payload.body : "",
     tag: payload.tag || `allevin-push-${Date.now()}`,
@@ -50,15 +49,6 @@ self.addEventListener("push", (event) => {
       entryId: payload.entryId,
       ...(payload.data || {}),
     },
-    // These actions carry intent back into the app. The deterministic state
-    // engine applies them after launch; the worker never edits schedule truth.
-    ...(actionTarget ? {
-      actions: [
-        { action: "done", title: "Done" },
-        { action: "running-late", title: "Running late" },
-        { action: "skip", title: "Skip" },
-      ],
-    } : {}),
   };
 
   event.waitUntil(self.registration.showNotification(title, options));

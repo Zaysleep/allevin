@@ -20,7 +20,10 @@ function clean(value: unknown, limit = 6000) {
    return String(value ?? "")
       .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
       .replace(/<[^>]+>/g, "")
-      .replace(/[\u0000-\u001F\u007F]/g, "")
+      .replace(/\r\n?/g, "\n")
+      // Preserve the factual line structure sent to and returned from the
+      // language boundary while still removing unsafe control characters.
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
       .trim()
       .slice(0, limit);
 }

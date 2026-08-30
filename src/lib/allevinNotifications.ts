@@ -16,7 +16,7 @@ import {
    readDailyRhythm,
    type RhythmEntry,
 } from "@/lib/dailyRhythm";
-import { notificationBodyFromCache, prepareNotificationBodies } from "@/lib/allevinNotificationCopyClient";
+import { notificationCopyFromCache, prepareNotificationBodies } from "@/lib/allevinNotificationCopyClient";
 import { createNotificationCopyContext, type NotificationCopyContext } from "@/lib/allevinNotificationCopy";
 import {
    buildNotificationTimeline,
@@ -30,7 +30,7 @@ import type { LifeItem, LifeImportance } from "@/lib/lifeTypes";
 import { serverPushIsActive } from "@/lib/allevinServerPushClient";
 
 const NOTIFICATION_LOG_KEY = "allevin-notification-log-mkxii-3";
-const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxviii-human-assistant-1";
+const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxix-recurring-care-2";
 let reminderCheckRunning = false;
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 
@@ -114,9 +114,9 @@ export async function sendAllevinTestNotification(subject: string) {
       timelineId: id,
       timeline: [],
    });
-   const body = notificationBodyFromCache(context) || (await prepareNotificationBodies([context])).get(context.id);
-   if (!body) return false;
-   await showNotification(title, body, `allevin-settings-test-${now}`);
+   const copy = notificationCopyFromCache(context) || (await prepareNotificationBodies([context])).get(context.id);
+   if (!copy) return false;
+   await showNotification(copy.title, copy.body, `allevin-settings-test-${now}`);
    return true;
 }
 
@@ -126,10 +126,9 @@ async function showContextualNotification(
    tag: string,
    entryId?: string,
 ) {
-   const cached = notificationBodyFromCache(context);
-   const body = cached || (await prepareNotificationBodies([context])).get(context.id);
-   if (!body) return false;
-   await showNotification(title, body, tag, entryId);
+   const copy = notificationCopyFromCache(context) || (await prepareNotificationBodies([context])).get(context.id);
+   if (!copy) return false;
+   await showNotification(copy.title, copy.body, tag, entryId);
    return true;
 }
 
@@ -273,8 +272,9 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const priority = localReminderPriorityForLife(item);
       const lead = leadMinutesForPriority(priority);
       const prepAt = start - lead;
-      const prepKey = `${key}:life:${item.id}:prep`;
-      if (nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
+      const occurrenceAt = item.startAt || item.dueAt || 0;
+      const prepKey = `${key}:life:${item.id}:${occurrenceAt}:prep`;
+      if (item.recurrence !== "interval" && nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
          const context = lifeNotificationContext({ id: prepKey, item, phase: "prep", tone, priority, leadMinutes: lead, timeline });
          if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-prep`, item.id)) {
             log.add(prepKey);
@@ -282,7 +282,7 @@ export async function runRhythmReminderCheck(now = new Date()) {
          }
       }
 
-      const eventKey = `${key}:life:${item.id}:start`;
+      const eventKey = `${key}:life:${item.id}:${occurrenceAt}:start`;
       if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(eventKey)) {
          const context = lifeNotificationContext({ id: eventKey, item, phase: "start", tone, priority, leadMinutes: lead, timeline });
          if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-start`, item.id)) {

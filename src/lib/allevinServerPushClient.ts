@@ -10,7 +10,7 @@ import {
    timestampForLocalClock,
 } from "@/lib/allevinNotificationScheduleContext";
 import { readAllevinTone } from "@/lib/allevinVoice";
-import { readLifeState } from "@/lib/lifeStore";
+import { lifeOccurrencesBetween, readLifeState } from "@/lib/lifeStore";
 import type { LifeImportance, LifeItem } from "@/lib/lifeTypes";
 
 export const SERVER_PUSH_ACTIVE_KEY = "allevin-server-push-active-v1";
@@ -225,34 +225,38 @@ function buildPushPlan(device: string) {
    for (const item of lifeItems) {
       if (
          item.state !== "active" ||
-         (item.kind !== "commitment" && item.kind !== "task") ||
+         (item.kind !== "commitment" && item.kind !== "task" && !(item.kind === "routine" && item.recurrence !== "none")) ||
          item.allDay ||
          item.timingPrecision !== "exact"
       ) continue;
-      const startAt = item.startAt || item.dueAt;
-      if (!startAt || startAt <= Date.now() + 5_000 || startAt > horizon) continue;
-      const date = new Date(startAt);
-      const dateKey = localDateKey(date);
-      const timeline = timelineByDate.get(dateKey) || buildNotificationTimeline(date, buildRhythmForDate(rhythm, date), lifeItems);
-      const priority = rateLifeItem(item);
-      addTwoPhaseJobs({
-         jobs,
-         device,
-         sourceId: `life:${item.id}`,
-         dateKey,
-         startAt,
-         title: item.title,
-         priority,
-         buildCopyContext: (id, phase, leadMinutes) => lifeNotificationContext({ id, item, phase, tone, priority, leadMinutes, timeline }),
-         actionTarget: { source: "life", id: item.id, dateKey },
-      });
+      const occurrences = lifeOccurrencesBetween(item, Date.now() + 5_000, horizon);
+      for (const startAt of occurrences) {
+         const date = new Date(startAt);
+         const dateKey = localDateKey(date);
+         const timeline = timelineByDate.get(dateKey) || buildNotificationTimeline(date, buildRhythmForDate(rhythm, date), lifeItems);
+         const priority = rateLifeItem(item);
+         addTwoPhaseJobs({
+            jobs,
+            device,
+            sourceId: `life:${item.id}`,
+            dateKey,
+            startAt,
+            title: item.title,
+            priority,
+            buildCopyContext: (id, phase, leadMinutes) => lifeNotificationContext({ id, item, phase, tone, priority, leadMinutes, timeline, occurrenceAt: startAt }),
+            // A repeated care nudge should remain one notification per
+            // occurrence, not turn into a prep/start avalanche.
+            includePrep: item.recurrence === "interval" ? false : undefined,
+            actionTarget: { source: "life", id: item.id, dateKey },
+         });
+      }
    }
 
    return jobs.sort((a, b) => a.dueAt - b.dueAt).slice(0, 160);
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxvii-contextual-copy", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxix-recurring-care", {
       scope: "/",
       updateViaCache: "none",
    });
@@ -290,10 +294,10 @@ export async function syncServerNotificationSchedule() {
    try {
       const device = deviceId();
       const jobs = buildPushPlan(device);
-      const bodies = await prepareNotificationBodies(jobs.map((job) => job.copyContext));
+      const copies = await prepareNotificationBodies(jobs.map((job) => job.copyContext));
       const preparedJobs = jobs.flatMap(({ copyContext, ...job }) => {
-         const body = bodies.get(copyContext.id);
-         return body ? [{ ...job, body }] : [];
+         const copy = copies.get(copyContext.id);
+         return copy ? [{ ...job, title: copy.title, body: copy.body }] : [];
       });
       if (preparedJobs.length < jobs.length) queueCopyRetry();
       else {

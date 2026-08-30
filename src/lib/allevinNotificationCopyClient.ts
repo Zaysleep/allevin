@@ -3,6 +3,8 @@
 import {
    notificationCopyCacheKey,
    validateNotificationBody,
+   validateNotificationTitle,
+   type GeneratedNotificationCopy,
    type NotificationCopyContext,
 } from "./allevinNotificationCopy";
 
@@ -12,6 +14,7 @@ const CACHE_LIMIT = 220;
 const DIAGNOSTICS_KEY = "allevin-language-diagnostics-mkxv-1";
 
 interface CopyCacheEntry {
+   title: string;
    body: string;
    createdAt: number;
    source: "llm";
@@ -64,10 +67,12 @@ function saveCache(cache: CopyCache) {
    }
 }
 
-export function notificationBodyFromCache(context: NotificationCopyContext) {
+export function notificationCopyFromCache(context: NotificationCopyContext): GeneratedNotificationCopy | null {
    const cached = readCache().entries[notificationCopyCacheKey(context)];
    if (cached?.source !== "llm") return null;
-   return validateNotificationBody(cached.body, context);
+   const title = validateNotificationTitle(cached.title, context);
+   const body = title ? validateNotificationBody(cached.body, { ...context, title }) : null;
+   return title && body ? { title, body } : null;
 }
 
 function randomNonce() {
@@ -96,16 +101,16 @@ function recordDiagnostics(entries: Array<{ id: string; source: string; reason?:
  */
 export async function prepareNotificationBodies(contexts: NotificationCopyContext[]) {
    const cache = readCache();
-   const result = new Map<string, string>();
+   const result = new Map<string, GeneratedNotificationCopy>();
    const missing: NotificationCopyContext[] = [];
 
    for (const context of contexts) {
-      const cached = validateNotificationBody(cache.entries[notificationCopyCacheKey(context)]?.body, context);
+      const cached = notificationCopyFromCache(context);
       if (cached) result.set(context.id, cached);
       else missing.push(context);
    }
 
-   const generated = new Map<string, { body: string; source: "llm"; reason?: string }>();
+   const generated = new Map<string, GeneratedNotificationCopy & { source: "llm"; reason?: string }>();
    const requestChunk = async (chunk: NotificationCopyContext[], chunkIndex: number) => {
       for (let attempt = 0; attempt < 2; attempt += 1) {
          const controller = new AbortController();
@@ -119,12 +124,14 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
                signal: controller.signal,
             });
             if (response.ok) {
-               const payload = (await response.json()) as { copies?: Array<{ id?: unknown; body?: unknown; source?: unknown; reason?: unknown }> };
+               const payload = (await response.json()) as { copies?: Array<{ id?: unknown; title?: unknown; body?: unknown; source?: unknown; reason?: unknown }> };
                for (const copy of Array.isArray(payload.copies) ? payload.copies : []) {
                   const context = chunk.find((candidate) => candidate.id === copy.id);
                   if (!context || copy.source !== "llm") continue;
-                  const body = validateNotificationBody(copy.body, context);
-                  if (body) generated.set(context.id, {
+                  const title = validateNotificationTitle(copy.title, context);
+                  const body = title ? validateNotificationBody(copy.body, { ...context, title }) : null;
+                  if (title && body) generated.set(context.id, {
+                     title,
                      body,
                      source: "llm",
                      reason: typeof copy.reason === "string" ? copy.reason.slice(0, 80) : undefined,
@@ -153,8 +160,8 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
    for (const context of missing) {
       const copy = generated.get(context.id);
       if (!copy) continue;
-      result.set(context.id, copy.body);
-      cache.entries[notificationCopyCacheKey(context)] = { body: copy.body, createdAt: now, source: "llm", reason: copy.reason };
+      result.set(context.id, { title: copy.title, body: copy.body });
+      cache.entries[notificationCopyCacheKey(context)] = { title: copy.title, body: copy.body, createdAt: now, source: "llm", reason: copy.reason };
       cache.recentBodies = [...cache.recentBodies.filter((candidate) => candidate !== copy.body), copy.body].slice(-18);
    }
    cache.entries = Object.fromEntries(

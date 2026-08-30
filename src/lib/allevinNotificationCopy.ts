@@ -43,6 +43,11 @@ export interface NotificationCopyContext {
    next?: NotificationUpcomingContext;
 }
 
+export interface GeneratedNotificationCopy {
+   title: string;
+   body: string;
+}
+
 const DISALLOWED_COPY = [
    "calendar starts freelancing",
    "calendar is freelancing",
@@ -232,4 +237,14 @@ export function validateNotificationBody(value: unknown, context: NotificationCo
    if ((body.match(/[.!?]/g) || []).length > 2) return null;
    if (/^[#*\-]|```|\b(?:phase|priority|schedule engine)\b/i.test(body)) return null;
    return body;
+}
+
+export function validateNotificationTitle(value: unknown, context: NotificationCopyContext) {
+   const title = cleanInline(value, 90).replace(/[.!?]+$/, "");
+   if (title.length < 3 || title.length > 80) return null;
+   if (/\b(?:reminder|notification|scheduled|due now|task)\b/i.test(title)) return null;
+   const sourceTokens = new Set(normalized(context.title).split(" ").filter((token) => token.length > 2));
+   const titleTokens = normalized(title).split(" ").filter((token) => token.length > 2);
+   if (!titleTokens.some((token) => sourceTokens.has(token))) return null;
+   return title;
 }

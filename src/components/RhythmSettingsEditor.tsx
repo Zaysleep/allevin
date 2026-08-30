@@ -8,6 +8,7 @@ import {
    formatClock,
    removeRhythmAnchor,
    removeScheduleBlock,
+   saveDailyRhythm,
    upsertRhythmAnchor,
    upsertScheduleBlock,
    type DailyRhythmState,
@@ -142,6 +143,7 @@ export default function RhythmSettingsEditor({
 }) {
    const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft | null>(null);
    const [anchorDraft, setAnchorDraft] = useState<AnchorDraft | null>(null);
+   const [bedtime, setBedtime] = useState(state.bedtime || "");
 
    const scheduleReferences = useMemo(() => {
       const enabled = state.scheduleBlocks.filter((block) => block.enabled);
@@ -266,6 +268,18 @@ export default function RhythmSettingsEditor({
                >
                   <Plus size={14} /> Add
                </button>
+            </div>
+
+            <div className="settings-bedtime-row">
+               <label className="settings-field">
+                  <span>Bedtime</span>
+                  <input type="time" value={bedtime} onChange={(event) => setBedtime(event.target.value)} />
+               </label>
+               <button
+                  type="button"
+                  className="settings-inline-button"
+                  onClick={() => saveDailyRhythm({ ...state, bedtime: bedtime || undefined })}
+               >Save bedtime</button>
             </div>
 
             {state.scheduleBlocks.length ? (

@@ -10,15 +10,9 @@ import {
    type RhythmDay,
    type RhythmScheduleBlock,
 } from "@/lib/dailyRhythm";
-import {
-   readLifestyleProfile,
-   saveLifestyleProfile,
-   type FlexibleChoiceSet,
-} from "@/lib/allevinLifestyleProfile";
 import { getAllevinUserProfile, saveAllevinUserProfile } from "@/lib/allevinUserProfile";
 import { ALLEVIN_TONE_STORAGE_KEY, readAllevinTone, saveAllevinTone, type AllevinTone } from "@/lib/allevinVoice";
 import { readLifeState } from "@/lib/lifeStore";
-import { appendKinMessage, readKinConversation } from "@/lib/kinConversation";
 import { arrangeOnboardingRoutineTimes, placeNewOnboardingRoutine, representativeScheduleDraft } from "@/lib/onboardingScheduleCore";
 
 export { representativeScheduleDraft } from "@/lib/onboardingScheduleCore";
@@ -53,9 +47,7 @@ export interface OnboardingDraft {
    name: string;
    scheduleBlocks: OnboardingScheduleDraft[];
    routines: OnboardingRoutineDraft[];
-   hobbies: string;
    bedtime: string;
-   travelMinutes: string;
    tone: AllevinTone;
 }
 
@@ -74,6 +66,25 @@ interface OnboardingStatus {
 }
 
 const ALL_DAYS: RhythmDay[] = [0, 1, 2, 3, 4, 5, 6];
+const LEGACY_LIFESTYLE_STORAGE_KEY = "allevin-lifestyle-profile-mkxii-1";
+
+function readLegacyLifestyleProfile() {
+   if (typeof window === "undefined") return { preferredBedtime: undefined as string | undefined, commuteMinutes: undefined as number | undefined, flexibleChoiceSets: [] as unknown[] };
+   try {
+      const value = JSON.parse(window.localStorage.getItem(LEGACY_LIFESTYLE_STORAGE_KEY) || "null") as {
+         preferredBedtime?: unknown;
+         commuteMinutes?: unknown;
+         flexibleChoiceSets?: unknown;
+      } | null;
+      return {
+         preferredBedtime: typeof value?.preferredBedtime === "string" ? value.preferredBedtime : undefined,
+         commuteMinutes: typeof value?.commuteMinutes === "number" ? value.commuteMinutes : undefined,
+         flexibleChoiceSets: Array.isArray(value?.flexibleChoiceSets) ? value.flexibleChoiceSets : [],
+      };
+   } catch {
+      return { preferredBedtime: undefined, commuteMinutes: undefined, flexibleChoiceSets: [] };
+   }
+}
 
 function makeId(prefix: string) {
    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -133,15 +144,6 @@ export function placeAddedOnboardingRoutine(draft: OnboardingDraft, routineId: s
    return placeNewOnboardingRoutine(draft, routineId);
 }
 
-function lifestyleChoices(value: string) {
-   return [...new Set(
-      value
-         .split(/\s*(?:,|\/|\bor\b)\s*/i)
-         .map((choice) => sanitizeText(choice, 80))
-         .filter(Boolean),
-   )].slice(0, 12);
-}
-
 export function readOnboardingStatus(): OnboardingStatus | null {
    if (typeof window === "undefined") return null;
    try {
@@ -173,7 +175,7 @@ export function shouldShowNewUserOnboarding() {
    if (getAllevinUserProfile()) return false;
 
    const rhythm = readDailyRhythm();
-   const lifestyle = readLifestyleProfile();
+   const lifestyle = readLegacyLifestyleProfile();
    const life = readLifeState();
 
    return !(
@@ -275,7 +277,7 @@ export function buildOnboardingDayPreview(draft: OnboardingDraft, day: RhythmDay
  */
 export function onboardingDraftFromCurrentState(): OnboardingDraft {
    const rhythm = readDailyRhythm();
-   const lifestyle = readLifestyleProfile();
+   const lifestyle = readLegacyLifestyleProfile();
    const profile = getAllevinUserProfile();
 
    const scheduleBlocks: OnboardingScheduleDraft[] = rhythm.scheduleBlocks
@@ -319,15 +321,11 @@ export function onboardingDraftFromCurrentState(): OnboardingDraft {
          };
       });
 
-   const hobbies = [...new Set(lifestyle.flexibleChoiceSets.flatMap((set) => set.choices))].join(", ");
-
    return {
       name: profile?.displayName || "",
       scheduleBlocks,
       routines,
-      hobbies,
-      bedtime: lifestyle.preferredBedtime || "",
-      travelMinutes: lifestyle.commuteMinutes ? String(lifestyle.commuteMinutes) : "",
+      bedtime: rhythm.bedtime || lifestyle.preferredBedtime || "",
       // Balanced is the neutral first-run voice. Existing users keep whatever
       // they already selected.
       tone: typeof window !== "undefined" && window.localStorage.getItem(ALLEVIN_TONE_STORAGE_KEY)
@@ -427,6 +425,7 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
    const currentRhythm = readDailyRhythm();
    saveDailyRhythm({
       ...currentRhythm,
+      bedtime: /^([01]\d|2[0-3]):[0-5]\d$/.test(draft.bedtime) ? draft.bedtime : undefined,
       scheduleBlocks,
       anchors,
       completions: {},
@@ -438,38 +437,11 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
       outcomes: {},
    });
 
-   const currentLifestyle = readLifestyleProfile();
-   const choices = lifestyleChoices(draft.hobbies);
-   const flexibleChoiceSets: FlexibleChoiceSet[] = choices.length
-      ? [{ id: "onboarding-anytime", title: "Free-time options", period: "anytime", choices }]
-      : [];
-
-   saveLifestyleProfile({
-      ...currentLifestyle,
-      preferredBedtime: /^([01]\d|2[0-3]):[0-5]\d$/.test(draft.bedtime) ? draft.bedtime : undefined,
-      commuteMinutes: draft.travelMinutes
-         ? Math.max(1, Math.min(240, Math.round(Number(draft.travelMinutes) || 0))) || undefined
-         : undefined,
-      flexibleChoiceSets,
-      flexibleChoiceHistory: [],
-      assignments: {},
-   });
-
    saveAllevinUserProfile(cleanName);
    saveAllevinTone(draft.tone);
    // Keep the last phone step resumable across the Safari → Home Screen
    // handoff. Completion is recorded only after the user enters ALLEVIN.
    markOnboardingState("phone-pending");
 
-   // Give a first-time user one useful conversational handoff instead of a
-   // blank assistant panel. This teaches the interaction model in one sentence
-   // without turning onboarding into a tutorial deck.
-   if (!readKinConversation().length) {
-      appendKinMessage(
-         "assistant",
-         "You’re set. When the day changes, just tell me normally—running late, skipping something, adding dinner, moving a meeting, whatever happened.",
-      );
-   }
-
-   return { scheduleBlocks, anchors, choices };
+   return { scheduleBlocks, anchors };
 }

@@ -10,7 +10,25 @@ export type LifeItemKind = "task" | "commitment" | "waiting" | "routine" | "note
 export type LifeItemState = "active" | "waiting" | "someday" | "done" | "archived";
 export type LifeImportance = "low" | "normal" | "high";
 export type LifeContext = "personal" | "work" | "school" | "kin-software" | "home" | "errand" | "car" | "finance" | "health" | "other";
-export type LifeRecurrence = "none" | "daily" | "weekdays" | "weekly" | "monthly";
+export type LifeRecurrence = "none" | "interval" | "daily" | "weekdays" | "weekly" | "monthly";
+export type LifeRepeatScope = "today" | "every-day";
+
+/**
+ * A recurring reminder remains one editable series. `dueAt` is the next
+ * occurrence while this rule preserves the cadence and its daily boundary.
+ * Local wall-clock minutes keep bedtime/window behavior stable across DST.
+ */
+export interface LifeRepeatRule {
+   intervalMinutes: number;
+   cadence: "exact" | "flexible";
+   scope: LifeRepeatScope;
+   windowStartMinutes: number;
+   windowEndMinutes: number;
+   seriesStartedAt: number;
+   seriesEndsAt?: number;
+   stopWhenCompleted: boolean;
+   paused: boolean;
+}
 export type LifeTimingPrecision = "exact" | "day" | "window" | "someday" | "none";
 export type LifeItemSource = "user" | "kin" | "calendar" | "migration";
 
@@ -23,6 +41,7 @@ export interface LifeItem {
    context: LifeContext;
    importance: LifeImportance;
    recurrence: LifeRecurrence;
+   repeatRule?: LifeRepeatRule;
    timingPrecision: LifeTimingPrecision;
    dueAt?: number;
    startAt?: number;
@@ -80,6 +99,7 @@ export interface LifeSnapshotItem {
    deferUntil?: number;
    durationMinutes?: number;
    recurrence: LifeRecurrence;
+   repeatRule?: LifeRepeatRule;
    allDay: boolean;
    pinToToday: boolean;
    details?: string;
@@ -100,6 +120,7 @@ export interface KinActionItemInput {
    context?: LifeContext;
    importance?: LifeImportance;
    recurrence?: LifeRecurrence;
+   repeatRule?: LifeRepeatRule;
    timingPrecision?: LifeTimingPrecision;
    dueAt?: number;
    startAt?: number;

@@ -4,7 +4,6 @@ import { Check } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { getProactiveRecommendation, recordRecommendationOutcomeForRhythm, RECOMMENDATION_UPDATED_EVENT, type ProactiveRecommendation } from "@/lib/allevinRecommendations";
-import { getFlexibleChoiceSuggestion, LIFESTYLE_PROFILE_UPDATED_EVENT, type FlexibleChoiceSuggestion } from "@/lib/allevinLifestyleProfile";
 import { requestUpNextCopy } from "@/lib/allevinUpNextCopy";
 import { ALLEVIN_TONE_UPDATED_EVENT, readAllevinTone } from "@/lib/allevinVoice";
 import { formatClock, type DailyRhythmState, type RhythmAnchorId } from "@/lib/dailyRhythm";
@@ -25,17 +24,14 @@ export default function UpNextPanel({
    const next = useMemo(() => buildUpNextItem(lifeState, rhythmState, nowMs), [lifeState, rhythmState, nowMs]);
    const [suggestion, setSuggestion] = useState<ProactiveRecommendation | null>(null);
    const [narratedSuggestion, setNarratedSuggestion] = useState<ProactiveRecommendation | null>(null);
-   const [flexibleSuggestion, setFlexibleSuggestion] = useState<FlexibleChoiceSuggestion | null>(null);
    const [recommendationTick, setRecommendationTick] = useState(0);
 
    useEffect(() => {
       const refresh = () => setRecommendationTick((value) => value + 1);
       window.addEventListener(RECOMMENDATION_UPDATED_EVENT, refresh);
-      window.addEventListener(LIFESTYLE_PROFILE_UPDATED_EVENT, refresh);
       window.addEventListener(ALLEVIN_TONE_UPDATED_EVENT, refresh);
       return () => {
          window.removeEventListener(RECOMMENDATION_UPDATED_EVENT, refresh);
-         window.removeEventListener(LIFESTYLE_PROFILE_UPDATED_EVENT, refresh);
          window.removeEventListener(ALLEVIN_TONE_UPDATED_EVENT, refresh);
       };
    }, []);
@@ -44,11 +40,8 @@ export default function UpNextPanel({
       if (!next) {
          setSuggestion(null);
          setNarratedSuggestion(null);
-         setFlexibleSuggestion(getFlexibleChoiceSuggestion(lifeState, rhythmState, nowMs, readAllevinTone()));
          return;
       }
-
-      setFlexibleSuggestion(null);
       // A long schedule block such as Work already says what is happening.
       // Adding a generic productivity card underneath it made the assistant
       // feel robotic, so stay quiet unless there is a concrete activity where
@@ -140,15 +133,6 @@ export default function UpNextPanel({
                      <p>{narratedSuggestion.detail}</p>
                   </aside>
                ) : null}
-            </div>
-         ) : flexibleSuggestion ? (
-            <div className="up-next-content up-next-content-solo">
-               <div className="up-next-main">
-                  <div className="up-next-time">{flexibleSuggestion.setTitle}</div>
-                  <div className="up-next-title-row">
-                     <h3>{flexibleSuggestion.choice}</h3>
-                  </div>
-               </div>
             </div>
          ) : (
             <div className="up-next-clear">

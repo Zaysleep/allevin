@@ -34,7 +34,7 @@ const DAYS: Array<{ value: RhythmDay; label: string }> = [
    { value: 6, label: "Sat" },
 ];
 
-const STEP_TITLES = ["Welcome", "Your name", "Your week", "Your free time", "A few details", "Review", "Notifications"];
+const STEP_TITLES = ["Welcome", "Your name", "Your week", "Bedtime and voice", "Review", "Notifications"];
 
 const COMMON_ROUTINES: Array<{ title: string; timing: "before" | "after"; durationMinutes: number }> = [
    { title: "Workout", timing: "before", durationMinutes: 45 },
@@ -142,7 +142,7 @@ export default function OnboardingFlow({
    onEnableReminders: () => Promise<NotificationPermission | "unsupported">;
    remindersEnabled: boolean;
 }) {
-   const [step, setStep] = useState(mode === "install" ? 6 : 0);
+   const [step, setStep] = useState(mode === "install" ? 5 : 0);
    const [draft, setDraft] = useState<OnboardingDraft>(() => onboardingDraftFromCurrentState());
    const [error, setError] = useState("");
    const [committed, setCommitted] = useState(false);
@@ -259,7 +259,7 @@ export default function OnboardingFlow({
          applyOnboardingDraft(draft);
          setCommitted(true);
          setError("");
-         setStep(6);
+         setStep(5);
       } catch (problem) {
          setError(problem instanceof Error ? problem.message : "Something in setup needs another look.");
       }
@@ -434,23 +434,10 @@ export default function OnboardingFlow({
 
                {step === 3 ? (
                   <section className="onboarding-step">
-                     <span className="onboarding-kicker">Free time should still feel free</span>
-                     <h2>What do you actually like doing when you have time to yourself?</h2>
-                     <p>ALLEVIN can use these when you ask what to do with an open evening or a spare block. Nothing here gets scheduled automatically.</p>
-                     <label className="onboarding-field onboarding-field-large"><span>Things you enjoy</span><textarea value={draft.hobbies} onChange={(event) => setDraft({ ...draft, hobbies: event.target.value })} placeholder="Reading, gaming, hiking, drawing, coding, movies, seeing friends…" rows={5} /></label>
-                     <div className="onboarding-actions"><button className="onboarding-back" onClick={() => setStep(2)}><ChevronLeft size={16} /> Back</button><button className="onboarding-primary" onClick={() => setStep(4)}>Continue <ChevronRight size={16} /></button></div>
-                  </section>
-               ) : null}
-
-               {step === 4 ? (
-                  <section className="onboarding-step">
-                     <span className="onboarding-kicker">A few useful details</span>
-                     <h2>Help ALLEVIN plan the edges of the day.</h2>
-                     <p>These are optional. You can change them anytime in Settings.</p>
-                     <div className="onboarding-grid-two onboarding-details-grid">
-                        <label className="onboarding-field"><span>Usual bedtime</span><input type="time" value={draft.bedtime} onChange={(event) => setDraft({ ...draft, bedtime: event.target.value })} /></label>
-                        <label className="onboarding-field"><span>Typical travel time (like getting to work)</span><div className="onboarding-number-unit"><input type="number" inputMode="numeric" min={1} max={240} value={draft.travelMinutes} onChange={(event) => setDraft({ ...draft, travelMinutes: event.target.value })} placeholder="20" /><span>min</span></div></label>
-                     </div>
+                     <span className="onboarding-kicker">Finish the day your way</span>
+                     <h2>Add bedtime and choose ALLEVIN’s voice.</h2>
+                     <p>Bedtime gives recurring care reminders a natural stopping point. You can change it anytime under Schedule.</p>
+                     <label className="onboarding-field onboarding-field-large"><span>Usual bedtime</span><input type="time" value={draft.bedtime} onChange={(event) => setDraft({ ...draft, bedtime: event.target.value })} /></label>
                      <div className="onboarding-voice-section">
                         <strong>How should ALLEVIN talk to you?</strong>
                         <div className="onboarding-tone-grid">
@@ -464,11 +451,11 @@ export default function OnboardingFlow({
                         </div>
                      </div>
                      <p className="onboarding-timezone">Using your device time zone: <strong>{timezone}</strong></p>
-                     <div className="onboarding-actions"><button className="onboarding-back" onClick={() => setStep(3)}><ChevronLeft size={16} /> Back</button><button className="onboarding-primary" onClick={() => setStep(5)}>Review <ChevronRight size={16} /></button></div>
+                     <div className="onboarding-actions"><button className="onboarding-back" onClick={() => setStep(2)}><ChevronLeft size={16} /> Back</button><button className="onboarding-primary" onClick={() => setStep(4)}>Review <ChevronRight size={16} /></button></div>
                   </section>
                ) : null}
 
-               {step === 5 ? (
+               {step === 4 ? (
                   <section className="onboarding-step">
                      <span className="onboarding-kicker">One last look</span>
                      <h2>Here’s what I understood.</h2>
@@ -489,18 +476,16 @@ export default function OnboardingFlow({
                               </div>
                            ) : <strong>None added</strong>}
                         </div>
-                        <div><span>Free time</span><strong>{draft.hobbies.trim() || "Not added"}</strong></div>
                         <div><span>Bedtime</span><strong>{draft.bedtime || "Not added"}</strong></div>
-                        <div><span>Travel time</span><strong>{draft.travelMinutes ? `${draft.travelMinutes} min` : "Not added"}</strong></div>
                         <div><span>Voice</span><strong>{toneLabel(draft.tone)}</strong></div>
                         <div><span>Time zone</span><strong>{timezone}</strong></div>
                      </div>
                      {error ? <p className="onboarding-error">{error}</p> : null}
-                     <div className="onboarding-actions"><button className="onboarding-back" onClick={() => setStep(4)}><ChevronLeft size={16} /> Change something</button><button className="onboarding-primary" onClick={commitSetup}>Looks good <ChevronRight size={16} /></button></div>
+                     <div className="onboarding-actions"><button className="onboarding-back" onClick={() => setStep(3)}><ChevronLeft size={16} /> Change something</button><button className="onboarding-primary" onClick={commitSetup}>Looks good <ChevronRight size={16} /></button></div>
                   </section>
                ) : null}
 
-               {step === 6 ? (
+               {step === 5 ? (
                   <section className="onboarding-step onboarding-install-step">
                      <span className="onboarding-kicker">Add ALLEVIN to your phone</span>
                      <h2>{standalone ? "There we go. ALLEVIN is on your phone." : "Add ALLEVIN to your phone."}</h2>
