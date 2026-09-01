@@ -50,14 +50,16 @@ function groundedReplyIsSafe(
    recentConversation: KinMessage[],
    candidateTitle = "",
    originalPrompt = "",
+   responseMode: "state-ack" | "grounded" | "clarify" | "mutation-ack" = "state-ack",
+   allowRepeatedWording = false,
 ) {
    const normalizedReply = reply.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
    if (!normalizedReply) return false;
    if (/\b(?:this is a good time to begin|get into it|keep the next step simple|you have space for this now|you've got the space for this now|use this window well|keep the transition clean|reminder (?:is )?set|scheduled reminder|stay on track|create a time buffer)\b/i.test(normalizedReply)) return false;
-   if (recentConversation.some((message) => message.role === "assistant" && message.content.toLowerCase().replace(/\s+/g, " ").trim() === normalizedReply)) return false;
+   if (!allowRepeatedWording && recentConversation.some((message) => message.role === "assistant" && message.content.toLowerCase().replace(/\s+/g, " ").trim() === normalizedReply)) return false;
 
    const normalizedReceipt = receipt.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
-   if (normalizedReply === normalizedReceipt) return false;
+   if (!allowRepeatedWording && normalizedReply === normalizedReceipt) return false;
 
    const normalizedTitle = candidateTitle.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
    const comparableReply = normalizedReply.replace(/[^a-z0-9]+/g, " ").trim();
@@ -71,6 +73,8 @@ function groundedReplyIsSafe(
    // instead of repeating the literal AM suffix. This keeps truth intact while
    // no longer rejecting the human wording MK XV is trying to produce.
    const clocks = receipt.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)\b/gi) || [];
+   const promptClocks = originalPrompt.match(/\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b/gi) || [];
+   const replyClocks = reply.match(/\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b/gi) || [];
    const relativeMatch = originalPrompt.match(/\b(?:in|after)\s+(\d+)\s+(minutes?|hours?|days?|weeks?)\b/i);
    const relativeTiming = relativeMatch?.[0].toLowerCase().replace(/\s+/g, " ");
    const relativeWord = relativeMatch ? smallNumberWord(Number(relativeMatch[1])) : "";
@@ -85,13 +89,21 @@ function groundedReplyIsSafe(
          ))
       ),
    );
-   for (const clock of clocks) {
-      // A relative reminder can truthfully be confirmed either in the user's
-      // own relative language (“in 4 minutes”) or with the resolved clock. The
-      // old rule required the clock only, which rejected otherwise excellent
-      // contextual acknowledgements.
-      if (clocks.length === 1 && keepsRelativeTiming) continue;
-      if (!replyPreservesClockFact(normalizedReply, clock)) return false;
+   // Never let the model introduce a clock that is absent from the verified
+   // result or the user's own request. The former implementation checked the
+   // opposite direction and required every clock from a broad reminder-list
+   // receipt to be repeated. That discarded useful, truthful answers when the
+   // model summarized a list or focused on the reminder the user had edited.
+   const authoritativeClocks = [...clocks, ...promptClocks];
+   for (const clock of replyClocks) {
+      if (!authoritativeClocks.some((fact) => replyPreservesClockFact(clock, fact))) return false;
+   }
+
+   // A mutation acknowledgement should still repeat its verified timing when
+   // timing is the substance of the change. Read-only answers and clarification
+   // questions may summarize or focus without restating every clock in state.
+   if ((responseMode === "state-ack" || responseMode === "mutation-ack") && clocks.length && !keepsRelativeTiming) {
+      if (!clocks.some((clock) => replyPreservesClockFact(normalizedReply, clock))) return false;
    }
    return true;
 }
@@ -146,7 +158,7 @@ async function phraseStateAcknowledgement(
    // A second targeted attempt is cheaper and more useful than immediately
    // exposing a machine receipt when the first response is repetitive. The
    // retry still receives only verified state and can never mutate anything.
-   for (let attempt = 0; attempt < 2; attempt += 1) {
+   for (let attempt = 0; attempt < 3; attempt += 1) {
       const response = await requestKinLLM({
          mode: "kin-life",
          responseMode,
@@ -185,7 +197,15 @@ async function phraseStateAcknowledgement(
          .replace(/^(?:got it|understood|noted|okay|all right|alright)[.!,:;—-]*\s*/i, "")
          .trim();
       const questionShapeIsSafe = responseMode === "clarify" ? replyIsQuestion(natural) : !replyIsQuestion(natural);
-      if (natural && questionShapeIsSafe && groundedReplyIsSafe(natural, stateReceipt, recentConversation, "", prompt)) return natural;
+      if (natural && questionShapeIsSafe && groundedReplyIsSafe(
+         natural,
+         stateReceipt,
+         recentConversation,
+         "",
+         prompt,
+         responseMode,
+         attempt === 2,
+      )) return natural;
       rejectedReply = natural || response.reply;
    }
    if (responseMode === "state-ack" && rejectedReply) recordLanguageValidationFailure(responseMode, "generated-copy-rejected");
@@ -209,7 +229,7 @@ async function prepareMutationLanguage(
    let refinedTitle = candidateTitle;
    let providerUnavailable = false;
 
-   for (let attempt = 0; attempt < 2; attempt += 1) {
+   for (let attempt = 0; attempt < 3; attempt += 1) {
       const response = await requestKinLLM({
          mode: "kin-life",
          responseMode: "mutation-ack",
@@ -232,7 +252,15 @@ async function prepareMutationLanguage(
          providerUnavailable = providerUnavailable || response.usedFallback;
          continue;
       }
-      if (!replyIsQuestion(response.reply) && groundedReplyIsSafe(response.reply, stateReceipt, recentConversation, candidateTitle, prompt)) {
+      if (!replyIsQuestion(response.reply) && groundedReplyIsSafe(
+         response.reply,
+         stateReceipt,
+         recentConversation,
+         candidateTitle,
+         prompt,
+         "mutation-ack",
+         attempt === 2,
+      )) {
          return { reply: response.reply, title: refinedTitle };
       }
       rejectedReply = response.reply;
@@ -282,7 +310,7 @@ export default function KinDock() {
          setLanguageStatus("");
          appendKinMessage("assistant", content);
       } else {
-         setLanguageStatus("I saved any confirmed change, but I couldn’t finish the reply. Try that message once more.");
+         setLanguageStatus("That reply didn’t make it through. You don’t need to repeat yourself—your saved reminders are still available in Coming Up.");
       }
    }
 

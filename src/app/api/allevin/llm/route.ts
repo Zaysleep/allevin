@@ -655,6 +655,7 @@ GROUNDED RESPONSE RULES
 - Phrase it naturally in ALLEVIN’s selected voice; never expose internal state terminology.
 - Do not add a second change, invent a consequence, or turn temporary context into a permanent preference.
 - Keep it to one or two compact sentences unless clarification is genuinely needed.
+- When a date, clock time, or repeat cadence distinguishes the verified result, preserve it explicitly in the reply. Do not make the user ask what time was saved.
 ${request.responseMode === "clarify" ? "- The request is incomplete. Ask only for the missing detail. Do not imply that anything was saved." : ""}
 ${request.responseMode === "grounded" ? "- Answer from the supplied factual receipt. Do not turn a simple answer into a confirmation or advice unless the facts support it." : ""}
 ${request.responseMode === "mutation-ack" ? `- The deterministic action will be applied only after client validation. Phrase the reply as the successful result.\n- Do not turn the reply into CANDIDATE TITLE plus a date/time receipt. Respond to why the request helps in this moment, then confirm the verified time naturally.\n- Improve CANDIDATE TITLE into a concise calendar title that preserves the same action and subject. Remove command/timing scaffolding, preserve proper names and brands, and do not add facts.\nCANDIDATE TITLE\n${request.candidateTitle || ""}` : ""}
@@ -737,27 +738,24 @@ export async function POST(request: Request) {
       let lastReason = "AI provider returned no content.";
 
       for (const requestModel of models) {
-         let provider = await requestProvider(requestModel);
-         if (!provider.ok && providerFailureIsRetryable(provider.status)) {
-            await provider.text();
-            provider = await requestProvider(requestModel);
-         }
+         for (let attempt = 0; attempt < 2; attempt += 1) {
+            const provider = await requestProvider(requestModel);
+            if (!provider.ok) {
+               lastReason = providerFailureReason(provider.status);
+               await provider.text();
+               if (!providerFailureIsRetryable(provider.status)) break;
+               continue;
+            }
 
-         if (!provider.ok) {
-            lastReason = providerFailureReason(provider.status);
-            await provider.text();
-            // Authentication and rate failures affect the whole account; a
-            // second model cannot repair them. Model/format failures can.
-            if (provider.status === 401 || provider.status === 403 || provider.status === 429 || provider.status >= 500) break;
-            continue;
+            const data = await provider.json();
+            const candidate = data?.choices?.[0]?.message?.content;
+            if (typeof candidate === "string" && candidate.trim()) {
+               content = candidate;
+               break;
+            }
+            lastReason = "provider-empty-content";
          }
-
-         const data = await provider.json();
-         const candidate = data?.choices?.[0]?.message?.content;
-         if (typeof candidate === "string" && candidate.trim()) {
-            content = candidate;
-            break;
-         }
+         if (content) break;
       }
 
       if (!content) return noStoreJson({ ok: true, reply: "", actions: [], usedFallback: true, error: lastReason } satisfies KinLLMResponse);

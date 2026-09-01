@@ -1,12 +1,13 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Settings2 } from "lucide-react";
+import { BellPlus, ChevronDown, ChevronRight, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import CalendarWorkspace from "@/components/CalendarWorkspace";
 import AppUpdateNotice from "@/components/AppUpdateNotice";
 import KinDock from "@/components/KinDock";
 import LifeItemRow from "@/components/LifeItemRow";
+import ManualReminderForm from "@/components/ManualReminderForm";
 import RecurringReminderRow from "@/components/RecurringReminderRow";
 import LiveClock from "@/components/LiveClock";
 import OnboardingFlow from "@/components/OnboardingFlow";
@@ -38,13 +39,14 @@ function FooterInfoPanel({ section, onClose }: { section: Exclude<FooterInfo, nu
 }
 
 export default function LifeDashboard() {
-   const { state, hydrated, complete, reopen, archive, tomorrow, today, update } = useLifeState();
+   const { state, hydrated, create, complete, reopen, archive, tomorrow, today, update } = useLifeState();
    const rhythm = useDailyRhythm();
    const [settingsOpen, setSettingsOpen] = useState(false);
    const [name, setName] = useState("");
    const [tone, setTone] = useState<AllevinTone>("direct");
    const [footerInfo, setFooterInfo] = useState<FooterInfo>(null);
    const [comingUpOpen, setComingUpOpen] = useState(false);
+   const [manualReminderOpen, setManualReminderOpen] = useState(false);
    const [nowMs, setNowMs] = useState(() => Date.now());
    const [onboardingMode, setOnboardingMode] = useState<OnboardingMode | null>(null);
    const [firstRunOnboarding, setFirstRunOnboarding] = useState(false);
@@ -202,19 +204,25 @@ export default function LifeDashboard() {
 
             <CalendarWorkspace lifeState={state} rhythmState={rhythm.state} nowMs={nowMs} />
 
-            {comingUpItems.length ? (
-               <section className="day-block day-block-ahead">
+            <section className="day-block day-block-ahead">
                   <header className="day-block-header ahead-header">
                      <h2>Coming Up</h2>
-                     {comingUpCollapsible ? (
-                        <button className="ahead-toggle" onClick={() => setComingUpOpen((value) => !value)} aria-expanded={comingUpOpen}>
-                           <b>{comingUpItems.length}</b>
-                           {comingUpOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                     <div className="ahead-header-actions">
+                        <button className="ahead-add" type="button" onClick={() => { setManualReminderOpen(true); setComingUpOpen(true); }} aria-expanded={manualReminderOpen}>
+                           <BellPlus size={16} /> Add reminder
                         </button>
-                     ) : null}
+                        {comingUpCollapsible ? (
+                           <button className="ahead-toggle" onClick={() => setComingUpOpen((value) => !value)} aria-expanded={comingUpOpen}>
+                              <b>{comingUpItems.length}</b>
+                              {comingUpOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                           </button>
+                        ) : null}
+                     </div>
                   </header>
 
-                  {showComingUpItems ? (
+                  {manualReminderOpen ? <ManualReminderForm onCreate={create} onClose={() => setManualReminderOpen(false)} /> : null}
+
+                  {showComingUpItems && comingUpItems.length ? (
                      <div className="ahead-groups">
                         {recurringComingUpItems.length ? (
                            <section className="ahead-group" aria-labelledby="repeating-reminders-heading">
@@ -250,9 +258,8 @@ export default function LifeDashboard() {
                            </section>
                         ) : null}
                      </div>
-                  ) : null}
+                  ) : !manualReminderOpen ? <p className="ahead-empty">No reminders waiting ahead. Add one here or tell ALLEVIN in chat.</p> : null}
                </section>
-            ) : null}
          </section>
 
          {footerInfo ? <FooterInfoPanel section={footerInfo} onClose={() => setFooterInfo(null)} /> : null}

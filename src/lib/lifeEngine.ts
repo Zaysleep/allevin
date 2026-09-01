@@ -655,7 +655,22 @@ function findReferencedItem(state: LifeState, query: string) {
          .filter((item) => item.recurrence !== "none")
          .sort((left, right) => right.updatedAt - left.updatedAt)[0];
    }
-   return candidates.find((item) => lower.includes(normalizePrompt(item.title))) || candidates.find((item) => normalizePrompt(item.title).split(" ").filter((word) => word.length > 3).some((word) => lower.includes(word)));
+   const exact = candidates.find((item) => lower.includes(normalizePrompt(item.title)));
+   if (exact) return exact;
+
+   // Natural references often use a singular noun for a plural title ("the
+   // stock reminder" -> "Buy stocks"). Compare meaningful word stems instead
+   // of forcing the user to repeat the exact stored title.
+   const ignored = new Set(["that", "this", "the", "remind", "reminder", "reminders", "please"]);
+   const stems = (value: string) => normalizePrompt(value)
+      .split(" ")
+      .map((word) => word.length > 4 && word.endsWith("s") ? word.slice(0, -1) : word)
+      .filter((word) => word.length > 2 && !ignored.has(word));
+   const queryWords = new Set(stems(lower));
+   return candidates
+      .map((item) => ({ item, score: stems(item.title).filter((word) => queryWords.has(word)).length }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score || right.item.updatedAt - left.item.updatedAt)[0]?.item;
 }
 
 export function buildDeterministicLifeReadback(prompt: string, state: LifeState): string | null {
@@ -921,9 +936,23 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
       const target = findReferencedItem(state, moveDateCue[1]);
       const date = parseLifeDateTime(moveDateCue[2]);
       if (target && date.timestamp) {
+         const targetClockMinutes = new Date(date.timestamp).getHours() * 60 + new Date(date.timestamp).getMinutes();
+         const repeatRule = target.recurrence !== "none" && target.repeatRule
+            ? {
+                 ...target.repeatRule,
+                 timeMinutes: target.recurrence === "interval" ? target.repeatRule.timeMinutes : targetClockMinutes,
+                 userEdited: true,
+              }
+            : target.repeatRule;
+         const recurringPreview = repeatRule
+            ? { ...target, repeatRule, dueAt: date.timestamp, startAt: target.kind === "commitment" ? date.timestamp : target.startAt }
+            : target;
+         const dueAt = target.recurrence !== "none"
+            ? nextLifeOccurrence(recurringPreview, Date.now() + 1) || date.timestamp
+            : date.timestamp;
          return {
             reply: `Okay — ${target.title} moves to ${formatLifeDate(date.timestamp)}${date.allDay ? "" : ` at ${formatLifeTime(date.timestamp)}`}.`,
-            actions: [{ type: "update_item", targetId: target.id, changes: { dueAt: date.timestamp, startAt: target.kind === "commitment" ? date.timestamp : target.startAt, allDay: date.allDay, timingPrecision: date.precision, pinToToday: isSameDay(date.timestamp, Date.now()), state: "active" } }],
+            actions: [{ type: "update_item", targetId: target.id, changes: { dueAt, startAt: target.kind === "commitment" ? dueAt : target.startAt, repeatRule, allDay: date.allDay, timingPrecision: date.precision, pinToToday: isSameDay(dueAt, Date.now()), state: "active" } }],
          };
       }
    }
