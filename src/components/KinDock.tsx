@@ -96,6 +96,11 @@ function groundedReplyIsSafe(
    return true;
 }
 
+function replyIsQuestion(value: string) {
+   const normalized = value.trim();
+   return /\?\s*$/.test(normalized) || /^(?:should|would|do|does|did|is|are|am|can|could|will|what|when|where|which|who|how)\b/i.test(normalized);
+}
+
 /**
  * Date-scoped judgment should be grounded in ALLEVIN's authoritative state,
  * not in prose from earlier turns. A previous message may describe Thursday
@@ -152,10 +157,13 @@ async function phraseStateAcknowledgement(
          stateReceipt: narrationFacts.length
             ? [
                  "The requested state change was applied successfully.",
+                 "Do not ask for confirmation. The action is already complete.",
                  "Use these facts as factual anchors, not as copy:",
                  ...narrationFacts.map((fact) => `- ${fact}`),
               ].join("\n")
-            : stateReceipt,
+            : responseMode === "clarify"
+               ? `Ask the user this one unresolved question. Do not answer it for them:\n${stateReceipt}`
+               : `The verified result below is already final. Do not ask for confirmation or another follow-up question:\n${stateReceipt}`,
          input: prompt,
          nowIso: new Date().toISOString(),
          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
@@ -176,7 +184,8 @@ async function phraseStateAcknowledgement(
       const natural = response.reply
          .replace(/^(?:got it|understood|noted|okay|all right|alright)[.!,:;—-]*\s*/i, "")
          .trim();
-      if (natural && groundedReplyIsSafe(natural, stateReceipt, recentConversation, "", prompt)) return natural;
+      const questionShapeIsSafe = responseMode === "clarify" ? replyIsQuestion(natural) : !replyIsQuestion(natural);
+      if (natural && questionShapeIsSafe && groundedReplyIsSafe(natural, stateReceipt, recentConversation, "", prompt)) return natural;
       rejectedReply = natural || response.reply;
    }
    if (responseMode === "state-ack" && rejectedReply) recordLanguageValidationFailure(responseMode, "generated-copy-rejected");
@@ -223,7 +232,7 @@ async function prepareMutationLanguage(
          providerUnavailable = providerUnavailable || response.usedFallback;
          continue;
       }
-      if (groundedReplyIsSafe(response.reply, stateReceipt, recentConversation, candidateTitle, prompt)) {
+      if (!replyIsQuestion(response.reply) && groundedReplyIsSafe(response.reply, stateReceipt, recentConversation, candidateTitle, prompt)) {
          return { reply: response.reply, title: refinedTitle };
       }
       rejectedReply = response.reply;
@@ -244,6 +253,7 @@ export default function KinDock() {
    const [languageStatus, setLanguageStatus] = useState("");
    const inputRef = useRef<HTMLInputElement>(null);
    const scrollRef = useRef<HTMLDivElement>(null);
+   const sendLockRef = useRef(false);
 
    useEffect(() => {
       const initialRefresh = window.setTimeout(() => setMessages(readKinConversation()), 0);
@@ -272,13 +282,14 @@ export default function KinDock() {
          setLanguageStatus("");
          appendKinMessage("assistant", content);
       } else {
-         setLanguageStatus("Response unavailable. Any confirmed change is still saved.");
+         setLanguageStatus("I saved any confirmed change, but I couldn’t finish the reply. Try that message once more.");
       }
    }
 
    async function send(text: string) {
       const submittedPrompt = text.trim();
-      if (!submittedPrompt || busy) return;
+      if (!submittedPrompt || busy || sendLockRef.current) return;
+      sendLockRef.current = true;
       setOpen(true);
       setInput("");
       setBusy(true);
@@ -612,9 +623,11 @@ ${buildMemoryContext(effectiveRhythm, tone)}`,
             }
 
             if (local.actions.length) captureAssistantUndo(prompt);
-            applyKinActions(local.actions);
+            const applied = applyKinActions(local.actions);
             reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
-            deliver("");
+            const factualReply = local.reply || (applied.applied.length ? applied.applied.join(". ") : "I couldn’t confidently apply that request.");
+            const reply = await phraseStateAcknowledgement(prompt, factualReply, [], conversationBefore, local.incomplete ? "clarify" : "grounded");
+            deliver(reply);
          }
       } catch {
          const currentState = readLifeState();
@@ -628,10 +641,13 @@ ${buildMemoryContext(effectiveRhythm, tone)}`,
             return;
          }
          if (local.actions.length) captureAssistantUndo(prompt);
-         applyKinActions(local.actions);
+         const applied = applyKinActions(local.actions);
          reconcileLifeEventsWithRhythm(readLifeState(), readDailyRhythm());
-         deliver("");
+         const factualReply = local.reply || (applied.applied.length ? applied.applied.join(". ") : "I couldn’t confidently apply that request.");
+         const reply = await phraseStateAcknowledgement(prompt, factualReply, [], conversationBefore, local.incomplete ? "clarify" : "grounded");
+         deliver(reply);
       } finally {
+         sendLockRef.current = false;
          setBusy(false);
       }
    }

@@ -22,7 +22,6 @@ type ConnectionState = "checking" | "ready" | "update" | "configuration" | "prov
  */
 export default function LanguageConnectionStatus() {
    const [state, setState] = useState<ConnectionState>("checking");
-   const [serverBuild, setServerBuild] = useState("");
 
    async function check() {
       setState("checking");
@@ -37,7 +36,6 @@ export default function LanguageConnectionStatus() {
             return;
          }
          const status = await response.json() as LanguageStatus;
-         setServerBuild(status.build || "");
          if (status.protocol !== ALLEVIN_BUILD.languageProtocol || status.build !== ALLEVIN_BUILD.version) {
             setState("update");
          } else if (!status.configured) {
@@ -78,7 +76,7 @@ export default function LanguageConnectionStatus() {
          <div>
             <strong>Personal language</strong>
             <span>{message}</span>
-            <small>App {ALLEVIN_BUILD.version}{serverBuild && serverBuild !== ALLEVIN_BUILD.version ? ` · Server ${serverBuild}` : ""}</small>
+            <small>{ALLEVIN_BUILD.mark}</small>
          </div>
          {state !== "ready" && state !== "checking" ? (
             <button type="button" onClick={state === "update" ? () => window.location.reload() : () => void check()}>

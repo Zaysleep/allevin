@@ -5,7 +5,7 @@
  * can wake the installed PWA later without changing the client UI contract.
  */
 
-const SW_VERSION = "mkxix-recurring-care-2";
+const SW_VERSION = "mkxx-reminder-intelligence-2";
 
 self.addEventListener("install", () => {
   // Promote a newly deployed worker immediately. ALLEVIN stores user state in

@@ -9,6 +9,7 @@ import type { KinAction, LifeContext, LifeItem, LifeRecurrence, LifeRepeatRule, 
 import { analyzeIncompleteConversationRequest, canonicalTaskTitleFromPrompt, promptDescribesCommitment, taskReasonFromPrompt } from "@/lib/allevinConversationIntelligence";
 import { parseRelativeCalendarDate, parseRelativeClockMoment } from "@/lib/lifeTimingCore";
 import { minutesFromClock, readDailyRhythm } from "@/lib/dailyRhythm";
+import { nextLifeOccurrence } from "@/lib/lifeStore";
 
 export interface AttentionItem {
    item: LifeItem;
@@ -319,7 +320,7 @@ export function parseLifeDateTime(value: string, nowTimestamp = Date.now()) {
 function parseRecurrence(value: string): LifeRecurrence {
    const lower = normalizePrompt(value);
    if (/\b(?:every|each)\s+(?:(?:\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?(?:minutes?|hours?)\b|\bhourly\b/.test(lower)) return "interval";
-   if (/\b(?:every|each)\s+day\b|\bdaily\b/.test(lower)) return "daily";
+   if (/\b(?:every\s*day|ever\s+day|each\s+day|daily)\b/.test(lower)) return "daily";
    if (/\b(?:every|each)\s+weekday\b|\bweekdays\b/.test(lower)) return "weekdays";
    if (/\b(?:every|each)\s+(?:week|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b|\bweekly\b/.test(lower)) return "weekly";
    if (/\b(?:every|each)\s+month\b|\bmonthly\b/.test(lower)) return "monthly";
@@ -350,23 +351,112 @@ function intervalMinutesFromPrompt(value: string) {
    return amount * (/hour/i.test(match[2]) ? 60 : 1);
 }
 
+const WEEKDAY_INDEX: Record<string, number> = {
+   sunday: 0,
+   monday: 1,
+   tuesday: 2,
+   wednesday: 3,
+   thursday: 4,
+   friday: 5,
+   saturday: 6,
+};
+
+const ORDINAL_VALUE: Record<string, 1 | 2 | 3 | 4 | 5 | -1> = {
+   first: 1,
+   second: 2,
+   third: 3,
+   fourth: 4,
+   fifth: 5,
+   last: -1,
+};
+
+function explicitClockMinutesFromPrompt(value: string) {
+   const match = value.match(/\b(?:at|around|by)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i) ||
+      value.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*[.!?]*$/i);
+   return match ? clockMinutesFromText(match[1]) : undefined;
+}
+
+function weeklyDaysFromPrompt(value: string) {
+   const lower = normalizePrompt(value);
+   return Object.entries(WEEKDAY_INDEX)
+      .filter(([name]) => new RegExp(`\\b${name}\\b`).test(lower))
+      .map(([, day]) => day);
+}
+
+function monthlyPatternFromPrompt(value: string) {
+   const lower = normalizePrompt(value);
+   const ordinalWeekday = lower.match(/\b(first|second|third|fourth|fifth|last)\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(?:of\s+)?(?:every|each)\s+month\b/);
+   if (ordinalWeekday) {
+      return {
+         monthlyOrdinal: ORDINAL_VALUE[ordinalWeekday[1]],
+         monthlyWeekday: WEEKDAY_INDEX[ordinalWeekday[2]],
+      };
+   }
+   if (/\blast\s+day\s+of\s+(?:every|each)\s+month\b/.test(lower)) {
+      return { monthlyDay: 31, shorterMonthPolicy: "last-day" as const };
+   }
+   const numbered = lower.match(/\b(?:on\s+)?(?:the\s+)?(first|second|third|fourth|fifth|\d{1,2}(?:st|nd|rd|th)?)\s+(?:day\s+)?of\s+(?:every|each)\s+month\b/) ||
+      lower.match(/\b(?:every|each)\s+month\s+(?:on\s+)?(?:the\s+)?(first|second|third|fourth|fifth|\d{1,2}(?:st|nd|rd|th)?)\b/);
+   if (!numbered) return {};
+   const named = ORDINAL_VALUE[numbered[1]];
+   const monthlyDay = named && named > 0 ? named : Number(numbered[1].replace(/(?:st|nd|rd|th)$/i, ""));
+   return Number.isInteger(monthlyDay) && monthlyDay >= 1 && monthlyDay <= 31
+      ? {
+           monthlyDay,
+           shorterMonthPolicy: /\b(?:use\s+)?(?:the\s+)?last\s+day\b/.test(lower)
+              ? "last-day" as const
+              : /\bskip\s+(?:shorter\s+)?months?\b/.test(lower) ? "skip" as const : undefined,
+        }
+      : {};
+}
+
 export interface RecurringReminderAnalysis {
    recurring: boolean;
    incomplete: boolean;
    clarification?: string;
    intervalMinutes?: number;
+   recurrence?: LifeRecurrence;
 }
 
 /** Completeness is deterministic; the LLM only phrases the resulting question. */
 export function analyzeRecurringReminderRequest(value: string, bedtime?: string): RecurringReminderAnalysis {
+   const recurrence = parseRecurrence(value);
    const intervalMinutes = intervalMinutesFromPrompt(value);
-   if (!intervalMinutes || !/\b(?:remind|reminder)\b/i.test(value)) return { recurring: false, incomplete: false };
-   const hasScope = /\b(?:today|tonight|every day|daily|each day|weekdays?|weekly)\b/i.test(value);
+   if (recurrence === "none" || !/\b(?:remind|reminder)\b/i.test(value)) return { recurring: false, incomplete: false };
+   if (recurrence !== "interval") {
+      const timeMinutes = explicitClockMinutesFromPrompt(value);
+      if (timeMinutes === undefined) {
+         return {
+            recurring: true,
+            incomplete: true,
+            recurrence,
+            clarification: recurrence === "monthly" ? "What time should I use each month?" : "What time should this repeat?",
+         };
+      }
+      if (recurrence === "monthly") {
+         const monthly = monthlyPatternFromPrompt(value);
+         if (!monthly.monthlyDay && monthly.monthlyOrdinal === undefined) {
+            return { recurring: true, incomplete: true, recurrence, clarification: "Which day of the month should this happen?" };
+         }
+         if ((monthly.monthlyDay || 0) >= 29 && !monthly.shorterMonthPolicy) {
+            return {
+               recurring: true,
+               incomplete: true,
+               recurrence,
+               clarification: "In shorter months, should I use the final day or skip that month?",
+            };
+         }
+      }
+      return { recurring: true, incomplete: false, recurrence };
+   }
+   if (!intervalMinutes) return { recurring: false, incomplete: false };
+   const hasScope = /\b(?:today|tonight|every\s*day|ever\s+day|daily|each\s+day|weekdays?|weekly)\b/i.test(value);
    if (!hasScope) {
       return {
          recurring: true,
          incomplete: true,
          intervalMinutes,
+         recurrence,
          clarification: "Should this repeat today until bedtime, or every day?",
       };
    }
@@ -378,6 +468,7 @@ export function analyzeRecurringReminderRequest(value: string, bedtime?: string)
          recurring: true,
          incomplete: true,
          intervalMinutes,
+         recurrence,
          clarification: "What time should these reminders stop?",
       };
    }
@@ -386,10 +477,11 @@ export function analyzeRecurringReminderRequest(value: string, bedtime?: string)
          recurring: true,
          incomplete: true,
          intervalMinutes,
+         recurrence,
          clarification: `That would be a lot of reminders—one every ${intervalMinutes} minutes. Do you want me to set all of them?`,
       };
    }
-   return { recurring: true, incomplete: false, intervalMinutes };
+   return { recurring: true, incomplete: false, intervalMinutes, recurrence };
 }
 
 function recurringReminderRule(value: string, now = Date.now()): { rule: LifeRepeatRule; firstAt: number } | null {
@@ -401,7 +493,7 @@ function recurringReminderRule(value: string, now = Date.now()): { rule: LifeRep
    const explicitStart = value.match(/\b(?:starting|beginning|from)\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
    const explicitEnd = value.match(/\buntil\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i) ||
       value.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*$/i);
-   const scope = /\b(?:every day|daily|each day)\b/i.test(value) ? "every-day" as const : "today" as const;
+   const scope = /\b(?:every\s*day|ever\s+day|daily|each\s+day)\b/i.test(value) ? "every-day" as const : "today" as const;
    const startMinutes = explicitStart ? clockMinutesFromText(explicitStart[1]) : undefined;
    const bedtime = /\buntil\s+bedtime\b/i.test(value) || !explicitEnd ? rhythm.bedtime : undefined;
    const endMinutes = explicitEnd ? clockMinutesFromText(explicitEnd[1]) : bedtime ? minutesFromClock(bedtime) : undefined;
@@ -422,6 +514,7 @@ function recurringReminderRule(value: string, now = Date.now()): { rule: LifeRep
 
    const windowStartMinutes = typeof startMinutes === "number" ? startMinutes : currentMinute;
    const rule: LifeRepeatRule = {
+      frequency: "interval",
       intervalMinutes,
       cadence: /\b(?:about|roughly|around|approximately|flexible)\b/i.test(value) ? "flexible" : "exact",
       scope,
@@ -435,6 +528,97 @@ function recurringReminderRule(value: string, now = Date.now()): { rule: LifeRep
       paused: false,
    };
    return { rule, firstAt: first.getTime() };
+}
+
+function structuredRecurringReminder(value: string, now = Date.now()): { recurrence: LifeRecurrence; rule: LifeRepeatRule; firstAt: number } | null {
+   const recurrence = parseRecurrence(value);
+   if (recurrence === "none" || recurrence === "interval") return null;
+   const timeMinutes = explicitClockMinutesFromPrompt(value);
+   if (timeMinutes === undefined) return null;
+   const monthly = recurrence === "monthly" ? monthlyPatternFromPrompt(value) : {};
+   const daysOfWeek = recurrence === "weekly" ? weeklyDaysFromPrompt(value) : undefined;
+   const rule: LifeRepeatRule = {
+      frequency: recurrence,
+      cadence: "exact",
+      scope: "every-day",
+      timeMinutes,
+      daysOfWeek: daysOfWeek?.length ? daysOfWeek : undefined,
+      monthlyDay: monthly.monthlyDay,
+      monthlyOrdinal: monthly.monthlyOrdinal,
+      monthlyWeekday: monthly.monthlyWeekday,
+      shorterMonthPolicy: monthly.shorterMonthPolicy,
+      seriesStartedAt: now,
+      stopWhenCompleted: false,
+      paused: false,
+   };
+   const template: LifeItem = {
+      id: "preview",
+      title: "Preview",
+      details: "",
+      kind: "routine",
+      state: "active",
+      context: "personal",
+      importance: "normal",
+      recurrence,
+      repeatRule: rule,
+      timingPrecision: "exact",
+      dueAt: now,
+      allDay: false,
+      pinToToday: false,
+      source: "kin",
+      createdAt: now,
+      updatedAt: now,
+   };
+   const firstAt = nextLifeOccurrence(template, now + 1);
+   return firstAt ? { recurrence, rule, firstAt } : null;
+}
+
+function ordinalLabel(value: number) {
+   if (value === -1) return "last";
+   return ({ 1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth" } as Record<number, string>)[value] || `${value}`;
+}
+
+function dayOfMonthLabel(value: number) {
+   if (value === 1) return "first";
+   if (value === 2) return "second";
+   if (value === 3) return "third";
+   const remainder = value % 100;
+   const suffix = remainder >= 11 && remainder <= 13 ? "th" : value % 10 === 1 ? "st" : value % 10 === 2 ? "nd" : value % 10 === 3 ? "rd" : "th";
+   return `${value}${suffix}`;
+}
+
+export function formatRecurringReminder(item: LifeItem) {
+   const rule = item.repeatRule;
+   if (item.recurrence === "interval" && rule?.intervalMinutes) {
+      const cadence = rule.intervalMinutes % 60 === 0
+         ? `Every ${rule.intervalMinutes / 60 === 1 ? "hour" : `${rule.intervalMinutes / 60} hours`}`
+         : `Every ${rule.intervalMinutes} minutes`;
+      const window = rule.windowStartMinutes !== undefined && rule.windowEndMinutes !== undefined
+         ? `${formatClockMinutes(rule.windowStartMinutes)}–${formatClockMinutes(rule.windowEndMinutes)}`
+         : "";
+      const scope = rule.scope === "every-day" ? "Daily" : "Today";
+      return `${cadence} · ${scope}${window ? `, ${window}` : ""}${rule.paused ? " · Paused" : ""}`;
+   }
+   const clock = rule?.timeMinutes !== undefined ? ` · ${formatClockMinutes(rule.timeMinutes)}` : "";
+   if (item.recurrence === "daily") return `Every day${clock}${rule?.paused ? " · Paused" : ""}`;
+   if (item.recurrence === "weekdays") return `Every weekday${clock}${rule?.paused ? " · Paused" : ""}`;
+   if (item.recurrence === "weekly") {
+      const days = (rule?.daysOfWeek || []).map((day) => Object.keys(WEEKDAY_INDEX).find((name) => WEEKDAY_INDEX[name] === day)?.slice(0, 3)).filter(Boolean).join(", ");
+      return `${days ? `Every ${days}` : "Weekly"}${clock}${rule?.paused ? " · Paused" : ""}`;
+   }
+   if (item.recurrence === "monthly") {
+      const schedule = rule?.monthlyOrdinal && rule.monthlyWeekday !== undefined
+         ? `${ordinalLabel(rule.monthlyOrdinal)} ${Object.keys(WEEKDAY_INDEX).find((name) => WEEKDAY_INDEX[name] === rule.monthlyWeekday)}`
+         : rule?.monthlyDay === 31 && rule.shorterMonthPolicy === "last-day" ? "last day" : `${dayOfMonthLabel(rule?.monthlyDay || new Date(item.dueAt || Date.now()).getDate())}`;
+      return `${schedule.charAt(0).toUpperCase()}${schedule.slice(1)} of every month${clock}${rule?.paused ? " · Paused" : ""}`;
+   }
+   return item.recurrence;
+}
+
+function formatClockMinutes(minutes: number) {
+   const date = new Date();
+   date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function splitMultipleReminderActions(raw: string): KinAction[] {
@@ -484,6 +668,23 @@ export function buildDeterministicLifeReadback(prompt: string, state: LifeState)
       /^(?:what|when|where|who|which|how|do|does|did|am|is|are|can|could|should|would|will|have|has)\b/i.test(raw);
 
    if (!asksAQuestion) return null;
+
+   const asksReminders =
+      /\b(?:what|which|show|list)\b.*\breminders?\b/.test(lower) ||
+      /\breminders?\b.*\b(?:have|active|upcoming|set)\b/.test(lower);
+
+   if (asksReminders) {
+      const now = Date.now();
+      const reminders = state.items
+         .filter((item) => item.state === "active")
+         .filter((item) => item.recurrence !== "none" || (item.kind === "task" && item.timingPrecision === "exact" && Boolean(item.dueAt && item.dueAt > now)))
+         .sort((left, right) => (left.dueAt || Number.MAX_SAFE_INTEGER) - (right.dueAt || Number.MAX_SAFE_INTEGER));
+      if (!reminders.length) return "You don't have any upcoming reminders.";
+      return reminders.slice(0, 8).map((item) => {
+         if (item.recurrence !== "none") return `${item.title} — ${formatRecurringReminder(item)}.`;
+         return `${item.title} — ${formatLifeDate(item.dueAt)} at ${formatLifeTime(item.dueAt)}.`;
+      }).join("\n");
+   }
 
    const asksToday =
       lower.includes("attention today") ||
@@ -565,7 +766,7 @@ export function shouldUseDeterministicLifeReadback(prompt: string, state?: LifeS
       const lower = normalizePrompt(raw);
       const asksAQuestion = raw.endsWith("?") || /^(?:what|when|where|who|which|how|do|does|did|am|is|are|can|could|should|would|will|have|has)\b/i.test(raw);
       if (!asksAQuestion) return false;
-      return lower.includes("attention today") || lower.includes("coming up") || lower.includes("what am i waiting") || lower.includes("30 minutes") || lower.includes("thirty minutes");
+      return lower.includes("attention today") || lower.includes("coming up") || lower.includes("what am i waiting") || lower.includes("30 minutes") || lower.includes("thirty minutes") || /\b(?:what|which|show|list)\b.*\breminders?\b/.test(lower);
    }
    return buildDeterministicLifeReadback(prompt, state) !== null;
 }
@@ -607,23 +808,26 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
    const recurringControl = raw.match(/\b(pause|resume|skip\s+(?:the\s+)?next|cancel|stop)\b\s+(.+?)(?:\s+reminders?)?[.!?]*$/i);
    if (recurringControl) {
       const target = findReferencedItem(state, recurringControl[2]);
-      if (target?.repeatRule) {
+      if (target?.repeatRule && target.recurrence !== "none") {
          const command = recurringControl[1].toLowerCase();
          if (command === "cancel" || command === "stop") {
             return { reply: `${target.title} will no longer repeat.`, actions: [{ type: "archive_item", targetId: target.id }] };
          }
          if (command.startsWith("skip")) {
-            const nextAt = (target.dueAt || target.startAt || Date.now()) + target.repeatRule.intervalMinutes * 60_000;
-            return { reply: `The next ${target.title} reminder is skipped.`, actions: [{ type: "update_item", targetId: target.id, changes: { dueAt: nextAt } }] };
+            const skippedAt = target.dueAt || target.startAt || nextLifeOccurrence(target, Date.now());
+            const updatedRule = { ...target.repeatRule, skipNextAt: skippedAt };
+            const nextAt = nextLifeOccurrence({ ...target, repeatRule: updatedRule }, (skippedAt || Date.now()) + 1);
+            return { reply: `The next ${target.title} reminder is skipped.`, actions: [{ type: "update_item", targetId: target.id, changes: { repeatRule: updatedRule, dueAt: nextAt } }] };
          }
+         const resumedRule = { ...target.repeatRule, paused: command === "pause" };
          return {
             reply: `${target.title} reminders are ${command === "pause" ? "paused" : "running again"}.`,
             actions: [{
                type: "update_item",
                targetId: target.id,
                changes: {
-                  repeatRule: { ...target.repeatRule, paused: command === "pause" },
-                  dueAt: command === "resume" ? Date.now() + target.repeatRule.intervalMinutes * 60_000 : target.dueAt,
+                  repeatRule: resumedRule,
+                  dueAt: command === "resume" ? nextLifeOccurrence({ ...target, repeatRule: resumedRule }, Date.now()) : target.dueAt,
                },
             }],
          };
@@ -636,6 +840,7 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
          return { reply: recurringAnalysis.clarification || "When should these reminders stop?", actions: [], incomplete: true };
       }
       const recurring = recurringReminderRule(raw);
+      const structured = structuredRecurringReminder(raw);
       const title = canonicalTaskTitleFromPrompt(raw);
       if (recurring && title) {
          return {
@@ -657,6 +862,43 @@ export function interpretKinLocally(prompt: string, state: LifeState): LocalKinI
                   pinToToday: recurring.rule.scope === "today",
                },
             }],
+         };
+      }
+      if (structured && title) {
+         const preview: LifeItem = {
+            id: "preview",
+            title,
+            details: "",
+            kind: "routine",
+            state: "active",
+            context: contextFromText(raw),
+            importance: "normal",
+            recurrence: structured.recurrence,
+            repeatRule: structured.rule,
+            timingPrecision: "exact",
+            dueAt: structured.firstAt,
+            allDay: false,
+            pinToToday: false,
+            source: "kin",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+         };
+         return {
+            reply: `${title} is set for ${formatRecurringReminder(preview)}.`,
+            actions: [{ type: "create_item", item: {
+               title,
+               details: taskReasonFromPrompt(raw) || undefined,
+               kind: "routine",
+               state: "active",
+               context: contextFromText(raw),
+               importance: "normal",
+               recurrence: structured.recurrence,
+               repeatRule: structured.rule,
+               timingPrecision: "exact",
+               dueAt: structured.firstAt,
+               allDay: false,
+               pinToToday: false,
+            } }],
          };
       }
    }

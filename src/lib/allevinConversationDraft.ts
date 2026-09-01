@@ -1,6 +1,6 @@
 "use client";
 
-const STORAGE_KEY = "allevin-conversation-draft-mkxiv-1";
+const STORAGE_KEY = "allevin-conversation-draft-mkxx-1";
 const MAX_AGE_MS = 30 * 60_000;
 
 export interface PendingConversationDraft {

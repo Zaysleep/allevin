@@ -13,7 +13,7 @@ function cleanJob(raw: unknown, deviceId: string): StoredPushJob | null {
    if (!raw || typeof raw !== "object") return null;
    const value = raw as Partial<StoredPushJob>;
    const dueAt = Number(value.dueAt);
-   if (!Number.isFinite(dueAt) || dueAt < Date.now() - 60_000 || dueAt > Date.now() + 72 * 60 * 60 * 1000) return null;
+   if (!Number.isFinite(dueAt) || dueAt < Date.now() - 60_000 || dueAt > Date.now() + 45 * 24 * 60 * 60 * 1000) return null;
    const phase = value.phase === "prep" || value.phase === "start" ? value.phase : null;
    if (!phase) return null;
    const priority = Number(value.priority);

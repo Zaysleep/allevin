@@ -2,7 +2,7 @@
 
 import type { KinAction } from "@/lib/lifeTypes";
 
-const STORAGE_KEY = "allevin-pending-change-mkxiii-1";
+const STORAGE_KEY = "allevin-pending-change-mkxx-1";
 const MAX_AGE_MS = 30 * 60_000;
 
 export type PendingAssistantChange =
@@ -38,7 +38,7 @@ export function clearPendingAssistantChange() {
 }
 
 export function isPendingConfirmation(prompt: string) {
-   return /^(?:yes|yep|yeah|do it|make (?:it|that|the change)|apply (?:it|that)|add it anyway|add anyway|save it anyway|go ahead|confirm)[.!?]?$/i.test(prompt.trim());
+   return /^(?:yes|yep|yeah|do it|just (?:the )?next|(?:the )?next (?:one|alert|reminder)|only (?:the )?next(?: one| alert| reminder)?|make (?:it|that|the change)|apply (?:it|that)|add it anyway|add anyway|save it anyway|go ahead|confirm)[.!?]?$/i.test(prompt.trim());
 }
 
 export function isPendingDecline(prompt: string) {

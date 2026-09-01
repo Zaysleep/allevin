@@ -31,6 +31,7 @@ export const LIFE_STATE_UPDATED_EVENT = "allevin-life-state-updated";
 const LEGACY_CALENDAR_EVENTS_STORAGE_KEY = "allevin-calendar-events-mki";
 const MAX_ITEMS = 800;
 const MAX_ACTIVITIES = 240;
+const ONE_TIME_REMINDER_TTL = 4 * 60 * 60 * 1000;
 
 const KIN_ACTION_CONTEXTS: LifeContext[] = ["personal", "work", "school", "kin-software", "home", "errand", "car", "finance", "health", "other"];
 const KIN_ACTION_KINDS: LifeItemKind[] = ["task", "commitment", "waiting", "routine", "note"];
@@ -67,27 +68,47 @@ function safeDuration(value: unknown) {
 function safeRepeatRule(value: unknown): LifeRepeatRule | undefined {
    if (!value || typeof value !== "object") return undefined;
    const raw = value as Partial<LifeRepeatRule>;
-   const intervalMinutes = Math.round(Number(raw.intervalMinutes));
-   const windowStartMinutes = Math.round(Number(raw.windowStartMinutes));
-   const windowEndMinutes = Math.round(Number(raw.windowEndMinutes));
+   const frequency = raw.frequency === "daily" || raw.frequency === "weekdays" || raw.frequency === "weekly" || raw.frequency === "monthly"
+      ? raw.frequency
+      : "interval";
+   const intervalMinutes = raw.intervalMinutes === undefined ? undefined : Math.round(Number(raw.intervalMinutes));
+   const windowStartMinutes = raw.windowStartMinutes === undefined ? undefined : Math.round(Number(raw.windowStartMinutes));
+   const windowEndMinutes = raw.windowEndMinutes === undefined ? undefined : Math.round(Number(raw.windowEndMinutes));
+   const timeMinutes = raw.timeMinutes === undefined ? undefined : Math.round(Number(raw.timeMinutes));
    const seriesStartedAt = safeTimestamp(raw.seriesStartedAt);
-   if (
-      !Number.isFinite(intervalMinutes) || intervalMinutes < 5 || intervalMinutes > 7 * 24 * 60 ||
-      !Number.isFinite(windowStartMinutes) || windowStartMinutes < 0 || windowStartMinutes > 1439 ||
-      !Number.isFinite(windowEndMinutes) || windowEndMinutes < 1 || windowEndMinutes > 1440 ||
-      windowEndMinutes <= windowStartMinutes ||
-      !seriesStartedAt
-   ) return undefined;
+   if (!seriesStartedAt) return undefined;
+   if (frequency === "interval" && (
+      !Number.isFinite(intervalMinutes) || (intervalMinutes || 0) < 5 || (intervalMinutes || 0) > 7 * 24 * 60 ||
+      !Number.isFinite(windowStartMinutes) || (windowStartMinutes || 0) < 0 || (windowStartMinutes || 0) > 1439 ||
+      !Number.isFinite(windowEndMinutes) || (windowEndMinutes || 0) < 1 || (windowEndMinutes || 0) > 1440 ||
+      (windowEndMinutes || 0) <= (windowStartMinutes || 0)
+   )) return undefined;
+   if (frequency !== "interval" && (!Number.isFinite(timeMinutes) || (timeMinutes || 0) < 0 || (timeMinutes || 0) > 1439)) return undefined;
+   const daysOfWeek = Array.isArray(raw.daysOfWeek)
+      ? [...new Set(raw.daysOfWeek.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))]
+      : undefined;
+   const monthlyOrdinal = raw.monthlyOrdinal === -1 || [1, 2, 3, 4, 5].includes(Number(raw.monthlyOrdinal))
+      ? raw.monthlyOrdinal as LifeRepeatRule["monthlyOrdinal"]
+      : undefined;
    return {
+      frequency,
       intervalMinutes,
       cadence: raw.cadence === "flexible" ? "flexible" : "exact",
       scope: raw.scope === "today" ? "today" : "every-day",
       windowStartMinutes,
       windowEndMinutes,
+      timeMinutes,
+      daysOfWeek,
+      monthlyDay: Number.isInteger(raw.monthlyDay) && Number(raw.monthlyDay) >= 1 && Number(raw.monthlyDay) <= 31 ? Number(raw.monthlyDay) : undefined,
+      monthlyOrdinal,
+      monthlyWeekday: Number.isInteger(raw.monthlyWeekday) && Number(raw.monthlyWeekday) >= 0 && Number(raw.monthlyWeekday) <= 6 ? Number(raw.monthlyWeekday) : undefined,
+      shorterMonthPolicy: raw.shorterMonthPolicy === "last-day" ? "last-day" : raw.shorterMonthPolicy === "skip" ? "skip" : undefined,
       seriesStartedAt,
       seriesEndsAt: safeTimestamp(raw.seriesEndsAt),
+      skipNextAt: safeTimestamp(raw.skipNextAt),
       stopWhenCompleted: raw.stopWhenCompleted === true,
       paused: raw.paused === true,
+      userEdited: raw.userEdited === true,
    };
 }
 
@@ -221,16 +242,42 @@ export function readLifeState(): LifeState {
       if (!stored) return getEmptyLifeState();
       const state = sanitizeState(JSON.parse(stored));
       const now = Date.now();
+      let changed = false;
+
+      // Exact one-time reminders leave the active workspace four hours after
+      // their moment. They are not history, advice context, or late catch-up
+      // work. Commitments and broad day items keep their existing lifecycle.
+      const expiredIds = new Set(
+         state.items
+            .filter((item) => item.state === "active" && item.kind === "task" && item.recurrence === "none" && item.timingPrecision === "exact")
+            .filter((item) => Boolean((item.dueAt || item.startAt) && (item.dueAt || item.startAt || 0) < now - ONE_TIME_REMINDER_TTL))
+            .map((item) => item.id),
+      );
+      if (expiredIds.size) {
+         state.items = state.items.filter((item) => !expiredIds.has(item.id));
+         state.activities = state.activities.filter((activity) => !expiredIds.has(activity.itemId));
+         changed = true;
+      }
+
       for (const item of state.items) {
-         if (item.state !== "active" || item.recurrence !== "interval" || !item.repeatRule || item.repeatRule.paused) continue;
+         if (item.state !== "active" || item.recurrence === "none" || item.repeatRule?.paused) continue;
          const current = item.dueAt || item.startAt || 0;
          // Keep the just-due occurrence visible long enough for the foreground
          // checker to deliver it; after that, jump directly to the next future
          // occurrence instead of replaying anything missed while offline.
          if (current > now - 2 * 60_000) continue;
          const next = nextLifeOccurrence(item, now + 1);
-         if (next) item.dueAt = next;
-         else if (item.repeatRule.scope === "today") item.state = "done";
+         if (next) {
+            item.dueAt = next;
+            changed = true;
+         } else if (item.repeatRule?.scope === "today") {
+            item.state = "done";
+            changed = true;
+         }
+      }
+      if (changed) {
+         state.updatedAt = now;
+         window.localStorage.setItem(LIFE_STATE_STORAGE_KEY, JSON.stringify(state));
       }
       return state;
    } catch {
@@ -300,21 +347,7 @@ function findItem(state: LifeState, targetId?: string, targetQuery?: string) {
 }
 
 function nextRecurrenceTimestamp(item: LifeItem, from = Date.now()) {
-   if (item.recurrence === "interval" && item.repeatRule) {
-      return nextLifeOccurrence(item, Math.max(from, (item.dueAt || item.startAt || from) + 1)) || from;
-   }
-   const base = new Date(item.dueAt || item.startAt || from);
-   const next = new Date(base);
-
-   if (item.recurrence === "daily") next.setDate(next.getDate() + 1);
-   if (item.recurrence === "weekly") next.setDate(next.getDate() + 7);
-   if (item.recurrence === "monthly") next.setMonth(next.getMonth() + 1);
-   if (item.recurrence === "weekdays") {
-      next.setDate(next.getDate() + 1);
-      while (next.getDay() === 0 || next.getDay() === 6) next.setDate(next.getDate() + 1);
-   }
-
-   return next.getTime();
+   return nextLifeOccurrence(item, Math.max(from, (item.dueAt || item.startAt || from) + 1)) || from;
 }
 
 function atLocalMinutes(date: Date, minutes: number) {
@@ -325,9 +358,64 @@ function atLocalMinutes(date: Date, minutes: number) {
 
 /** Return the first future occurrence without replaying anything missed offline. */
 export function nextLifeOccurrence(item: LifeItem, after = Date.now()) {
-   const rule = item.repeatRule;
-   if (item.recurrence !== "interval" || !rule || rule.paused) return item.startAt || item.dueAt;
-   const hardEnd = Math.min(rule.seriesEndsAt || Number.MAX_SAFE_INTEGER, after + 370 * 86_400_000);
+   if (item.recurrence === "none") return item.startAt || item.dueAt;
+   const baseAt = item.startAt || item.dueAt;
+   if (!baseAt) return undefined;
+   const baseDate = new Date(baseAt);
+   const rule: LifeRepeatRule = item.repeatRule || {
+      frequency: item.recurrence,
+      cadence: "exact",
+      scope: "every-day",
+      timeMinutes: baseDate.getHours() * 60 + baseDate.getMinutes(),
+      seriesStartedAt: baseAt,
+      stopWhenCompleted: false,
+      paused: false,
+   };
+   if (rule.paused) return undefined;
+   const hardEnd = Math.min(rule.seriesEndsAt || Number.MAX_SAFE_INTEGER, after + 740 * 86_400_000);
+
+   if (item.recurrence !== "interval") {
+      const timeMinutes = rule.timeMinutes ?? (baseDate.getHours() * 60 + baseDate.getMinutes());
+      const startDay = new Date(after);
+      startDay.setHours(0, 0, 0, 0);
+      const days = rule.daysOfWeek?.length ? rule.daysOfWeek : [baseDate.getDay()];
+
+      for (let offset = 0; offset < 740; offset += 1) {
+         const date = new Date(startDay);
+         date.setDate(startDay.getDate() + offset);
+         const candidate = atLocalMinutes(date, timeMinutes);
+         if (candidate < after || candidate < rule.seriesStartedAt || candidate > hardEnd) continue;
+         let matches = item.recurrence === "daily";
+         if (item.recurrence === "weekdays") matches = date.getDay() >= 1 && date.getDay() <= 5;
+         if (item.recurrence === "weekly") matches = days.includes(date.getDay());
+         if (item.recurrence === "monthly") {
+            const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+            if (rule.monthlyOrdinal && rule.monthlyWeekday !== undefined) {
+               if (rule.monthlyOrdinal === -1) {
+                  const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+                  while (last.getDay() !== rule.monthlyWeekday) last.setDate(last.getDate() - 1);
+                  matches = date.getDate() === last.getDate();
+               } else {
+                  const first = new Date(date.getFullYear(), date.getMonth(), 1);
+                  const firstMatch = 1 + (rule.monthlyWeekday - first.getDay() + 7) % 7;
+                  matches = date.getDate() === firstMatch + (rule.monthlyOrdinal - 1) * 7;
+               }
+            } else {
+               const requestedDay = rule.monthlyDay || baseDate.getDate();
+               const validDay = requestedDay <= lastDay
+                  ? requestedDay
+                  : rule.shorterMonthPolicy === "last-day" ? lastDay : -1;
+               matches = date.getDate() === validDay;
+            }
+         }
+         if (!matches) continue;
+         if (rule.skipNextAt && Math.abs(candidate - rule.skipNextAt) < 60_000) continue;
+         return candidate;
+      }
+      return undefined;
+   }
+
+   if (!rule.intervalMinutes || rule.windowStartMinutes === undefined || rule.windowEndMinutes === undefined) return undefined;
    const day = new Date(after);
    day.setHours(0, 0, 0, 0);
 
@@ -341,7 +429,8 @@ export function nextLifeOccurrence(item: LifeItem, after = Date.now()) {
       const anchor = Math.max(start, rule.seriesStartedAt);
       const elapsed = Math.max(0, after - anchor);
       const steps = Math.ceil(elapsed / (rule.intervalMinutes * 60_000));
-      const candidate = anchor + steps * rule.intervalMinutes * 60_000;
+      let candidate = anchor + steps * rule.intervalMinutes * 60_000;
+      if (rule.skipNextAt && Math.abs(candidate - rule.skipNextAt) < 60_000) candidate += rule.intervalMinutes * 60_000;
       if (candidate >= after && candidate <= end && candidate <= hardEnd) return candidate;
    }
    return undefined;
@@ -349,33 +438,12 @@ export function nextLifeOccurrence(item: LifeItem, after = Date.now()) {
 
 /** Expand only the requested horizon. The series itself stays a single item. */
 export function lifeOccurrencesBetween(item: LifeItem, from: number, to: number) {
-   if (item.recurrence === "none" || (item.recurrence === "interval" && !item.repeatRule)) {
+   if (item.recurrence === "none") {
       const once = item.startAt || item.dueAt;
       return once && once >= from && once <= to ? [once] : [];
    }
-   if (item.recurrence !== "interval" || !item.repeatRule) {
-      const base = item.startAt || item.dueAt;
-      if (!base) return [];
-      const result: number[] = [];
-      const cursor = new Date(base);
-      const advance = () => {
-         if (item.recurrence === "daily") cursor.setDate(cursor.getDate() + 1);
-         else if (item.recurrence === "weekly") cursor.setDate(cursor.getDate() + 7);
-         else if (item.recurrence === "monthly") cursor.setMonth(cursor.getMonth() + 1);
-         else if (item.recurrence === "weekdays") {
-            cursor.setDate(cursor.getDate() + 1);
-            while (cursor.getDay() === 0 || cursor.getDay() === 6) cursor.setDate(cursor.getDate() + 1);
-         }
-      };
-      for (let count = 0; count < 400 && cursor.getTime() < from; count += 1) advance();
-      for (let count = 0; count < 160 && cursor.getTime() <= to; count += 1) {
-         result.push(cursor.getTime());
-         advance();
-      }
-      return result;
-   }
    const result: number[] = [];
-   let cursor = Math.max(from, Date.now() + 5_000);
+   let cursor = from;
    for (let count = 0; count < 160; count += 1) {
       const occurrence = nextLifeOccurrence(item, cursor);
       if (!occurrence || occurrence > to) break;

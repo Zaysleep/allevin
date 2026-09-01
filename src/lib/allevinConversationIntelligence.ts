@@ -283,7 +283,9 @@ export function mergeConversationDraft(originalPrompt: string, continuation: str
 }
 
 export function looksLikeNewStandaloneRequest(value: string) {
-   return /^(?:actually[, ]+|instead[, ]+)?(?:remind me|set (?:a )?reminder|don['’]?t let me forget|add|create|schedule|book|move|cancel|remove|delete|mark|complete)\b/i.test(inline(value));
+   const prompt = inline(value);
+   const temporalLead = "(?:(?:today|tonight|tomorrow|next\\s+(?:week|month)|on\\s+(?:the\\s+)?(?:first|second|third|fourth|last|sunday|monday|tuesday|wednesday|thursday|friday|saturday))[, ]+)?";
+   return new RegExp(`^(?:actually[, ]+|instead[, ]+)?${temporalLead}(?:remind me|set (?:a )?reminder|don['’]?t let me forget|add|create|schedule|book|move|skip|pause|resume|stop|cancel|remove|delete|mark|complete)\\b`, "i").test(prompt);
 }
 
 export function canonicalTitleIsSafe(candidate: string, refined: unknown) {

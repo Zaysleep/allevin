@@ -7,6 +7,7 @@ import CalendarWorkspace from "@/components/CalendarWorkspace";
 import AppUpdateNotice from "@/components/AppUpdateNotice";
 import KinDock from "@/components/KinDock";
 import LifeItemRow from "@/components/LifeItemRow";
+import RecurringReminderRow from "@/components/RecurringReminderRow";
 import LiveClock from "@/components/LiveClock";
 import OnboardingFlow from "@/components/OnboardingFlow";
 import SettingsScreen from "@/components/SettingsScreen";
@@ -37,7 +38,7 @@ function FooterInfoPanel({ section, onClose }: { section: Exclude<FooterInfo, nu
 }
 
 export default function LifeDashboard() {
-   const { state, hydrated, complete, reopen, archive, tomorrow, today } = useLifeState();
+   const { state, hydrated, complete, reopen, archive, tomorrow, today, update } = useLifeState();
    const rhythm = useDailyRhythm();
    const [settingsOpen, setSettingsOpen] = useState(false);
    const [name, setName] = useState("");
@@ -71,10 +72,10 @@ export default function LifeDashboard() {
       todayEnd.setHours(23, 59, 59, 999);
 
       const futureDated = state.items
-         .filter((item) => item.state !== "archived" && item.state !== "done" && item.state !== "waiting" && item.kind !== "routine")
+         .filter((item) => item.state !== "archived" && item.state !== "done" && item.state !== "waiting")
          .filter((item) => {
             const when = item.deferUntil || item.startAt || item.dueAt;
-            return Boolean(when && when > todayEnd.getTime());
+            return item.recurrence !== "none" || Boolean(when && when > todayEnd.getTime());
          })
          .map((item) => ({ item, waitingMode: false, meta: undefined as string | undefined }));
 
@@ -100,10 +101,13 @@ export default function LifeDashboard() {
          const rightTime = right.item.followUpAt || right.item.deferUntil || right.item.startAt || right.item.dueAt || Number.MAX_SAFE_INTEGER;
          return leftTime - rightTime || left.item.title.localeCompare(right.item.title);
       });
-   }, [state.items, views.waiting, views.whenever, nowMs]);
+   }, [state, views.waiting, views.whenever, nowMs]);
 
    const comingUpCollapsible = comingUpItems.length >= 3;
    const showComingUpItems = !comingUpCollapsible || comingUpOpen;
+   const visibleComingUpItems = comingUpItems.slice(0, 10);
+   const recurringComingUpItems = visibleComingUpItems.filter(({ item }) => item.recurrence !== "none");
+   const laterComingUpItems = visibleComingUpItems.filter(({ item }) => item.recurrence === "none");
 
    function saveProfile() {
       saveAllevinUserProfile(name);
@@ -203,20 +207,40 @@ export default function LifeDashboard() {
                   </header>
 
                   {showComingUpItems ? (
-                     <div className="ahead-list">
-                        {comingUpItems.slice(0, 10).map(({ item, meta, waitingMode }) => (
-                           <LifeItemRow
-                              key={item.id}
-                              item={item}
-                              meta={meta}
-                              onComplete={complete}
-                              onTomorrow={tomorrow}
-                              onToday={today}
-                              onReopen={reopen}
-                              onArchive={archive}
-                              waitingMode={waitingMode}
-                           />
-                        ))}
+                     <div className="ahead-groups">
+                        {recurringComingUpItems.length ? (
+                           <section className="ahead-group" aria-labelledby="repeating-reminders-heading">
+                              <header className="ahead-group-heading">
+                                 <div>
+                                    <h3 id="repeating-reminders-heading">Repeating reminders</h3>
+                                    <p>Ongoing reminders that keep their schedule.</p>
+                                 </div>
+                                 <span>{recurringComingUpItems.length} active</span>
+                              </header>
+                              <div className="ahead-list ahead-list-recurring">
+                                 {recurringComingUpItems.map(({ item }) => (
+                                    <RecurringReminderRow key={item.id} item={item} onUpdate={update} onArchive={archive} />
+                                 ))}
+                              </div>
+                           </section>
+                        ) : null}
+
+                        {laterComingUpItems.length ? (
+                           <section className="ahead-group" aria-labelledby="later-items-heading">
+                              <header className="ahead-group-heading">
+                                 <div>
+                                    <h3 id="later-items-heading">Later</h3>
+                                    <p>One-time reminders and things waiting ahead.</p>
+                                 </div>
+                                 <span>{laterComingUpItems.length}</span>
+                              </header>
+                              <div className="ahead-list">
+                                 {laterComingUpItems.map(({ item, meta, waitingMode }) => (
+                                    <LifeItemRow key={item.id} item={item} meta={meta} onComplete={complete} onTomorrow={tomorrow} onToday={today} onReopen={reopen} onArchive={archive} waitingMode={waitingMode} />
+                                 ))}
+                              </div>
+                           </section>
+                        ) : null}
                      </div>
                   ) : null}
                </section>

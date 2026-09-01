@@ -12,6 +12,7 @@ export type LifeImportance = "low" | "normal" | "high";
 export type LifeContext = "personal" | "work" | "school" | "kin-software" | "home" | "errand" | "car" | "finance" | "health" | "other";
 export type LifeRecurrence = "none" | "interval" | "daily" | "weekdays" | "weekly" | "monthly";
 export type LifeRepeatScope = "today" | "every-day";
+export type LifeRepeatFrequency = Exclude<LifeRecurrence, "none">;
 
 /**
  * A recurring reminder remains one editable series. `dueAt` is the next
@@ -19,15 +20,24 @@ export type LifeRepeatScope = "today" | "every-day";
  * Local wall-clock minutes keep bedtime/window behavior stable across DST.
  */
 export interface LifeRepeatRule {
-   intervalMinutes: number;
+   frequency?: LifeRepeatFrequency;
+   intervalMinutes?: number;
    cadence: "exact" | "flexible";
    scope: LifeRepeatScope;
-   windowStartMinutes: number;
-   windowEndMinutes: number;
+   windowStartMinutes?: number;
+   windowEndMinutes?: number;
+   timeMinutes?: number;
+   daysOfWeek?: number[];
+   monthlyDay?: number;
+   monthlyOrdinal?: 1 | 2 | 3 | 4 | 5 | -1;
+   monthlyWeekday?: number;
+   shorterMonthPolicy?: "last-day" | "skip";
    seriesStartedAt: number;
    seriesEndsAt?: number;
+   skipNextAt?: number;
    stopWhenCompleted: boolean;
    paused: boolean;
+   userEdited?: boolean;
 }
 export type LifeTimingPrecision = "exact" | "day" | "window" | "someday" | "none";
 export type LifeItemSource = "user" | "kin" | "calendar" | "migration";

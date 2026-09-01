@@ -12,6 +12,7 @@ import {
    moveLifeItemToTomorrow,
    readLifeState,
    reopenLifeItem,
+   updateLifeItem,
 } from "@/lib/lifeStore";
 import type { LifeState } from "@/lib/lifeTypes";
 
@@ -43,5 +44,6 @@ export function useLifeState() {
       tomorrow: moveLifeItemToTomorrow,
       today: bringLifeItemToToday,
       waiting: markLifeItemWaiting,
+      update: updateLifeItem,
    };
 }

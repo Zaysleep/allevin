@@ -16,6 +16,7 @@ import type { LifeImportance, LifeItem } from "@/lib/lifeTypes";
 export const SERVER_PUSH_ACTIVE_KEY = "allevin-server-push-active-v1";
 const DEVICE_ID_KEY = "allevin-push-device-id-v1";
 const HORIZON_HOURS = 48;
+const RECURRING_HORIZON_DAYS = 40;
 let copyRetryTimer: number | undefined;
 let copyRetryAttempts = 0;
 
@@ -229,7 +230,10 @@ function buildPushPlan(device: string) {
          item.allDay ||
          item.timingPrecision !== "exact"
       ) continue;
-      const occurrences = lifeOccurrencesBetween(item, Date.now() + 5_000, horizon);
+      const itemHorizon = item.recurrence !== "none" && item.recurrence !== "interval"
+         ? Date.now() + RECURRING_HORIZON_DAYS * 24 * 60 * 60 * 1000
+         : horizon;
+      const occurrences = lifeOccurrencesBetween(item, Date.now() + 5_000, itemHorizon);
       for (const startAt of occurrences) {
          const date = new Date(startAt);
          const dateKey = localDateKey(date);
@@ -246,7 +250,7 @@ function buildPushPlan(device: string) {
             buildCopyContext: (id, phase, leadMinutes) => lifeNotificationContext({ id, item, phase, tone, priority, leadMinutes, timeline, occurrenceAt: startAt }),
             // A repeated care nudge should remain one notification per
             // occurrence, not turn into a prep/start avalanche.
-            includePrep: item.recurrence === "interval" ? false : undefined,
+            includePrep: item.recurrence !== "none" ? false : undefined,
             actionTarget: { source: "life", id: item.id, dateKey },
          });
       }
@@ -256,7 +260,7 @@ function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxix-recurring-care", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxx-reminder-intelligence-2", {
       scope: "/",
       updateViaCache: "none",
    });
