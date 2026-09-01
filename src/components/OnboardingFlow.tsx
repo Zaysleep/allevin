@@ -136,6 +136,7 @@ export default function OnboardingFlow({
    onComplete: () => void;
    onEnableReminders: () => Promise<NotificationPermission | "unsupported">;
    remindersEnabled: boolean;
+   freshStart?: boolean;
 }) {
    const [step, setStep] = useState(mode === "install" ? 5 : 0);
    const [draft, setDraft] = useState<OnboardingDraft>(() => onboardingDraftFromCurrentState());
