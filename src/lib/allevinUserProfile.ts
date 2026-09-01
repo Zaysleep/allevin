@@ -5,6 +5,8 @@
 
 import { KIN_CONVERSATION_STORAGE_KEY } from "@/lib/kinConversation";
 import { clearLifeState, LIFE_STATE_UPDATED_EVENT } from "@/lib/lifeStore";
+import { ALLEVIN_PUSH_DEVICE_ID_KEY } from "@/lib/allevinServerPushClient";
+import { DAILY_RHYTHM_UPDATED_EVENT } from "@/lib/dailyRhythm";
 
 export type AllevinUserProfile = {
    displayName: string;
@@ -49,7 +51,7 @@ export function saveAllevinUserProfile(displayName: string) {
    return profile;
 }
 
-export function resetAllevinLifeWorkspace({ preserveProfile = true }: { preserveProfile?: boolean } = {}) {
+export function resetAllevinLifeWorkspace({ preserveProfile = false }: { preserveProfile?: boolean } = {}) {
    if (typeof window === "undefined") return;
 
    const profile = preserveProfile ? window.localStorage.getItem(ALLEVIN_USER_PROFILE_STORAGE_KEY) : null;
@@ -59,7 +61,11 @@ export function resetAllevinLifeWorkspace({ preserveProfile = true }: { preserve
    // ALLEVIN data" should therefore clear the whole product namespace rather
    // than leaving half of the assistant's memory behind.
    const keys = Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index))
-      .filter((key): key is string => Boolean(key?.startsWith("allevin-")));
+      .filter((key): key is string => Boolean(key && (key.startsWith("allevin-") || key.startsWith("allevin:"))))
+      // Keep the stable transport identity long enough for the normal state
+      // listeners to replace the existing server push plan with an empty one.
+      // Deleting it here would orphan the old plan under an unreachable id.
+      .filter((key) => key !== ALLEVIN_PUSH_DEVICE_ID_KEY);
 
    for (const key of keys) window.localStorage.removeItem(key);
 
@@ -70,5 +76,7 @@ export function resetAllevinLifeWorkspace({ preserveProfile = true }: { preserve
    clearLifeState();
    window.localStorage.removeItem(KIN_CONVERSATION_STORAGE_KEY);
    window.dispatchEvent(new CustomEvent(LIFE_STATE_UPDATED_EVENT));
+   window.dispatchEvent(new CustomEvent(DAILY_RHYTHM_UPDATED_EVENT));
+   window.dispatchEvent(new CustomEvent("allevin-user-profile-update", { detail: null }));
    window.dispatchEvent(new CustomEvent("allevin-kin-conversation-updated"));
 }

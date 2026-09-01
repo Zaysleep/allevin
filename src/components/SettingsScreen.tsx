@@ -64,7 +64,6 @@ export default function SettingsScreen({
    notificationPermission,
    onEnableReminders,
    onSetRemindersEnabled,
-   onOpenSetup,
    onOpenInstall,
    onReset,
 }: {
@@ -79,7 +78,6 @@ export default function SettingsScreen({
    notificationPermission: NotificationPermission | "unsupported";
    onEnableReminders: () => Promise<NotificationPermission | "unsupported">;
    onSetRemindersEnabled: (enabled: boolean) => void;
-   onOpenSetup: () => void;
    onOpenInstall: () => void;
    onReset: () => void;
 }) {
@@ -126,7 +124,7 @@ export default function SettingsScreen({
                <RhythmSettingsEditor state={rhythmState} view="schedule" />
             </AccordionSection>
 
-            <AccordionSection id="routines" title="Routines" summary={`${rhythmState.anchors.length} ${rhythmState.anchors.length === 1 ? "routine" : "routines"}`} open={active === "routines"} onToggle={toggle}>
+            <AccordionSection id="routines" title="Daily activities" summary={`${rhythmState.anchors.length} ${rhythmState.anchors.length === 1 ? "activity" : "activities"}`} open={active === "routines"} onToggle={toggle}>
                <RhythmSettingsEditor state={rhythmState} view="routines" />
             </AccordionSection>
 
@@ -146,9 +144,8 @@ export default function SettingsScreen({
             <AccordionSection id="data" title="Data & setup" summary="Backup, phone setup, and reset" open={active === "data"} onToggle={toggle}>
                <BackupRestoreSettings />
                <div className="settings-data-actions">
-                  <button className="settings-guide-button" type="button" onClick={onOpenSetup}>Set up ALLEVIN again</button>
                   <button className="settings-guide-button" type="button" onClick={onOpenInstall}>Add ALLEVIN to your phone</button>
-                  <button className="settings-reset" onClick={onReset}>Clear ALLEVIN data</button>
+                  <button className="settings-reset" type="button" onClick={onReset}>Start fresh with ALLEVIN</button>
                </div>
             </AccordionSection>
          </div>

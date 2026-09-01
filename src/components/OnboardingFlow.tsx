@@ -9,6 +9,7 @@ import {
    buildOnboardingDayPreview,
    createBlankRoutineDraft,
    createBlankScheduleDraft,
+   createFreshOnboardingDraft,
    deviceTimezoneLabel,
    isInstalledPwa,
    isIosDevice,
@@ -135,15 +136,17 @@ export default function OnboardingFlow({
    onComplete,
    onEnableReminders,
    remindersEnabled,
+   freshStart = false,
 }: {
    mode: OnboardingMode;
    onClose: () => void;
    onComplete: () => void;
    onEnableReminders: () => Promise<NotificationPermission | "unsupported">;
    remindersEnabled: boolean;
+   freshStart?: boolean;
 }) {
    const [step, setStep] = useState(mode === "install" ? 5 : 0);
-   const [draft, setDraft] = useState<OnboardingDraft>(() => onboardingDraftFromCurrentState());
+   const [draft, setDraft] = useState<OnboardingDraft>(() => freshStart ? createFreshOnboardingDraft() : onboardingDraftFromCurrentState());
    const [error, setError] = useState("");
    const [committed, setCommitted] = useState(false);
    const [enabling, setEnabling] = useState(false);
@@ -152,6 +155,8 @@ export default function OnboardingFlow({
    const [ios, setIos] = useState(false);
    const [editingScheduleId, setEditingScheduleId] = useState<string | null>(() => draft.scheduleBlocks[0]?.id || null);
    const [editingRoutineId, setEditingRoutineId] = useState<string | null>(null);
+   const [invalidScheduleIds, setInvalidScheduleIds] = useState<string[]>([]);
+   const [activityNameErrorId, setActivityNameErrorId] = useState<string | null>(null);
 
    useEffect(() => {
       const refreshInstallState = () => setStandalone(isInstalledPwa());
@@ -173,6 +178,7 @@ export default function OnboardingFlow({
    const previewRows = useMemo(() => buildOnboardingDayPreview(draft, previewDay), [draft, previewDay]);
 
    function updateSchedule(id: string, patch: Partial<OnboardingScheduleDraft>) {
+      setInvalidScheduleIds((current) => current.filter((candidate) => candidate !== id));
       setDraft((current) => ({
          ...current,
          scheduleBlocks: current.scheduleBlocks.map((block) => block.id === id ? { ...block, ...patch } : block),
@@ -189,6 +195,7 @@ export default function OnboardingFlow({
    }
 
    function updateRoutine(id: string, patch: Partial<OnboardingRoutineDraft>) {
+      if ("title" in patch && String(patch.title || "").trim()) setActivityNameErrorId(null);
       setDraft((current) => ({
          ...current,
          routines: current.routines.map((routine) => routine.id === id ? { ...routine, ...patch } : routine),
@@ -206,7 +213,7 @@ export default function OnboardingFlow({
       const customRoutine = !title.trim();
       const routine = {
          ...createBlankRoutineDraft(reference?.id),
-         title: title || "New routine",
+         title,
          durationMinutes,
          timing: draft.scheduleBlocks.length ? timing : "fixed" as const,
       };
@@ -238,6 +245,38 @@ export default function OnboardingFlow({
    function removeRoutine(id: string) {
       setDraft((current) => ({ ...current, routines: current.routines.filter((routine) => routine.id !== id) }));
       if (editingRoutineId === id) setEditingRoutineId(null);
+   }
+
+   function finishActivity(routine: OnboardingRoutineDraft) {
+      if (!routine.title.trim()) {
+         setActivityNameErrorId(routine.id);
+         return;
+      }
+      setActivityNameErrorId(null);
+      setEditingRoutineId(null);
+   }
+
+   function reviewSetup() {
+      const incompleteSchedules = draft.scheduleBlocks
+         .filter((block) => !block.days.length || !block.start || !block.end)
+         .map((block) => block.id);
+      if (incompleteSchedules.length) {
+         setInvalidScheduleIds(incompleteSchedules);
+         setEditingScheduleId(incompleteSchedules[0]);
+         setError("Finish the highlighted schedule before reviewing your day.");
+         setStep(2);
+         return;
+      }
+      const unnamedActivity = draft.routines.find((routine) => !routine.title.trim());
+      if (unnamedActivity) {
+         setEditingRoutineId(unnamedActivity.id);
+         setActivityNameErrorId(unnamedActivity.id);
+         setError("Give the highlighted activity a name before reviewing your day.");
+         setStep(2);
+         return;
+      }
+      setError("");
+      setStep(4);
    }
 
    function skipSetup() {
@@ -323,7 +362,7 @@ export default function OnboardingFlow({
                {step === 2 ? (
                   <section className="onboarding-step">
                      <span className="onboarding-kicker">Build your usual week</span>
-                     <h2>Put your schedule and routines in one place.</h2>
+                     <h2>Put your schedule and daily activities in one place.</h2>
                      <p>Add the times that shape your week, then enter the ordinary clock times you already know. ALLEVIN works out how everything should move when those times change.</p>
 
                      <div className="onboarding-builder-section onboarding-builder-section-spacious">
@@ -339,7 +378,7 @@ export default function OnboardingFlow({
                         {draft.scheduleBlocks.length ? (
                            <div className="onboarding-builder-list">
                               {draft.scheduleBlocks.map((block) => (
-                                 <article className="onboarding-builder-card" key={block.id}>
+                                 <article className={`onboarding-builder-card${invalidScheduleIds.includes(block.id) ? " has-error" : ""}`} key={block.id}>
                                     <div className="onboarding-card-head">
                                        <button
                                           className="onboarding-summary-button"
@@ -363,6 +402,7 @@ export default function OnboardingFlow({
                                           </div>
                                           <label className="onboarding-field"><span>Days</span><DayPicker value={block.days} onChange={(days) => updateSchedule(block.id, { days })} /></label>
                                           <div className="onboarding-grid-two"><label className="onboarding-field"><span>Starts</span><input type="time" value={block.start} onChange={(event) => updateSchedule(block.id, { start: event.target.value })} /></label><label className="onboarding-field"><span>Ends</span><input type="time" value={block.end} onChange={(event) => updateSchedule(block.id, { end: event.target.value })} /></label></div>
+                                          {invalidScheduleIds.includes(block.id) ? <p className="onboarding-inline-error">Choose at least one day and confirm both times.</p> : null}
                                        </div>
                                     ) : null}
                                  </article>
@@ -378,7 +418,7 @@ export default function OnboardingFlow({
                               {COMMON_ROUTINES.filter((item) => !draft.routines.some((routine) => routine.title.trim().toLowerCase() === item.title.toLowerCase())).map((item) => (
                                  <button key={item.title} type="button" onClick={() => addRoutine(item.title, item.timing, item.durationMinutes)}>+ {item.title}</button>
                               ))}
-                              <button type="button" onClick={() => addRoutine()}>+ Custom</button>
+                              <button type="button" onClick={() => addRoutine()}>+ Add activity</button>
                            </div>
                         </div>
 
@@ -408,15 +448,16 @@ export default function OnboardingFlow({
                                        {routine && editing ? (
                                           <div className="onboarding-full-day-editor">
                                              <div className="onboarding-routine-fields">
-                                                <label className="onboarding-field"><span>Routine</span><input value={routine.title} onChange={(event) => updateRoutine(routine.id, { title: event.target.value })} placeholder="Workout, breakfast, study…" /></label>
+                                                <label className="onboarding-field"><span>Activity name</span><input autoFocus value={routine.title} onChange={(event) => updateRoutine(routine.id, { title: event.target.value })} placeholder="Workout, breakfast, study…" /></label>
+                                                {activityNameErrorId === routine.id ? <p className="onboarding-inline-error">Add a name so this activity is easy to recognize.</p> : null}
                                                 <label className="onboarding-field"><span>Fits into the day</span><select value={relativeTimingValue(routine)} onChange={(event) => updateRoutineTiming(routine, event.target.value)}><option value="fixed">At a set time</option>{referenceBlocks.flatMap((block) => [<option value={`before:${block.id}`} key={`before-${block.id}`}>Before {routineReferenceLabel(block, draft.scheduleBlocks)}</option>, <option value={`after:${block.id}`} key={`after-${block.id}`}>After {routineReferenceLabel(block, draft.scheduleBlocks)}</option>])}</select></label>
                                                 <label className="onboarding-field"><span>Usually starts</span><input type="time" value={routine.time} onChange={(event) => updateRoutine(routine.id, { time: event.target.value })} /></label>
                                                 <label className="onboarding-field"><span>How long?</span><div className="onboarding-offset-fields"><div className="onboarding-number-unit"><input aria-label="Duration hours" type="number" inputMode="numeric" min={0} max={6} value={durationHours || ""} onChange={(event) => updateRoutineDurationPart(routine, "hours", event.target.value)} placeholder="0" /><span>hr</span></div><div className="onboarding-number-unit"><input aria-label="Duration minutes" type="number" inputMode="numeric" min={0} max={59} value={durationMinutes || ""} onChange={(event) => updateRoutineDurationPart(routine, "minutes", event.target.value)} placeholder="30" /><span>min</span></div></div></label>
                                              </div>
                                              {routine.timing === "fixed" ? <label className="onboarding-field"><span>Days</span><DayPicker value={routine.days} onChange={(days) => updateRoutine(routine.id, { days })} /></label> : null}
                                              <div className="onboarding-full-day-editor-actions">
-                                                <button type="button" className="onboarding-remove-text" onClick={() => removeRoutine(routine.id)}>Remove routine</button>
-                                                <button type="button" className="onboarding-done-button" onClick={() => setEditingRoutineId(null)}>Done</button>
+                                                <button type="button" className="onboarding-remove-text" onClick={() => removeRoutine(routine.id)}>Remove activity</button>
+                                                <button type="button" className="onboarding-done-button" onClick={() => finishActivity(routine)}>Done</button>
                                              </div>
                                           </div>
                                        ) : null}
@@ -451,7 +492,7 @@ export default function OnboardingFlow({
                         </div>
                      </div>
                      <p className="onboarding-timezone">Using your device time zone: <strong>{timezone}</strong></p>
-                     <div className="onboarding-actions"><button className="onboarding-back" onClick={() => setStep(2)}><ChevronLeft size={16} /> Back</button><button className="onboarding-primary" onClick={() => setStep(4)}>Review <ChevronRight size={16} /></button></div>
+                     <div className="onboarding-actions"><button className="onboarding-back" onClick={() => setStep(2)}><ChevronLeft size={16} /> Back</button><button className="onboarding-primary" onClick={reviewSetup}>Review <ChevronRight size={16} /></button></div>
                   </section>
                ) : null}
 
@@ -459,17 +500,17 @@ export default function OnboardingFlow({
                   <section className="onboarding-step">
                      <span className="onboarding-kicker">One last look</span>
                      <h2>Here’s what I understood.</h2>
-                     <p>This will replace your normal weekly schedule and routines if you already had them. One-off Calendar events stay where they are.</p>
+                     <p>This will replace your normal weekly schedule and daily activities if you already had them. One-off Calendar events stay where they are.</p>
                      <div className="onboarding-review">
                         <div><span>Name</span><strong>{draft.name || "Not added yet"}</strong></div>
                         <div><span>Regular schedule</span><strong>{draft.scheduleBlocks.length ? draft.scheduleBlocks.map((block) => `${scheduleLabel(block)} · ${readableDays(block.days)} · ${readableClock(block.start)}–${readableClock(block.end)}`).join(" / ") : "None added"}</strong></div>
                         <div>
-                           <span>Routines</span>
+                           <span>Daily activities</span>
                            {draft.routines.length ? (
                               <div className="onboarding-review-list">
                                  {draft.routines.map((routine) => (
                                     <div className="onboarding-review-routine" key={routine.id}>
-                                       <strong>{routine.title.trim() || "Routine"}</strong>
+                                       <strong>{routine.title.trim() || "Activity"}</strong>
                                        <span>{routineReviewDetail(routine, draft.scheduleBlocks)}</span>
                                     </div>
                                  ))}

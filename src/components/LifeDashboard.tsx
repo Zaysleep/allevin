@@ -48,6 +48,8 @@ export default function LifeDashboard() {
    const [nowMs, setNowMs] = useState(() => Date.now());
    const [onboardingMode, setOnboardingMode] = useState<OnboardingMode | null>(null);
    const [firstRunOnboarding, setFirstRunOnboarding] = useState(false);
+   const [onboardingSession, setOnboardingSession] = useState(0);
+   const [freshStartOnboarding, setFreshStartOnboarding] = useState(false);
 
    useEffect(() => {
       setName(getAllevinDisplayName(""));
@@ -115,18 +117,21 @@ export default function LifeDashboard() {
    }
 
    function resetLife() {
-      if (!window.confirm("Clear your ALLEVIN items and conversation from this browser?")) return;
-      resetAllevinLifeWorkspace({ preserveProfile: true });
+      if (!window.confirm("Start ALLEVIN fresh? This clears your schedule, activities, reminders, chat, and profile from this browser.")) return;
+      resetAllevinLifeWorkspace({ preserveProfile: false });
+      setName("");
+      setTone("balanced");
       setSettingsOpen(false);
-      // Clearing the workspace leaves the user's name intact but immediately
-      // offers the setup guide again so an empty dashboard never feels like a
-      // dead end.
+      setFreshStartOnboarding(true);
+      setOnboardingSession((value) => value + 1);
+      setFirstRunOnboarding(true);
       setOnboardingMode("setup");
    }
 
    function finishOnboarding() {
       setFirstRunOnboarding(false);
       setOnboardingMode(null);
+      setFreshStartOnboarding(false);
       setName(getAllevinDisplayName(""));
       setTone(readAllevinTone());
    }
@@ -136,7 +141,9 @@ export default function LifeDashboard() {
    if (firstRunOnboarding && onboardingMode === "setup") {
       return (
          <OnboardingFlow
+            key={`first-${onboardingSession}`}
             mode="setup"
+            freshStart={freshStartOnboarding}
             onClose={() => { setFirstRunOnboarding(false); setOnboardingMode(null); }}
             onComplete={finishOnboarding}
             onEnableReminders={rhythm.enableReminders}
@@ -170,15 +177,16 @@ export default function LifeDashboard() {
             notificationPermission={rhythm.notificationPermission}
             onEnableReminders={rhythm.enableReminders}
             onSetRemindersEnabled={rhythm.setRemindersEnabled}
-            onOpenSetup={() => { setSettingsOpen(false); setOnboardingMode("setup"); }}
             onOpenInstall={() => { setSettingsOpen(false); setOnboardingMode("install"); }}
             onReset={resetLife}
          />
 
          {onboardingMode ? (
             <OnboardingFlow
+               key={`overlay-${onboardingSession}-${onboardingMode}`}
                mode={onboardingMode}
-               onClose={() => setOnboardingMode(null)}
+               freshStart={freshStartOnboarding && onboardingMode === "setup"}
+               onClose={() => { setFreshStartOnboarding(false); setOnboardingMode(null); }}
                onComplete={finishOnboarding}
                onEnableReminders={rhythm.enableReminders}
                remindersEnabled={rhythm.state.remindersEnabled}

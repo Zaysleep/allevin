@@ -280,7 +280,7 @@ export default function CalendarWorkspace({ lifeState, rhythmState, nowMs }: { l
                   {(["day", "week", "month"] as CalendarView[]).map((value) => <button key={value} className={view === value ? "calendar-view-active" : ""} onClick={() => setView(value)}>{value.charAt(0).toUpperCase() + value.slice(1)}</button>)}
                </div>
                <button className="calendar-add" onClick={() => { setDraft(eventDraftForDate(selectedDate)); setRhythmManagerOpen(false); setRhythmEditTarget(null); setConflictMessage(""); setForceSave(false); }}><Plus size={15} /> Event</button>
-               <button className="calendar-add calendar-routine-add" onClick={() => { setDraft(null); setRhythmEditTarget(null); setRhythmManagerOpen(true); }}><Repeat2 size={15} /> Routine</button>
+               <button className="calendar-add calendar-routine-add" onClick={() => { setDraft(null); setRhythmEditTarget(null); setRhythmManagerOpen(true); }}><Repeat2 size={15} /> Activities</button>
             </div>
          </header>
 
@@ -352,7 +352,7 @@ export default function CalendarWorkspace({ lifeState, rhythmState, nowMs }: { l
 
          {rhythmManagerOpen ? (
             <div className="calendar-editor calendar-rhythm-manager">
-               <div className="calendar-editor-head"><strong>Schedule & routines</strong><button className="icon-button" onClick={() => { setRhythmManagerOpen(false); setRhythmEditTarget(null); }} aria-label="Close recurring schedule editor"><X size={16} /></button></div>
+               <div className="calendar-editor-head"><strong>Schedule & daily activities</strong><button className="icon-button" onClick={() => { setRhythmManagerOpen(false); setRhythmEditTarget(null); }} aria-label="Close recurring schedule editor"><X size={16} /></button></div>
                <RhythmSettingsEditor
                   state={rhythmState}
                   initialScheduleId={rhythmEditTarget?.kind === "schedule" ? rhythmEditTarget.id : undefined}

@@ -1182,6 +1182,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .onboarding-builder-list { display: grid; gap: 16px; }
 .onboarding-builder-card,
 .onboarding-routine-row { display: grid; gap: 18px; border: 1px solid var(--line); background: var(--paper-strong); padding: 20px; }
+.onboarding-builder-card.has-error { border-color: var(--danger); box-shadow: inset 3px 0 0 var(--danger); }
+.onboarding-inline-error { grid-column: 1 / -1; margin: -5px 0 0; color: var(--danger); font-size: .73rem; font-weight: 680; line-height: 1.45; }
 .onboarding-routine-fields { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; }
 .onboarding-collapsible-fields { display: grid; gap: 20px; border-top: 1px solid var(--line); padding-top: 20px; }
 .onboarding-full-day-schedule { width: 100%; display: grid; background: transparent; }
@@ -1403,7 +1405,23 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .settings-notification-test p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .72rem; }
 .settings-language-status { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 22px; }
 .settings-data-actions { display: grid; gap: 10px; margin-top: 22px; border-top: 1px solid var(--line); padding-top: 22px; }
-.settings-data-actions .settings-reset { justify-self: start; margin-top: 12px; }
+.settings-data-actions .settings-reset {
+   width: 100%;
+   min-height: 42px;
+   display: inline-flex;
+   align-items: center;
+   justify-content: flex-start;
+   margin-top: 0;
+   border: 1px solid var(--danger);
+   border-radius: 0;
+   background: transparent;
+   padding: 0 13px;
+   color: var(--danger);
+   font-size: .76rem;
+   font-weight: 730;
+}
+.settings-data-actions .settings-reset:hover,
+.settings-data-actions .settings-reset:focus-visible { background: rgba(154,69,69,.06); }
 .app-update-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 12px 0 0; border-left: 2px solid var(--accent); padding: 10px 0 10px 14px; color: var(--muted); font-size: .74rem; }
 .app-update-notice button { border: 0; border-bottom: 1px solid var(--accent); border-radius: 0; background: transparent; padding: 0 0 2px; color: var(--accent); font-size: .72rem; font-weight: 760; }
 

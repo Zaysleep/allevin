@@ -14,7 +14,7 @@ import { lifeOccurrencesBetween, readLifeState } from "@/lib/lifeStore";
 import type { LifeImportance, LifeItem } from "@/lib/lifeTypes";
 
 export const SERVER_PUSH_ACTIVE_KEY = "allevin-server-push-active-v1";
-const DEVICE_ID_KEY = "allevin-push-device-id-v1";
+export const ALLEVIN_PUSH_DEVICE_ID_KEY = "allevin-push-device-id-v1";
 const HORIZON_HOURS = 48;
 const RECURRING_HORIZON_DAYS = 40;
 let copyRetryTimer: number | undefined;
@@ -44,10 +44,10 @@ function randomId() {
 }
 
 function deviceId() {
-   let value = window.localStorage.getItem(DEVICE_ID_KEY);
+   let value = window.localStorage.getItem(ALLEVIN_PUSH_DEVICE_ID_KEY);
    if (!value) {
       value = randomId();
-      window.localStorage.setItem(DEVICE_ID_KEY, value);
+      window.localStorage.setItem(ALLEVIN_PUSH_DEVICE_ID_KEY, value);
    }
    return value;
 }
@@ -260,7 +260,7 @@ function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxx-reminder-intelligence-2", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxi-setup-reset-1", {
       scope: "/",
       updateViaCache: "none",
    });

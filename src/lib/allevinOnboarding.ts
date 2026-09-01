@@ -228,6 +228,17 @@ export function createBlankRoutineDraft(scheduleBlockId?: string): OnboardingRou
    };
 }
 
+/** A true first-run draft that never hydrates from an earlier setup. */
+export function createFreshOnboardingDraft(): OnboardingDraft {
+   return {
+      name: "",
+      scheduleBlocks: [],
+      routines: [],
+      bedtime: "",
+      tone: "balanced",
+   };
+}
+
 function signedRoutineOffset(routine: OnboardingRoutineDraft, linked: Pick<OnboardingScheduleDraft, "start" | "end">) {
    const reference = minutesFromClock(routine.timing === "before" ? linked.start : linked.end);
    const chosen = minutesFromClock(routine.time || "08:00");
@@ -253,19 +264,23 @@ export function buildOnboardingDayPreview(draft: OnboardingDraft, day: RhythmDay
       kind: "commitment",
    }));
    const routineRows = draft.routines.flatMap((routine): OnboardingPreviewRow[] => {
-      if (!sanitizeText(routine.title, 120)) return [];
+      // Keep an unnamed activity visible while it is being drafted. Previously
+      // backspacing the last character made the whole row disappear, which felt
+      // like the app had deleted the user's work.
+      const title = sanitizeText(routine.title, 120) || "New activity";
       if (routine.timing === "fixed") {
          if (routine.days.length && !routine.days.includes(day)) return [];
-         return [{ id: `routine:${routine.id}`, title: routine.title, start: routine.time, end: clockFromMinutes(minutesFromClock(routine.time) + clampMinutes(routine.durationMinutes, 30)), kind: "routine" }];
+         return [{ id: `routine:${routine.id}`, title, start: routine.time, end: clockFromMinutes(minutesFromClock(routine.time) + clampMinutes(routine.durationMinutes, 30)), kind: "routine" }];
       }
       const referenceDraft = draft.scheduleBlocks.find((block) => block.id === routine.scheduleBlockId);
       if (!referenceDraft) return [];
       const dayBlock = blocks.find((block) => block.id === referenceDraft.id) ||
-         (referenceDraft.category !== "other" ? blocks.find((block) => block.category === referenceDraft.category) : undefined);
+         (referenceDraft.category !== "other" ? blocks.find((block) => block.category === referenceDraft.category) : undefined) ||
+         referenceDraft;
       if (!dayBlock) return [];
       const reference = minutesFromClock(routine.timing === "before" ? dayBlock.start : dayBlock.end);
       const start = reference + signedRoutineOffset(routine, referenceDraft);
-      return [{ id: `routine:${routine.id}`, title: routine.title, start: clockFromMinutes(start), end: clockFromMinutes(start + clampMinutes(routine.durationMinutes, 30)), kind: "routine" }];
+      return [{ id: `routine:${routine.id}`, title, start: clockFromMinutes(start), end: clockFromMinutes(start + clampMinutes(routine.durationMinutes, 30)), kind: "routine" }];
    });
    return [...scheduleRows, ...routineRows].sort((left, right) => minutesFromClock(left.start) - minutesFromClock(right.start));
 }
@@ -348,7 +363,7 @@ export function applyOnboardingDraft(draft: OnboardingDraft) {
    if (incompleteSchedule) throw new Error("Choose at least one day, a start time, and an end time for each regular schedule.");
 
    const untitledRoutine = draft.routines.find((routine) => !sanitizeText(routine.title, 120));
-   if (untitledRoutine) throw new Error("Give each routine a name, or remove the empty routine before continuing.");
+   if (untitledRoutine) throw new Error("Give each activity a name, or remove the empty activity before continuing.");
 
    const unlinkedRelativeRoutine = draft.routines.find((routine) => routine.timing !== "fixed" && !draft.scheduleBlocks.some((block) => block.id === routine.scheduleBlockId));
    if (unlinkedRelativeRoutine) throw new Error(`Choose which regular schedule ${sanitizeText(unlinkedRelativeRoutine.title, 120)} should happen ${unlinkedRelativeRoutine.timing}.`);

@@ -193,7 +193,7 @@ function migrateLegacy(raw: Record<string, unknown>): DailyRhythmState {
       .filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object"))
       .map((anchor) => ({
          id: String(anchor.id || makeId("anchor")),
-         title: String(anchor.title || "Routine").slice(0, 120),
+         title: String(anchor.title || "Activity").slice(0, 120),
          category: /exercise|workout|gym/i.test(String(anchor.title))
             ? "exercise"
             : /breakfast|coffee|matcha|lunch|dinner|meal/i.test(String(anchor.title))
@@ -371,7 +371,7 @@ function normalizeRhythm(raw: unknown): DailyRhythmState {
 
               return {
                  id: String(entry.id || makeId("anchor")).slice(0, 120),
-                 title: String(entry.title || "Routine").slice(0, 120),
+                 title: String(entry.title || "Activity").slice(0, 120),
                  category,
                  time,
                  durationMinutes: Math.max(5, Math.min(360, Number(entry.durationMinutes) || 30)),
@@ -950,7 +950,7 @@ export function upsertRhythmAnchor(
    const anchor: RhythmAnchor = {
       ...input,
       id: input.id || makeId("anchor"),
-      title: String(input.title || "Routine").trim().slice(0, 120) || "Routine",
+      title: String(input.title || "Activity").trim().slice(0, 120) || "Activity",
       category,
       time,
       durationMinutes: Math.max(5, Math.min(360, Math.round(input.durationMinutes || 30))),

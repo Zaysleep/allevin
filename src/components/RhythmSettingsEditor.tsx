@@ -383,7 +383,7 @@ export default function RhythmSettingsEditor({
 
          {showRoutines ? <section className="settings-group">
             <div className="settings-group-heading">
-               <strong>Routine</strong>
+               <strong>Daily activities</strong>
                <button
                   className="settings-add-button"
                   onClick={() => {
@@ -499,7 +499,7 @@ export default function RhythmSettingsEditor({
                   </label>
 
                   {anchorDraft.repeatMode === "custom" ? (
-                     <div className="day-toggle-row" aria-label="Routine days">
+                     <div className="day-toggle-row" aria-label="Activity days">
                         {DAY_LABELS.map((label, index) => {
                            const day = index as RhythmDay;
                            const days = anchorDraft.days || [];
