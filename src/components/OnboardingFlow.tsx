@@ -533,7 +533,7 @@ export default function OnboardingFlow({
                      {standalone ? (
                         <>
                            <p>Want reminders?</p>
-                           <div className="onboarding-reminder-card"><Bell size={22} /><div><strong>Two useful reminders, not a notification pile-up.</strong><span>One before. One at the start. If the day changes, the reminder plan changes with it.</span></div></div>
+                           <div className="onboarding-reminder-card"><Bell size={22} /><div><strong>A live check-in, then the start.</strong><span>For meaningful plans, ALLEVIN checks that they’re still happening. If your day changes, the reminder plan changes with it.</span></div></div>
                            <button className="onboarding-primary onboarding-full-button" type="button" onClick={() => void enableReminders()} disabled={enabling || remindersEnabled}>{remindersEnabled ? "Reminders are on" : enabling ? "Turning reminders on…" : "Yes, turn on reminders"}</button>
                            {permissionMessage ? <p className="onboarding-permission-message">{permissionMessage}</p> : null}
                         </>

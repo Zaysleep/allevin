@@ -9,7 +9,7 @@ export interface StoredPushJob {
    tag: string;
    url: string;
    entryId?: string;
-   phase: "prep" | "start";
+   phase: "checkpoint" | "start";
    priority: 1 | 2 | 3 | 4 | 5;
    actionTarget?: {
       source: "rhythm" | "life";

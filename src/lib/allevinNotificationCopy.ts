@@ -1,6 +1,6 @@
 import type { AllevinTone } from "./allevinVoice";
 
-export type NotificationCopyPhase = "prep" | "start";
+export type NotificationCopyPhase = "checkpoint" | "start";
 
 export interface NotificationTimelineItem {
    id: string;

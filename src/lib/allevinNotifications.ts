@@ -30,7 +30,7 @@ import type { LifeItem, LifeImportance } from "@/lib/lifeTypes";
 import { serverPushIsActive } from "@/lib/allevinServerPushClient";
 
 const NOTIFICATION_LOG_KEY = "allevin-notification-log-mkxii-3";
-const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxii-language-manual-reminders-1";
+const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxiii-context-follow-through-1";
 let reminderCheckRunning = false;
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 
@@ -76,7 +76,7 @@ export async function enableAllevinNotifications() {
    return "granted" as const;
 }
 
-async function showNotification(title: string, body: string, tag: string, entryId?: string) {
+async function showNotification(title: string, body: string, tag: string, entryId?: string, url = "/") {
    if (!canNotify() || Notification.permission !== "granted") return;
    const registration = await navigator.serviceWorker.ready;
 
@@ -85,7 +85,7 @@ async function showNotification(title: string, body: string, tag: string, entryI
       tag,
       icon: "/allevin-icon-192.png",
       badge: "/allevin-icon-192.png",
-      data: { url: "/", entryId },
+      data: { url, entryId },
    });
 }
 
@@ -125,10 +125,11 @@ async function showContextualNotification(
    title: string,
    tag: string,
    entryId?: string,
+   url = "/",
 ) {
    const copy = notificationCopyFromCache(context) || (await prepareNotificationBodies([context])).get(context.id);
    if (!copy) return false;
-   await showNotification(copy.title, copy.body, tag, entryId);
+   await showNotification(copy.title, copy.body, tag, entryId, url);
    return true;
 }
 
@@ -150,11 +151,21 @@ function localReminderPriorityForLife(item: LifeItem): ReminderPriority {
 }
 
 function leadMinutesForPriority(priority: number) {
-   if (priority >= 5) return 30;
-   if (priority === 4) return 20;
-   if (priority === 3) return 15;
-   if (priority === 2) return 10;
+   if (priority >= 5) return 15;
+   if (priority >= 3) return 10;
+   if (priority === 2) return 5;
    return 5;
+}
+
+function eventUrl(kind: "checkpoint" | "start", source: "rhythm" | "life", id: string, dateKey: string, title: string) {
+   const query = new URLSearchParams({
+      [kind === "checkpoint" ? "allevinCheckpoint" : "allevinEvent"]: "1",
+      source,
+      id,
+      date: dateKey,
+      title: title.slice(0, 80),
+   });
+   return `/?${query.toString()}`;
 }
 
 function lifeStartMinutes(item: LifeItem) {
@@ -204,17 +215,17 @@ export async function runRhythmReminderCheck(now = new Date()) {
          const start = minutesFromClock(entry.time);
          const priority = localReminderPriorityForEntry(entry);
          const lead = leadMinutesForPriority(priority);
-         const prepAt = start - lead;
+         const checkpointAt = start - lead;
          const hasExplicitTransition = entries.some((candidate) => {
             if (candidate.id === entry.id || candidate.kind === "schedule" || candidate.completed || candidate.skipped) return false;
             const candidateEnd = minutesFromClock(candidate.time) + Math.max(0, candidate.durationMinutes || 0);
             return Math.abs(candidateEnd - start) <= 2;
          });
-         const prepKey = `${key}:${entry.sourceId}:${entry.time}:schedule-prep`;
-         if (!hasExplicitTransition && nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
-            const context = rhythmNotificationContext({ id: prepKey, entry, date: now, phase: "prep", tone, priority, leadMinutes: lead, timeline });
-            if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-schedule-prep`, entry.sourceId)) {
-               log.add(prepKey);
+         const checkpointKey = `${key}:${entry.sourceId}:${entry.time}:schedule-checkpoint`;
+         if (!hasExplicitTransition && nowMinutes >= checkpointAt && nowMinutes <= checkpointAt + 1 && !log.has(checkpointKey)) {
+            const context = rhythmNotificationContext({ id: checkpointKey, entry, date: now, phase: "checkpoint", tone, priority, leadMinutes: lead, timeline });
+            if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-schedule-checkpoint`, entry.sourceId, eventUrl("checkpoint", "rhythm", entry.sourceId, key, entry.title))) {
+               log.add(checkpointKey);
                saveLog(log);
             }
          }
@@ -222,7 +233,7 @@ export async function runRhythmReminderCheck(now = new Date()) {
          const scheduleKey = `${key}:${entry.sourceId}:${entry.time}:schedule-start`;
          if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(scheduleKey)) {
             const context = rhythmNotificationContext({ id: scheduleKey, entry, date: now, phase: "start", tone, priority, leadMinutes: lead, timeline });
-            if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-schedule`, entry.sourceId)) {
+            if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-schedule`, entry.sourceId, eventUrl("start", "rhythm", entry.sourceId, key, entry.title))) {
                log.add(scheduleKey);
                saveLog(log);
             }
@@ -241,12 +252,12 @@ export async function runRhythmReminderCheck(now = new Date()) {
       // notify again instead of being blocked by the stale delivery record.
       const priority = localReminderPriorityForEntry(entry);
       const lead = leadMinutesForPriority(priority);
-      const prepAt = start - lead;
-      const prepKey = `${key}:${entry.sourceId}:${entry.time}:prep`;
-      if (nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
-         const context = rhythmNotificationContext({ id: prepKey, entry, date: now, phase: "prep", tone, priority, leadMinutes: lead, timeline });
-         if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-prep`, entry.sourceId)) {
-            log.add(prepKey);
+      const checkpointAt = start - lead;
+      const checkpointKey = `${key}:${entry.sourceId}:${entry.time}:checkpoint`;
+      if (nowMinutes >= checkpointAt && nowMinutes <= checkpointAt + 1 && !log.has(checkpointKey)) {
+         const context = rhythmNotificationContext({ id: checkpointKey, entry, date: now, phase: "checkpoint", tone, priority, leadMinutes: lead, timeline });
+         if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-checkpoint`, entry.sourceId, eventUrl("checkpoint", "rhythm", entry.sourceId, key, entry.title))) {
+            log.add(checkpointKey);
             saveLog(log);
          }
       }
@@ -255,7 +266,7 @@ export async function runRhythmReminderCheck(now = new Date()) {
 
       if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(startKey)) {
          const context = rhythmNotificationContext({ id: startKey, entry, date: now, phase: "start", tone, priority, leadMinutes: lead, timeline });
-         if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-start`, entry.sourceId)) {
+         if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-start`, entry.sourceId, eventUrl("start", "rhythm", entry.sourceId, key, entry.title))) {
             log.add(startKey);
             saveLog(log);
          }
@@ -271,13 +282,13 @@ export async function runRhythmReminderCheck(now = new Date()) {
 
       const priority = localReminderPriorityForLife(item);
       const lead = leadMinutesForPriority(priority);
-      const prepAt = start - lead;
+      const checkpointAt = start - lead;
       const occurrenceAt = item.startAt || item.dueAt || 0;
-      const prepKey = `${key}:life:${item.id}:${occurrenceAt}:prep`;
-      if (item.recurrence !== "interval" && nowMinutes >= prepAt && nowMinutes <= prepAt + 1 && !log.has(prepKey)) {
-         const context = lifeNotificationContext({ id: prepKey, item, phase: "prep", tone, priority, leadMinutes: lead, timeline });
-         if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-prep`, item.id)) {
-            log.add(prepKey);
+      const checkpointKey = `${key}:life:${item.id}:${occurrenceAt}:checkpoint`;
+      if (item.recurrence === "none" && nowMinutes >= checkpointAt && nowMinutes <= checkpointAt + 1 && !log.has(checkpointKey)) {
+         const context = lifeNotificationContext({ id: checkpointKey, item, phase: "checkpoint", tone, priority, leadMinutes: lead, timeline });
+         if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-checkpoint`, item.id, eventUrl("checkpoint", "life", item.id, key, item.title))) {
+            log.add(checkpointKey);
             saveLog(log);
          }
       }
@@ -285,15 +296,15 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const eventKey = `${key}:life:${item.id}:${occurrenceAt}:start`;
       if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(eventKey)) {
          const context = lifeNotificationContext({ id: eventKey, item, phase: "start", tone, priority, leadMinutes: lead, timeline });
-         if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-start`, item.id)) {
+         if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-start`, item.id, eventUrl("start", "life", item.id, key, item.title))) {
             log.add(eventKey);
             saveLog(log);
          }
       }
    }
 
-   // Personal Alpha notifications are intentionally limited to the two task
-   // phases requested by the user: preparation and exact start. No automatic
+   // Notifications are intentionally limited to a live checkpoint and exact
+   // start. No automatic
    // accountability or generic evening-reset push is emitted here.
       saveLog(log);
    } finally {

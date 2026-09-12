@@ -561,7 +561,7 @@ export function interpretAdaptiveDayConversation(
    // The hard schedule changes only for this occurrence, and all schedule-linked
    // routines automatically disappear/recalculate with it.
    const cancelsWork =
-      /\b(?:not going to work|calling out(?: of work)?|taking (?:today|tomorrow|the day) off work|i'?m off work|i am off work|no work|work (?:is |got )?cancelled|work (?:is |got )?canceled)\b/.test(lower);
+      /\b(?:not going to work|call(?:ed|ing)? out(?: sick| of work)?|taking (?:today|tomorrow|the day) off work|i'?m off work|i am off work|no work|work (?:is |got )?cancelled|work (?:is |got )?canceled)\b/.test(lower);
    const cancelsSchool =
       /\b(?:not going to class|not going to school|no class|class (?:is |got )?cancelled|class (?:is |got )?canceled|school (?:is |got )?cancelled|school (?:is |got )?canceled)\b/.test(lower);
 

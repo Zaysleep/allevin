@@ -20,7 +20,7 @@ const RECURRING_HORIZON_DAYS = 40;
 let copyRetryTimer: number | undefined;
 let copyRetryAttempts = 0;
 
-type ReminderPhase = "prep" | "start";
+type ReminderPhase = "checkpoint" | "start";
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 
 interface PushPlanJob {
@@ -64,7 +64,7 @@ function clampPriority(value: number): ReminderPriority {
 }
 
 /**
- * Reminder priority is deliberately deterministic. It controls *when* the prep
+ * Reminder priority is deliberately deterministic. It controls *when* the checkpoint
  * reminder arrives, not whether ALLEVIN decides the user's life is important.
  * Exact commitments and hard schedule transitions score higher; low-importance
  * items score lower. The user-facing schedule remains authoritative.
@@ -86,8 +86,8 @@ function rateLifeItem(item: LifeItem): ReminderPriority {
    return clampPriority(score);
 }
 
-function prepLeadMinutes(priority: ReminderPriority) {
-   return ({ 1: 5, 2: 10, 3: 15, 4: 20, 5: 30 } as const)[priority];
+function checkpointLeadMinutes(priority: ReminderPriority) {
+   return ({ 1: 5, 2: 5, 3: 10, 4: 10, 5: 15 } as const)[priority];
 }
 
 function shouldScheduleRhythm(entry: RhythmEntry, dateKey: string) {
@@ -100,7 +100,7 @@ function shouldScheduleRhythm(entry: RhythmEntry, dateKey: string) {
    return anchor?.reminder ?? Boolean(temporary);
 }
 
-function addTwoPhaseJobs({
+function addEventJobs({
    jobs,
    device,
    sourceId,
@@ -109,7 +109,7 @@ function addTwoPhaseJobs({
    title,
    priority,
    buildCopyContext,
-   includePrep,
+   includeCheckpoint,
    actionTarget,
 }: {
    jobs: PushPlanJob[];
@@ -120,30 +120,30 @@ function addTwoPhaseJobs({
    title: string;
    priority: ReminderPriority;
    buildCopyContext: (id: string, phase: ReminderPhase, leadMinutes: number) => NotificationCopyContext;
-   includePrep?: boolean;
+   includeCheckpoint?: boolean;
    actionTarget?: PushPlanJob["actionTarget"];
 }) {
-   const lead = prepLeadMinutes(priority);
-   const prepAt = startAt - lead * 60_000;
+   const lead = checkpointLeadMinutes(priority);
+   const checkpointAt = startAt - lead * 60_000;
    const now = Date.now();
 
-   // Exactly two phases exist by design: one preparation reminder and one at
-   // the scheduled start. A parent schedule may omit its prep phase when an
+   // A meaningful event receives one live checkpoint and one start notice.
+   // A parent schedule may omit its checkpoint when an
    // explicit transition routine already ends at that exact start time; that
    // avoids two notifications describing the same transition in the same minute.
-   if (includePrep !== false && prepAt > now + 5_000) {
-      const id = `${device}:${dateKey}:${sourceId}:prep:${startAt}`;
-      const copyContext = buildCopyContext(id, "prep", lead);
+   if (includeCheckpoint !== false && checkpointAt > now + 5_000) {
+      const id = `${device}:${dateKey}:${sourceId}:checkpoint:${startAt}`;
+      const copyContext = buildCopyContext(id, "checkpoint", lead);
       jobs.push({
          id,
          deviceId: device,
-         dueAt: prepAt,
+         dueAt: checkpointAt,
          title,
          body: "",
-         tag: `allevin-${dateKey}-${sourceId}-prep`,
-         url: "/",
+         tag: `allevin-${dateKey}-${sourceId}-checkpoint`,
+         url: `/?allevinCheckpoint=1&source=${actionTarget?.source || ""}&id=${encodeURIComponent(actionTarget?.id || sourceId)}&date=${dateKey}&title=${encodeURIComponent(title.slice(0, 80))}`,
          entryId: sourceId,
-         phase: "prep",
+         phase: "checkpoint",
          priority,
          actionTarget,
          copyContext,
@@ -160,7 +160,7 @@ function addTwoPhaseJobs({
          title,
          body: "",
          tag: `allevin-${dateKey}-${sourceId}-start`,
-         url: "/",
+         url: `/?allevinEvent=1&source=${actionTarget?.source || ""}&id=${encodeURIComponent(actionTarget?.id || sourceId)}&date=${dateKey}&title=${encodeURIComponent(title.slice(0, 80))}`,
          entryId: sourceId,
          phase: "start",
          priority,
@@ -206,7 +206,7 @@ function buildPushPlan(device: string) {
          const startAt = timestampForLocalClock(date, entry.time);
          if (startAt > horizon) continue;
          const priority = rateRhythmEntry(entry);
-         addTwoPhaseJobs({
+         addEventJobs({
             jobs,
             device,
             sourceId: entry.id,
@@ -215,7 +215,7 @@ function buildPushPlan(device: string) {
             title: entry.title,
             priority,
             buildCopyContext: (id, phase, leadMinutes) => rhythmNotificationContext({ id, entry, date, phase, tone, priority, leadMinutes, timeline }),
-            includePrep: !hasExplicitTransitionInto(entry, entries),
+            includeCheckpoint: !hasExplicitTransitionInto(entry, entries),
             actionTarget: entry.kind === "anchor"
                ? { source: "rhythm", id: entry.sourceId, dateKey }
                : undefined,
@@ -239,7 +239,7 @@ function buildPushPlan(device: string) {
          const dateKey = localDateKey(date);
          const timeline = timelineByDate.get(dateKey) || buildNotificationTimeline(date, buildRhythmForDate(rhythm, date), lifeItems);
          const priority = rateLifeItem(item);
-         addTwoPhaseJobs({
+         addEventJobs({
             jobs,
             device,
             sourceId: `life:${item.id}`,
@@ -249,8 +249,8 @@ function buildPushPlan(device: string) {
             priority,
             buildCopyContext: (id, phase, leadMinutes) => lifeNotificationContext({ id, item, phase, tone, priority, leadMinutes, timeline, occurrenceAt: startAt }),
             // A repeated care nudge should remain one notification per
-            // occurrence, not turn into a prep/start avalanche.
-            includePrep: item.recurrence !== "none" ? false : undefined,
+            // occurrence, not turn into a checkpoint/start avalanche.
+            includeCheckpoint: item.recurrence !== "none" ? false : undefined,
             actionTarget: { source: "life", id: item.id, dateKey },
          });
       }
@@ -260,7 +260,7 @@ function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxii-language-manual-reminders-1", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxiii-context-follow-through-1", {
       scope: "/",
       updateViaCache: "none",
    });

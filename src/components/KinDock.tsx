@@ -279,6 +279,7 @@ export default function KinDock() {
    const [messages, setMessages] = useState<KinMessage[]>([]);
    const [busy, setBusy] = useState(false);
    const [languageStatus, setLanguageStatus] = useState("");
+   const [checkpointTitle, setCheckpointTitle] = useState("");
    const inputRef = useRef<HTMLInputElement>(null);
    const scrollRef = useRef<HTMLDivElement>(null);
    const sendLockRef = useRef(false);
@@ -297,6 +298,17 @@ export default function KinDock() {
          window.removeEventListener(KIN_CONVERSATION_UPDATED_EVENT, refresh);
          window.removeEventListener(KIN_FOCUS_EVENT, focusAllevin);
       };
+   }, []);
+
+   useEffect(() => {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("allevinCheckpoint") !== "1" && url.searchParams.get("allevinEvent") !== "1") return;
+      const title = (url.searchParams.get("title") || "").trim().slice(0, 80);
+      setCheckpointTitle(title);
+      setOpen(true);
+      for (const key of ["allevinCheckpoint", "allevinEvent", "source", "id", "date", "title"]) url.searchParams.delete(key);
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      window.setTimeout(() => inputRef.current?.focus(), 80);
    }, []);
 
    useEffect(() => {
@@ -323,6 +335,15 @@ export default function KinDock() {
       setBusy(true);
       const conversationBefore = readKinConversation();
       let prompt = submittedPrompt;
+      if (
+         checkpointTitle &&
+         /^(?:it|that|this|the event|the appointment|the meeting)?\s*(?:is|was|got|has been)?\s*(?:cancelled|canceled|off|not happening)|^(?:i'?m|i am)\s+(?:not going|running late)|^running\s+\d{1,3}\s+minutes?\s+late/i.test(submittedPrompt)
+      ) {
+         // The visible chat preserves the user's natural follow-up. Internally,
+         // attach only the verified title from the notification they opened so
+         // deterministic matching can resolve "it" without guessing.
+         prompt = `${checkpointTitle}: ${submittedPrompt}`;
+      }
       appendKinMessage("user", submittedPrompt);
       setLanguageStatus("");
 
@@ -728,7 +749,7 @@ ${buildMemoryContext(effectiveRhythm, tone)}`,
                      ref={inputRef}
                      value={input}
                      onChange={(event: ChangeEvent<HTMLInputElement>) => setInput(event.target.value)}
-                     placeholder="Tell ALLEVIN what changed…"
+                     placeholder={checkpointTitle ? `What changed with ${checkpointTitle}?` : "Tell ALLEVIN what changed…"}
                      aria-label="Talk to ALLEVIN"
                      disabled={busy}
                   />

@@ -50,7 +50,7 @@ function sanitizeContext(value: unknown): NotificationCopyContext | null {
    const id = clean(raw.id, 320);
    const occurrenceKey = clean(raw.occurrenceKey, 360);
    const title = clean(raw.title, 160);
-   const phase = raw.phase === "prep" || raw.phase === "start" ? raw.phase : null;
+   const phase = raw.phase === "checkpoint" || raw.phase === "start" ? raw.phase : null;
    const tone: AllevinTone = raw.tone === "balanced" || raw.tone === "calm" ? raw.tone : "direct";
    const priority = safeInteger(raw.priority, 1, 5) as NotificationCopyContext["priority"];
    if (!id || !occurrenceKey || !title || !phase) return null;
@@ -141,7 +141,7 @@ function buildPrompt(
       startsAtLocalTime: context.startsAtLabel,
       endsAtLocalTime: context.endsAtLabel,
       timeOfDay: context.timeOfDay,
-      minutesBeforeStart: context.phase === "prep" ? context.leadMinutes : 0,
+      minutesBeforeStart: context.phase === "checkpoint" ? context.leadMinutes : 0,
       previousVerifiedItem: context.previous
          ? {
               title: context.previous.title,
@@ -166,7 +166,7 @@ function buildPrompt(
          role: "system" as const,
          content: `You write short notification bodies for ALLEVIN, a personal life assistant.
 
-ALLEVIN's deterministic schedule engine has already selected the item, delivery time, PREP/START phase, duration, next event, and transition gap. Those supplied facts are authoritative. You only phrase them.
+ALLEVIN's deterministic schedule engine has already selected the item, delivery time, CHECKPOINT/START phase, duration, next event, and transition gap. Those supplied facts are authoritative. You only phrase them.
 
 Return JSON exactly shaped as {"copies":[{"id":"exact supplied id","title":"short notification title","body":"notification body"}]}.
 
@@ -190,7 +190,8 @@ COPY RULES
 - If the next item is 60 or more minutes away, state its supplied startsAtLocalTime instead of expressing the gap as a large number of minutes. Never make the user convert 60+ minutes into a clock time.
 - If the next item is under 60 minutes away, a natural minute countdown is acceptable.
 - A negative gapAfterCurrentEndsMinutes means the verified next item begins while the current item is still underway. Do not call that a conflict.
-- PREP means the current item begins in minutesBeforeStart minutes. START means it is time to begin, but avoid robotic wording such as "starts now."
+- CHECKPOINT means a meaningful event begins in minutesBeforeStart minutes. Write a brief situational check-in that makes it natural for the user to open ALLEVIN and report a change. Use a light question when it fits, such as whether the plan is still on; do not claim the user confirmed anything. START means it is time to begin, but avoid robotic wording such as "starts now."
+- A CHECKPOINT is not a generic advance warning. Ground it in the event and leave room for reality to have changed. Do not ask more than one question.
 - Direct tone is concise and confident, not hostile or scolding. Balanced is natural and restrained. Calm is gentle and low-pressure.
 - Most messages should be straightforward. Dry/playful personality may appear occasionally, never in every message.
 - No insults, guilt, hype, productivity language, slogans, emojis, the user's name, or fictional-character imitation.
