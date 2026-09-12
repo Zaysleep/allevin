@@ -260,7 +260,7 @@ function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxiii-context-follow-through-1", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxiii-context-follow-through-2", {
       scope: "/",
       updateViaCache: "none",
    });

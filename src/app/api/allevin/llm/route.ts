@@ -308,6 +308,15 @@ function resolveRelativeTiming(
       precision = "window";
    }
 
+   if (matched && /\bnext month\b/.test(lower)) {
+      const requestedDay = lower.match(/\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+(?:day\s+)?of\s+(?:the\s+)?next month\b/)?.[1];
+      if (requestedDay) {
+         const lastDay = new Date(Date.UTC(year, month + 1, 0, 12, 0, 0, 0)).getUTCDate();
+         date = Math.min(Math.max(1, Number(requestedDay)), lastDay);
+         precision = "day";
+      }
+   }
+
    const weekdays: Record<string, number> = {
       sunday: 0,
       monday: 1,

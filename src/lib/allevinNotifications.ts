@@ -30,7 +30,7 @@ import type { LifeItem, LifeImportance } from "@/lib/lifeTypes";
 import { serverPushIsActive } from "@/lib/allevinServerPushClient";
 
 const NOTIFICATION_LOG_KEY = "allevin-notification-log-mkxii-3";
-const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxiii-context-follow-through-1";
+const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxiii-context-follow-through-2";
 let reminderCheckRunning = false;
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 

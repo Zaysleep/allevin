@@ -39,6 +39,7 @@ export interface NotificationCopyContext {
    startsAtLabel: string;
    endsAtLabel: string;
    timeOfDay: "morning" | "afternoon" | "evening" | "night";
+   dayClosing: boolean;
    previous?: NotificationPreviousContext;
    next?: NotificationUpcomingContext;
 }
@@ -147,7 +148,9 @@ export function createNotificationCopyContext({
    timeline: NotificationTimelineItem[];
 }): NotificationCopyContext {
    const safeTitle = cleanInline(title, 160) || "This item";
+   const dayClosing = /\b(?:bedtime|bed|sleep|wind down|winding down|night routine)\b|\bplug in\b.*\bphone\b/.test(normalized(safeTitle));
    const next = [...timeline]
+      .filter(() => !dayClosing)
       .filter((item) => item.id !== timelineId && item.startAt > startAt + 60_000 && normalized(item.title) !== normalized(safeTitle))
       .sort((left, right) => left.startAt - right.startAt)
       .find((item) => item.startAt - startAt <= 6 * 60 * 60 * 1000);
@@ -170,6 +173,7 @@ export function createNotificationCopyContext({
       startsAtLabel: localClockLabel(startAt),
       endsAtLabel: localClockLabel(endAt),
       timeOfDay: localTimeOfDay(startAt),
+      dayClosing,
       previous: previous
          ? {
               title: cleanInline(previous.title, 160),
@@ -204,6 +208,7 @@ export function notificationCopyCacheKey(context: NotificationCopyContext) {
       startsAtLabel: context.startsAtLabel,
       endsAtLabel: context.endsAtLabel,
       timeOfDay: context.timeOfDay,
+      dayClosing: context.dayClosing,
       previous: context.previous,
       next: context.next,
    });
@@ -227,6 +232,7 @@ export function validateNotificationBody(value: unknown, context: NotificationCo
    if (DISALLOWED_COPY.some((phrase) => lower.includes(phrase))) return null;
    if (/\b(?:you(?:'ve| have) got|there(?:'s| is)|about)\b[^.!?]{0,35}\b(?:for this task|for this reminder|to do this)\b/i.test(lower)) return null;
    if (/\b(?:this task|this reminder)\b/i.test(lower)) return null;
+   if (context.dayClosing && /\b(?:next (?:call|routine|event|appointment|commitment|step)|transition(?:ing)? (?:smoothly )?(?:into|to))\b/i.test(lower)) return null;
    const currentTitle = normalized(context.title);
    if (currentTitle.length >= 4 && normalized(body).includes(currentTitle)) return null;
    if (

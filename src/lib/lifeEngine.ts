@@ -249,6 +249,18 @@ export function parseLifeDateTime(value: string, nowTimestamp = Date.now()) {
       precision = "window";
    }
 
+   // “The 14th of next month” must remain in the immediately following
+   // calendar month. The language model may phrase the acknowledgement, but
+   // deterministic date handling owns both the month and the requested day.
+   if (date && /\bnext month\b/.test(lower)) {
+      const requestedDay = lower.match(/\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+(?:day\s+)?of\s+(?:the\s+)?next month\b/)?.[1];
+      if (requestedDay) {
+         const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+         date.setDate(Math.min(Math.max(1, Number(requestedDay)), lastDay));
+         precision = "day";
+      }
+   }
+
    const weekdays: Record<string, number> = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
    if (!date) {
       for (const [name, day] of Object.entries(weekdays)) {
