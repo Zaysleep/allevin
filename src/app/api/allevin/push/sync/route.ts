@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { pushStoreConfigured, replaceDevicePushPlan, type StoredPushJob } from "@/lib/allevinPushStore";
+import { mergeDevicePushPlan, pushStoreConfigured, replaceDevicePushPlan, type StoredPushJob } from "@/lib/allevinPushStore";
 
 export const runtime = "nodejs";
 
@@ -60,6 +60,8 @@ export async function POST(request: Request) {
       deviceId?: unknown;
       subscription?: PushSubscriptionJSON;
       jobs?: unknown[];
+      complete?: unknown;
+      expectedJobs?: unknown;
    } | null;
    const deviceId = cleanDeviceId(payload?.deviceId);
    const subscription = payload?.subscription;
@@ -72,6 +74,14 @@ export async function POST(request: Request) {
       .filter((job): job is StoredPushJob => Boolean(job))
       .slice(0, 160);
 
-   const count = await replaceDevicePushPlan({ deviceId, subscription, jobs });
-   return NextResponse.json({ ok: true, jobs: count });
+   const complete = payload?.complete === true;
+   const expectedJobs = Math.max(0, Math.min(160, Math.round(Number(payload?.expectedJobs) || 0)));
+   if (complete && (jobs.length !== expectedJobs || jobs.length !== (Array.isArray(payload?.jobs) ? payload!.jobs.length : 0))) {
+      return NextResponse.json({ error: "The complete push plan did not validate." }, { status: 400 });
+   }
+
+   const count = complete
+      ? await replaceDevicePushPlan({ deviceId, subscription, jobs })
+      : await mergeDevicePushPlan({ deviceId, subscription, jobs });
+   return NextResponse.json({ ok: true, jobs: count, mode: complete ? "replaced" : "merged", complete });
 }

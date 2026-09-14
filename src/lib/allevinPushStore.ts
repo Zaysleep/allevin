@@ -21,7 +21,10 @@ export interface StoredPushJob {
 const JOBS_KEY = "allevin:push:jobs:v1";
 const DEVICE_PREFIX = "allevin:push:device:v1:";
 const DEVICE_JOBS_PREFIX = "allevin:push:device-jobs:v1:";
+const DEVICE_RECEIPTS_PREFIX = "allevin:push:receipts:mkxxiv:";
+const SCHEDULER_HEARTBEAT_KEY = "allevin:push:scheduler-heartbeat:mkxxiv";
 const DEVICE_TTL_SECONDS = 60 * 60 * 24 * 90;
+const RECEIPT_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 function redisConfig() {
    // Vercel Marketplace/Upstash has used both naming schemes over time. The
@@ -83,6 +86,10 @@ function deviceJobsKey(deviceId: string) {
    return `${DEVICE_JOBS_PREFIX}${deviceId}`;
 }
 
+function deviceReceiptsKey(deviceId: string) {
+   return `${DEVICE_RECEIPTS_PREFIX}${deviceId}`;
+}
+
 export async function replaceDevicePushPlan({
    deviceId,
    subscription,
@@ -111,6 +118,103 @@ export async function replaceDevicePushPlan({
    commands.push(["EXPIRE", deviceJobsKey(deviceId), DEVICE_TTL_SECONDS]);
    await pipeline(commands);
    return jobs.length;
+}
+
+/**
+ * A partial language response must never erase an already healthy queue.
+ * Merge the jobs that were prepared successfully and leave every other future
+ * occurrence in place until a later complete sync can safely reconcile it.
+ */
+export async function mergeDevicePushPlan({
+   deviceId,
+   subscription,
+   jobs,
+}: {
+   deviceId: string;
+   subscription: PushSubscriptionJSON;
+   jobs: StoredPushJob[];
+}) {
+   const oldMembers = await command<string[]>(["SMEMBERS", deviceJobsKey(deviceId)]).catch(() => []);
+   const incomingIds = new Set(jobs.map((job) => job.id));
+   const commands: Array<Array<string | number>> = [
+      ["SET", deviceKey(deviceId), JSON.stringify(subscription), "EX", DEVICE_TTL_SECONDS],
+   ];
+
+   for (const member of oldMembers || []) {
+      let remove = false;
+      try {
+         const old = JSON.parse(member) as StoredPushJob;
+         remove = incomingIds.has(old.id) || old.dueAt < Date.now() - 60_000;
+      } catch {
+         remove = true;
+      }
+      if (remove) {
+         commands.push(["ZREM", JOBS_KEY, member]);
+         commands.push(["SREM", deviceJobsKey(deviceId), member]);
+      }
+   }
+
+   for (const job of jobs) {
+      const member = JSON.stringify(job);
+      commands.push(["ZADD", JOBS_KEY, job.dueAt, member]);
+      commands.push(["SADD", deviceJobsKey(deviceId), member]);
+   }
+   commands.push(["EXPIRE", deviceJobsKey(deviceId), DEVICE_TTL_SECONDS]);
+   await pipeline(commands);
+   return jobs.length;
+}
+
+export async function readDevicePushPlan(deviceId: string) {
+   const members = await command<string[]>(["SMEMBERS", deviceJobsKey(deviceId)]).catch(() => []);
+   return (members || [])
+      .map((member) => {
+         try {
+            return JSON.parse(member) as StoredPushJob;
+         } catch {
+            return null;
+         }
+      })
+      .filter((job): job is StoredPushJob => Boolean(job && job.dueAt >= Date.now() - 60_000))
+      .sort((left, right) => left.dueAt - right.dueAt);
+}
+
+export type PushReceiptKind = "sent" | "shown" | "opened" | "failed";
+
+export async function recordPushReceipt(deviceId: string, jobId: string, kind: PushReceiptKind, at = Date.now()) {
+   const safeJobId = jobId.slice(0, 320);
+   const receipt = JSON.stringify({ jobId: safeJobId, kind, at });
+   await pipeline([
+      ["HSET", deviceReceiptsKey(deviceId), `${safeJobId}:${kind}`, receipt],
+      ["EXPIRE", deviceReceiptsKey(deviceId), RECEIPT_TTL_SECONDS],
+   ]);
+}
+
+export async function readPushDeliveryHealth(deviceId: string) {
+   const raw = await command<string[] | Record<string, string>>(["HGETALL", deviceReceiptsKey(deviceId)]).catch(() => []);
+   const values = Array.isArray(raw)
+      ? raw.filter((_, index) => index % 2 === 1)
+      : Object.values(raw || {});
+   const receipts = values.flatMap((value) => {
+      try {
+         const parsed = JSON.parse(value) as { jobId?: unknown; kind?: unknown; at?: unknown };
+         if (typeof parsed.jobId !== "string" || !["sent", "shown", "opened", "failed"].includes(String(parsed.kind)) || !Number.isFinite(Number(parsed.at))) return [];
+         return [{ jobId: parsed.jobId, kind: parsed.kind as PushReceiptKind, at: Number(parsed.at) }];
+      } catch {
+         return [];
+      }
+   });
+   const latest = (kind: PushReceiptKind) => receipts.filter((entry) => entry.kind === kind).sort((a, b) => b.at - a.at)[0]?.at;
+   return { lastSentAt: latest("sent"), lastShownAt: latest("shown"), lastOpenedAt: latest("opened"), lastFailedAt: latest("failed") };
+}
+
+export async function recordPushSchedulerHeartbeat(at = Date.now()) {
+   await command(["SET", SCHEDULER_HEARTBEAT_KEY, at, "EX", 60 * 60 * 24 * 7]);
+}
+
+export async function readPushSchedulerHeartbeat() {
+   const value = await command<string | null>(["GET", SCHEDULER_HEARTBEAT_KEY]).catch(() => null);
+   const timestamp = Number(value);
+   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
 }
 
 export async function readDeviceSubscription(deviceId: string) {
@@ -159,5 +263,6 @@ export async function forgetDevice(deviceId: string) {
    for (const member of oldMembers || []) commands.push(["ZREM", JOBS_KEY, member]);
    commands.push(["DEL", deviceJobsKey(deviceId)]);
    commands.push(["DEL", deviceKey(deviceId)]);
+   commands.push(["DEL", deviceReceiptsKey(deviceId)]);
    await pipeline(commands);
 }

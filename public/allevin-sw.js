@@ -5,7 +5,21 @@
  * can wake the installed PWA later without changing the client UI contract.
  */
 
-const SW_VERSION = "mkxxiii-context-follow-through-2";
+const SW_VERSION = "mkxxiv-reliable-follow-through-1";
+
+async function reportReceipt(data, kind) {
+  if (!data?.deviceId || !data?.jobId) return;
+  await fetch("/api/allevin/push/receipt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId: data.deviceId, jobId: data.jobId, kind, at: Date.now() }),
+  }).catch(() => null);
+}
+
+async function tellOpenClients(kind, data) {
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  for (const client of windows) client.postMessage({ type: "ALLEVIN_NOTIFICATION_RECEIPT", kind, at: Date.now(), jobId: data?.jobId });
+}
 
 self.addEventListener("install", () => {
   // Promote a newly deployed worker immediately. ALLEVIN stores user state in
@@ -51,7 +65,15 @@ self.addEventListener("push", (event) => {
     },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    // Local foreground checks and Web Push use the same tag. If the local path
+    // already showed this occurrence, the server delivery becomes a receipt
+    // instead of a second alert.
+    const existing = await self.registration.getNotifications({ tag: options.tag });
+    if (!existing.length) await self.registration.showNotification(title, options);
+    await reportReceipt(options.data, "shown");
+    await tellOpenClients("shown", options.data);
+  })());
 });
 
 self.addEventListener("notificationclick", (event) => {
@@ -67,14 +89,16 @@ self.addEventListener("notificationclick", (event) => {
   }
   const target = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
 
-  event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+  event.waitUntil((async () => {
+    await reportReceipt(data, "opened");
+    await tellOpenClients("opened", data);
+    return self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
       const existing = windows.find((client) => "focus" in client);
       if (existing) {
-        existing.navigate(target);
-        return existing.focus();
+         existing.navigate(target);
+         return existing.focus();
       }
       return clients.openWindow(target);
-    }),
-  );
+    });
+  })());
 });

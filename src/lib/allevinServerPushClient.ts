@@ -1,12 +1,18 @@
 "use client";
 
 import { buildRhythmForDate, localDateKey, minutesFromClock, readDailyRhythm, type RhythmEntry } from "@/lib/dailyRhythm";
-import type { NotificationCopyContext } from "@/lib/allevinNotificationCopy";
+import { createNotificationCopyContext, notificationTag, type NotificationCopyContext } from "@/lib/allevinNotificationCopy";
 import { prepareNotificationBodies } from "@/lib/allevinNotificationCopyClient";
+import {
+   readNotificationHealth,
+   readNotificationPreferences,
+   saveNotificationHealth,
+} from "@/lib/allevinNotificationHealth";
 import {
    buildNotificationTimeline,
    lifeNotificationContext,
    rhythmNotificationContext,
+   timedLifeItemsForDate,
    timestampForLocalClock,
 } from "@/lib/allevinNotificationScheduleContext";
 import { readAllevinTone } from "@/lib/allevinVoice";
@@ -140,7 +146,7 @@ function addEventJobs({
          dueAt: checkpointAt,
          title,
          body: "",
-         tag: `allevin-${dateKey}-${sourceId}-checkpoint`,
+         tag: notificationTag(copyContext),
          url: `/?allevinCheckpoint=1&source=${actionTarget?.source || ""}&id=${encodeURIComponent(actionTarget?.id || sourceId)}&date=${dateKey}&title=${encodeURIComponent(title.slice(0, 80))}`,
          entryId: sourceId,
          phase: "checkpoint",
@@ -159,7 +165,7 @@ function addEventJobs({
          dueAt: startAt,
          title,
          body: "",
-         tag: `allevin-${dateKey}-${sourceId}-start`,
+         tag: notificationTag(copyContext),
          url: `/?allevinEvent=1&source=${actionTarget?.source || ""}&id=${encodeURIComponent(actionTarget?.id || sourceId)}&date=${dateKey}&title=${encodeURIComponent(title.slice(0, 80))}`,
          entryId: sourceId,
          phase: "start",
@@ -190,6 +196,7 @@ function buildPushPlan(device: string) {
    const horizon = Date.now() + HORIZON_HOURS * 60 * 60 * 1000;
    const jobs: PushPlanJob[] = [];
    const lifeItems = readLifeState().items;
+   const notificationPreferences = readNotificationPreferences();
    const timelineByDate = new Map<string, ReturnType<typeof buildNotificationTimeline>>();
 
    for (let offset = 0; offset <= 2; offset += 1) {
@@ -220,6 +227,37 @@ function buildPushPlan(device: string) {
                ? { source: "rhythm", id: entry.sourceId, dateKey }
                : undefined,
          });
+      }
+
+      const hasAnythingScheduled = entries.some((entry) => !entry.completed && !entry.skipped) || timedLifeItemsForDate(lifeItems, date).length > 0;
+      if (notificationPreferences.quietDayEnabled && !hasAnythingScheduled) {
+         const startAt = timestampForLocalClock(date, notificationPreferences.quietDayTime);
+         if (startAt <= horizon) {
+            addEventJobs({
+               jobs,
+               device,
+               sourceId: "quiet-day",
+               dateKey,
+               startAt,
+               title: "A quiet day",
+               priority: 2,
+               includeCheckpoint: false,
+               buildCopyContext: (id, phase, leadMinutes) => createNotificationCopyContext({
+                  id,
+                  occurrenceKey: `${dateKey}:quiet-day:${phase}:${startAt}`,
+                  title: "A quiet day",
+                  category: "personal",
+                  phase,
+                  tone,
+                  priority: 2,
+                  leadMinutes,
+                  startAt,
+                  endAt: startAt + 30 * 60_000,
+                  timelineId: "quiet-day",
+                  timeline,
+               }),
+            });
+         }
       }
    }
 
@@ -260,7 +298,7 @@ function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxiii-context-follow-through-2", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxiv-reliable-follow-through-1", {
       scope: "/",
       updateViaCache: "none",
    });
@@ -296,6 +334,7 @@ export async function syncServerNotificationSchedule() {
    if (!("Notification" in window) || Notification.permission !== "granted") return false;
 
    try {
+      saveNotificationHealth({ state: "checking", lastError: undefined });
       const device = deviceId();
       const jobs = buildPushPlan(device);
       const copies = await prepareNotificationBodies(jobs.map((job) => job.copyContext));
@@ -303,7 +342,8 @@ export async function syncServerNotificationSchedule() {
          const copy = copies.get(copyContext.id);
          return copy ? [{ ...job, title: copy.title, body: copy.body }] : [];
       });
-      if (preparedJobs.length < jobs.length) queueCopyRetry();
+      const complete = preparedJobs.length === jobs.length;
+      if (!complete) queueCopyRetry();
       else {
          copyRetryAttempts = 0;
          if (copyRetryTimer !== undefined) {
@@ -315,18 +355,79 @@ export async function syncServerNotificationSchedule() {
       const response = await fetch("/api/allevin/push/sync", {
          method: "POST",
          headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({ deviceId: device, subscription: subscription.toJSON(), jobs: preparedJobs }),
+         body: JSON.stringify({ deviceId: device, subscription: subscription.toJSON(), jobs: preparedJobs, complete, expectedJobs: jobs.length }),
       });
 
       if (!response.ok) throw new Error(`Push sync failed (${response.status}).`);
-      window.localStorage.setItem(SERVER_PUSH_ACTIVE_KEY, "true");
-      return true;
-   } catch {
+      const payload = (await response.json()) as { jobs?: number; complete?: boolean };
+      const acceptedJobs = Math.max(0, Number(payload.jobs) || 0);
+      const healthy = complete && payload.complete === true && acceptedJobs === jobs.length;
+      const missingCopyCount = jobs.length - preparedJobs.length;
+      if (healthy && jobs.length > 0) window.localStorage.setItem(SERVER_PUSH_ACTIVE_KEY, "true");
+      else window.localStorage.removeItem(SERVER_PUSH_ACTIVE_KEY);
+      saveNotificationHealth({
+         state: healthy ? "ready" : "needs-repair",
+         lastSyncAt: Date.now(),
+         plannedJobs: jobs.length,
+         queuedJobs: acceptedJobs,
+         nextDueAt: preparedJobs[0]?.dueAt,
+         lastError: healthy
+            ? undefined
+            : missingCopyCount > 0
+               ? `${missingCopyCount} reminder${missingCopyCount === 1 ? "" : "s"} still need language.`
+               : "The server accepted only part of the notification schedule.",
+         preview: preparedJobs.slice(0, 8).map((job) => ({ id: job.id, title: job.title, dueAt: job.dueAt, phase: job.phase })),
+      });
+      return healthy;
+   } catch (error) {
       window.localStorage.removeItem(SERVER_PUSH_ACTIVE_KEY);
+      saveNotificationHealth({
+         state: "local-only",
+         lastSyncAt: Date.now(),
+         lastError: error instanceof Error ? error.message : "Server reminders need to reconnect.",
+      });
       return false;
    }
 }
 
+export async function refreshNotificationHealth() {
+   if (typeof window === "undefined") return readNotificationHealth();
+   const device = window.localStorage.getItem(ALLEVIN_PUSH_DEVICE_ID_KEY);
+   if (!device) return readNotificationHealth();
+   try {
+      const response = await fetch(`/api/allevin/push/status?deviceId=${encodeURIComponent(device)}`, { cache: "no-store" });
+      if (!response.ok) return readNotificationHealth();
+      const payload = (await response.json()) as { queuedJobs?: number; nextDueAt?: number; lastSentAt?: number; lastShownAt?: number; lastOpenedAt?: number; schedulerLastRanAt?: number };
+      const queuedJobs = Math.max(0, Number(payload.queuedJobs) || 0);
+      const schedulerLastRanAt = Number.isFinite(payload.schedulerLastRanAt) ? Number(payload.schedulerLastRanAt) : undefined;
+      const schedulerHealthy = Boolean(schedulerLastRanAt && Date.now() - schedulerLastRanAt < 5 * 60_000);
+      const currentHealth = readNotificationHealth();
+      const recoveredScheduler = schedulerHealthy && currentHealth.lastError?.startsWith("Background delivery has not checked in");
+      saveNotificationHealth({
+         state: queuedJobs > 0 && !schedulerHealthy ? "needs-repair" : recoveredScheduler ? "ready" : currentHealth.state,
+         queuedJobs,
+         nextDueAt: Number.isFinite(payload.nextDueAt) ? Number(payload.nextDueAt) : currentHealth.nextDueAt,
+         lastSchedulerRunAt: schedulerLastRanAt,
+         lastSentAt: Number.isFinite(payload.lastSentAt) ? Number(payload.lastSentAt) : currentHealth.lastSentAt,
+         lastShownAt: Number.isFinite(payload.lastShownAt) ? Number(payload.lastShownAt) : currentHealth.lastShownAt,
+         lastOpenedAt: Number.isFinite(payload.lastOpenedAt) ? Number(payload.lastOpenedAt) : currentHealth.lastOpenedAt,
+         lastError: queuedJobs > 0 && !schedulerHealthy ? "Background delivery has not checked in during the last five minutes." : recoveredScheduler ? undefined : currentHealth.lastError,
+      });
+   } catch {
+      // The local health snapshot remains useful while offline.
+   }
+   return readNotificationHealth();
+}
+
+export async function repairNotificationSchedule() {
+   if (typeof window !== "undefined") window.localStorage.removeItem(SERVER_PUSH_ACTIVE_KEY);
+   const repaired = await syncServerNotificationSchedule();
+   await refreshNotificationHealth();
+   return repaired;
+}
+
 export function serverPushIsActive() {
-   return typeof window !== "undefined" && window.localStorage.getItem(SERVER_PUSH_ACTIVE_KEY) === "true";
+   if (typeof window === "undefined" || window.localStorage.getItem(SERVER_PUSH_ACTIVE_KEY) !== "true") return false;
+   const health = readNotificationHealth();
+   return health.state === "ready" && health.queuedJobs > 0 && Boolean(health.lastSyncAt && Date.now() - health.lastSyncAt < 6 * 60 * 60 * 1000);
 }

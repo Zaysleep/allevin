@@ -570,20 +570,18 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .life-hero { padding-top: clamp(48px, 6vw, 72px); padding-bottom: 42px; }
 .life-hero h1 { margin-top: 0; margin-bottom: 0; }
 
-/* Passed time is visual history, not a false completion. */
+/* A passed time is Missed, not falsely completed. Only explicit completion is crossed out. */
 .rhythm-row-missed > div strong,
 .life-row-title-passed,
 .calendar-entry-passed strong,
-.calendar-entry-passed i {
-   color: var(--muted) !important;
-   text-decoration: line-through;
-   text-decoration-thickness: 1px;
-}
+.calendar-entry-passed i { color: var(--muted) !important; }
 .rhythm-row-missed,
 .life-row-passed,
 .calendar-entry-passed { opacity: .66; }
-.rhythm-row-missed > time { color: var(--muted); text-decoration: line-through; }
+.rhythm-row-missed > time { color: var(--muted); }
 .life-row-passed .life-row-meta { opacity: .8; }
+.calendar-entry-complete strong { color: var(--muted) !important; text-decoration: line-through; text-decoration-thickness: 1px; }
+.calendar-missed-label { color: #9a6237 !important; font-size: .66rem !important; font-weight: 760; letter-spacing: .04em; text-transform: uppercase; }
 
 /* Calendar */
 .calendar-workspace { padding-bottom: 0; }
@@ -662,6 +660,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
    white-space: nowrap;
 }
 .calendar-week-day i b { color: var(--soft); margin-right: 4px; font-size: .57rem; font-weight: 700; }
+.calendar-week-day i em { margin-left: 5px; color: #9a6237; font-size: .52rem; font-style: normal; font-weight: 760; letter-spacing: .04em; text-transform: uppercase; }
 .calendar-date-selected { border-bottom-color: var(--accent) !important; background: rgba(49,91,214,.035) !important; }
 .calendar-date-today > strong { color: var(--accent); }
 
@@ -1408,6 +1407,35 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .settings-notification-test input { width: 100%; min-height: 42px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--paper); padding: 0 11px; color: var(--ink); }
 .settings-notification-test p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .72rem; }
 .settings-language-status { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 22px; }
+.notification-health-card {
+   display: grid;
+   gap: 12px;
+   margin: 8px 0 24px;
+   border: 1px solid var(--line-strong);
+   border-left: 3px solid var(--accent);
+   background: var(--paper);
+   padding: 18px;
+}
+.notification-health-needs-repair,
+.notification-health-local-only { border-left-color: #a66a37; }
+.notification-health-card header { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.notification-health-card header span { color: var(--muted); font-size: .68rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.notification-health-card header strong { font-size: .8rem; }
+.notification-health-card > p { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.5; }
+.notification-health-card dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0; background: var(--line); }
+.notification-health-card dl div { min-width: 0; display: grid; gap: 4px; background: var(--paper-strong); padding: 10px; }
+.notification-health-card dt { color: var(--muted); font-size: .62rem; font-weight: 780; letter-spacing: .05em; text-transform: uppercase; }
+.notification-health-card dd { overflow-wrap: anywhere; margin: 0; color: var(--ink); font-size: .7rem; line-height: 1.4; }
+.notification-health-card > button { justify-self: start; }
+.settings-quiet-day-row { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 20px; }
+.settings-quiet-day-time { max-width: 220px; }
+.notification-preview { display: grid; gap: 10px; margin-top: 22px; border-top: 1px solid var(--line); padding-top: 20px; }
+.notification-preview > strong { font-size: .78rem; }
+.notification-preview > div { display: grid; border-top: 1px solid var(--line); }
+.notification-preview p { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 10px; margin: 0; border-bottom: 1px solid var(--line); padding: 10px 0; }
+.notification-preview p span { color: var(--accent); font-size: .61rem; font-weight: 780; text-transform: uppercase; }
+.notification-preview p b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .72rem; }
+.notification-preview p time { color: var(--muted); font-size: .66rem; white-space: nowrap; }
 .settings-data-actions { display: grid; gap: 10px; margin-top: 22px; border-top: 1px solid var(--line); padding-top: 22px; }
 .settings-data-actions .settings-reset {
    width: 100%;
@@ -1497,6 +1525,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
    .settings-accordion-panel { padding-right: 0; padding-left: 0; }
    .settings-bedtime-row { grid-template-columns: 1fr; align-items: stretch; }
    .settings-notification-test { grid-template-columns: 1fr; }
+   .notification-health-card dl { grid-template-columns: 1fr; }
+   .notification-preview p { grid-template-columns: 48px minmax(0, 1fr); }
+   .notification-preview p time { grid-column: 2; }
    .settings-notification-test .settings-inline-button { justify-content: center; }
    .settings-screen input,
    .settings-screen select { font-size: 16px; }

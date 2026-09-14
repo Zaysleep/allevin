@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { enableAllevinNotifications, registerAllevinServiceWorker, runRhythmReminderCheck } from "@/lib/allevinNotifications";
-import { syncServerNotificationSchedule } from "@/lib/allevinServerPushClient";
+import { enableAllevinNotifications, listenForNotificationReceipts, registerAllevinServiceWorker, runRhythmReminderCheck } from "@/lib/allevinNotifications";
+import { refreshNotificationHealth, syncServerNotificationSchedule } from "@/lib/allevinServerPushClient";
+import { NOTIFICATION_PREFERENCES_UPDATED_EVENT } from "@/lib/allevinNotificationHealth";
 import { ALLEVIN_TONE_UPDATED_EVENT } from "@/lib/allevinVoice";
 import { LIFE_STATE_UPDATED_EVENT } from "@/lib/lifeStore";
 import {
@@ -28,6 +29,7 @@ export function useDailyRhythm() {
       if ("Notification" in window) setNotificationPermission(Notification.permission);
       else setNotificationPermission("unsupported");
       void registerAllevinServiceWorker();
+      const stopReceiptListener = listenForNotificationReceipts();
 
       let syncTimer: number | undefined;
       const syncServerPlan = () => {
@@ -48,32 +50,48 @@ export function useDailyRhythm() {
          setClockTick(Date.now());
          refresh();
          void syncServerNotificationSchedule();
+         void refreshNotificationHealth();
          void runRhythmReminderCheck();
       };
 
       window.addEventListener(DAILY_RHYTHM_UPDATED_EVENT, onUpdate);
       window.addEventListener(LIFE_STATE_UPDATED_EVENT, syncServerPlan);
       window.addEventListener(ALLEVIN_TONE_UPDATED_EVENT, syncServerPlan);
+      window.addEventListener(NOTIFICATION_PREFERENCES_UPDATED_EVENT, syncServerPlan);
       window.addEventListener("storage", onUpdate);
       window.addEventListener("focus", catchUpAfterResume);
+      window.addEventListener("online", catchUpAfterResume);
+      window.addEventListener("pageshow", catchUpAfterResume);
       document.addEventListener("visibilitychange", catchUpAfterResume);
 
       const timer = window.setInterval(() => {
          setClockTick(Date.now());
          void runRhythmReminderCheck();
       }, 30_000);
+      // Reconcile the background queue throughout long-running desktop/PWA
+      // sessions. This also catches midnight, timezone changes, restored
+      // connectivity, and server jobs that were removed after delivery.
+      const repairTimer = window.setInterval(() => {
+         void syncServerNotificationSchedule();
+         void refreshNotificationHealth();
+      }, 15 * 60_000);
       void syncServerNotificationSchedule();
       void runRhythmReminderCheck();
 
       return () => {
          window.removeEventListener(DAILY_RHYTHM_UPDATED_EVENT, onUpdate);
          window.removeEventListener(LIFE_STATE_UPDATED_EVENT, syncServerPlan);
-         window.removeEventListener(ALLEVIN_TONE_UPDATED_EVENT, syncServerPlan);
+      window.removeEventListener(ALLEVIN_TONE_UPDATED_EVENT, syncServerPlan);
+         window.removeEventListener(NOTIFICATION_PREFERENCES_UPDATED_EVENT, syncServerPlan);
          window.removeEventListener("storage", onUpdate);
          window.removeEventListener("focus", catchUpAfterResume);
+         window.removeEventListener("online", catchUpAfterResume);
+         window.removeEventListener("pageshow", catchUpAfterResume);
          document.removeEventListener("visibilitychange", catchUpAfterResume);
          window.clearInterval(timer);
+         window.clearInterval(repairTimer);
          window.clearTimeout(syncTimer);
+         stopReceiptListener();
       };
    }, [refresh]);
 

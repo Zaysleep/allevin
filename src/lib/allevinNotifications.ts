@@ -17,7 +17,8 @@ import {
    type RhythmEntry,
 } from "@/lib/dailyRhythm";
 import { notificationCopyFromCache, prepareNotificationBodies } from "@/lib/allevinNotificationCopyClient";
-import { createNotificationCopyContext, type NotificationCopyContext } from "@/lib/allevinNotificationCopy";
+import { createNotificationCopyContext, notificationTag, type NotificationCopyContext } from "@/lib/allevinNotificationCopy";
+import { readNotificationPreferences, recordNotificationReceipt } from "@/lib/allevinNotificationHealth";
 import {
    buildNotificationTimeline,
    lifeNotificationContext,
@@ -27,10 +28,9 @@ import {
 import { readAllevinTone } from "@/lib/allevinVoice";
 import { readLifeState } from "@/lib/lifeStore";
 import type { LifeItem, LifeImportance } from "@/lib/lifeTypes";
-import { serverPushIsActive } from "@/lib/allevinServerPushClient";
 
 const NOTIFICATION_LOG_KEY = "allevin-notification-log-mkxii-3";
-const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxiii-context-follow-through-2";
+const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxiv-reliable-follow-through-1";
 let reminderCheckRunning = false;
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 
@@ -77,8 +77,14 @@ export async function enableAllevinNotifications() {
 }
 
 async function showNotification(title: string, body: string, tag: string, entryId?: string, url = "/") {
-   if (!canNotify() || Notification.permission !== "granted") return;
+   if (!canNotify() || Notification.permission !== "granted") return false;
    const registration = await navigator.serviceWorker.ready;
+
+   // Server Push may have won the race by a few milliseconds. An existing tag
+   // proves this exact occurrence is already visible, so the local safety net
+   // records success without creating another alert.
+   const existing = await registration.getNotifications({ tag });
+   if (existing.length) return true;
 
    await registration.showNotification(title, {
       body,
@@ -87,6 +93,19 @@ async function showNotification(title: string, body: string, tag: string, entryI
       badge: "/allevin-icon-192.png",
       data: { url, entryId },
    });
+   recordNotificationReceipt("shown");
+   return true;
+}
+
+export function listenForNotificationReceipts() {
+   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return () => undefined;
+   const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; kind?: unknown; at?: unknown } | null;
+      if (data?.type !== "ALLEVIN_NOTIFICATION_RECEIPT") return;
+      if (data.kind === "shown" || data.kind === "opened") recordNotificationReceipt(data.kind, Number(data.at) || Date.now());
+   };
+   navigator.serviceWorker.addEventListener("message", onMessage);
+   return () => navigator.serviceWorker.removeEventListener("message", onMessage);
 }
 
 /**
@@ -116,8 +135,7 @@ export async function sendAllevinTestNotification(subject: string) {
    });
    const copy = notificationCopyFromCache(context) || (await prepareNotificationBodies([context])).get(context.id);
    if (!copy) return false;
-   await showNotification(copy.title, copy.body, `allevin-settings-test-${now}`);
-   return true;
+   return showNotification(copy.title, copy.body, `allevin-settings-test-${now}`);
 }
 
 async function showContextualNotification(
@@ -129,8 +147,7 @@ async function showContextualNotification(
 ) {
    const copy = notificationCopyFromCache(context) || (await prepareNotificationBodies([context])).get(context.id);
    if (!copy) return false;
-   await showNotification(copy.title, copy.body, tag, entryId, url);
-   return true;
+   return showNotification(copy.title, copy.body, notificationTag(context), entryId, url);
 }
 
 function localReminderPriorityForEntry(entry: RhythmEntry): ReminderPriority {
@@ -182,10 +199,8 @@ function lifeStartMinutes(item: LifeItem) {
  */
 export async function runRhythmReminderCheck(now = new Date()) {
    if (!canNotify() || Notification.permission !== "granted") return;
-   // A successful server-plan sync means the service worker will receive the
-   // scheduled Web Push even while the PWA sleeps. Do not also run the local
-   // timer path or the user would get duplicate copies.
-   if (serverPushIsActive()) return;
+   // Local checking remains a safety net even after a server sync. Both paths
+   // use the same occurrence tag, so whichever arrives second is deduplicated.
    // Focus, visibility, and the 30-second timer can all fire together on iOS.
    // A module-level mutex prevents those overlapping checks from racing and
    // displaying the same notification several times before the log is saved.
@@ -204,6 +219,35 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const life = readLifeState();
       const timedItems = timedLifeItemsForDate(life.items, now);
       const timeline = buildNotificationTimeline(now, entries, life.items);
+
+   const quietPreferences = readNotificationPreferences();
+   const hasAnythingScheduled = entries.some((entry) => !entry.completed && !entry.skipped) || timedItems.length > 0;
+   if (quietPreferences.quietDayEnabled && !hasAnythingScheduled) {
+      const quietAt = minutesFromClock(quietPreferences.quietDayTime);
+      const quietKey = `${key}:quiet-day:start:${quietPreferences.quietDayTime}`;
+      if (nowMinutes >= quietAt && nowMinutes <= quietAt + 1 && !log.has(quietKey)) {
+         const quietStart = new Date(now);
+         quietStart.setHours(Math.floor(quietAt / 60), quietAt % 60, 0, 0);
+         const context = createNotificationCopyContext({
+            id: quietKey,
+            occurrenceKey: quietKey,
+            title: "A quiet day",
+            category: "personal",
+            phase: "start",
+            tone,
+            priority: 2,
+            leadMinutes: 0,
+            startAt: quietStart.getTime(),
+            endAt: quietStart.getTime() + 30 * 60_000,
+            timelineId: "quiet-day",
+            timeline,
+         });
+         if (await showContextualNotification(context, context.title, notificationTag(context))) {
+            log.add(quietKey);
+            saveLog(log);
+         }
+      }
+   }
 
    for (const entry of entries) {
       if (entry.completed || entry.skipped) continue;

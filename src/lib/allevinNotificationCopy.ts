@@ -220,6 +220,11 @@ export function notificationCopyCacheKey(context: NotificationCopyContext) {
    return `notification-copy-${(hash >>> 0).toString(36)}`;
 }
 
+/** One occurrence, one visible notification—even if local and server delivery race. */
+export function notificationTag(context: NotificationCopyContext) {
+   return `allevin-${context.occurrenceKey.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 210)}`;
+}
+
 /**
  * Models are treated as untrusted phrasing helpers. Copy that is too long,
  * repeats the visible title, or falls back into robotic ALLEVIN-era clichés is

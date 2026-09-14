@@ -166,6 +166,17 @@ function sanitizeItem(raw: Partial<LifeItem>, fallbackSource: LifeItemSource = "
    if (repairedRelativeDate) repairedRelativeDate.setHours(12, 0, 0, 0);
    const kind = asKind(raw.kind);
    const state = asState(raw.state, kind === "waiting" ? "waiting" : "active");
+   const recurrence = asRecurrence(raw.recurrence);
+   const dueAt = safeTimestamp(raw.dueAt) || repairedRelativeDate?.getTime();
+   const startAt = safeTimestamp(raw.startAt);
+   let repeatRule = safeRepeatRule(raw.repeatRule);
+   // `dueAt` is the occurrence the user most recently saw or edited. Repair
+   // older builds where that timestamp moved but the visible repeat-rule clock
+   // stayed behind (for example, 9:00 in the label and 9:15 under Next).
+   if (repeatRule && recurrence !== "none" && recurrence !== "interval" && dueAt) {
+      const occurrence = new Date(dueAt);
+      repeatRule = { ...repeatRule, timeMinutes: occurrence.getHours() * 60 + occurrence.getMinutes() };
+   }
 
    return {
       id: sanitizeText(raw.id, 180) || makeId("life"),
@@ -175,11 +186,11 @@ function sanitizeItem(raw: Partial<LifeItem>, fallbackSource: LifeItemSource = "
       state,
       context: asContext(raw.context),
       importance: asImportance(raw.importance),
-      recurrence: asRecurrence(raw.recurrence),
-      repeatRule: safeRepeatRule(raw.repeatRule),
+      recurrence,
+      repeatRule,
       timingPrecision: repairedRelativeDate ? "day" : asTimingPrecision(raw.timingPrecision),
-      dueAt: safeTimestamp(raw.dueAt) || repairedRelativeDate?.getTime(),
-      startAt: safeTimestamp(raw.startAt),
+      dueAt,
+      startAt,
       endAt: safeTimestamp(raw.endAt),
       followUpAt: safeTimestamp(raw.followUpAt),
       deferUntil: safeTimestamp(raw.deferUntil),

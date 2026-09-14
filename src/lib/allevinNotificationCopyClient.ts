@@ -154,6 +154,12 @@ export async function prepareNotificationBodies(contexts: NotificationCopyContex
       const chunks = Array.from({ length: Math.ceil(missing.length / 8) }, (_, index) => missing.slice(index * 8, index * 8 + 8));
       await requestChunk(chunks[0], 0);
       await Promise.all(chunks.slice(1).map((chunk, index) => requestChunk(chunk, index + 1)));
+
+      // A malformed response for one reminder should not force the entire
+      // batch to fail together. Give each unresolved occurrence a clean,
+      // isolated request before the scheduler marks the plan partial.
+      const unresolved = missing.filter((context) => !generated.has(context.id));
+      await Promise.all(unresolved.map((context, index) => requestChunk([context], chunks.length + index)));
    }
 
    const now = Date.now();

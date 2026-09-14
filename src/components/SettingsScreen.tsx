@@ -8,6 +8,15 @@ import BackupRestoreSettings from "@/components/BackupRestoreSettings";
 import LanguageConnectionStatus from "@/components/LanguageConnectionStatus";
 import RhythmSettingsEditor from "@/components/RhythmSettingsEditor";
 import { sendAllevinTestNotification } from "@/lib/allevinNotifications";
+import {
+   NOTIFICATION_HEALTH_UPDATED_EVENT,
+   readNotificationHealth,
+   readNotificationPreferences,
+   saveNotificationPreferences,
+   type NotificationHealth,
+   type NotificationPreferences,
+} from "@/lib/allevinNotificationHealth";
+import { refreshNotificationHealth, repairNotificationSchedule } from "@/lib/allevinServerPushClient";
 import { formatClock, type DailyRhythmState } from "@/lib/dailyRhythm";
 import type { AllevinTone } from "@/lib/allevinVoice";
 
@@ -52,6 +61,19 @@ function daySummary(days: number[]) {
    return days.map((day) => labels[day]).join(", ") || "No days";
 }
 
+function dateTimeLabel(timestamp?: number) {
+   if (!timestamp) return "Not recorded yet";
+   return new Date(timestamp).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function notificationHealthCopy(health: NotificationHealth, enabled: boolean) {
+   if (!enabled) return { label: "Off", detail: "Turn on phone reminders when you want ALLEVIN to reach you." };
+   if (health.state === "checking") return { label: "Checking", detail: "ALLEVIN is refreshing the next notification window." };
+   if (health.state === "ready") return { label: "Ready", detail: health.queuedJobs ? `${health.queuedJobs} notifications are queued safely.` : "Nothing needs to be queued right now." };
+   if (health.state === "local-only") return { label: "App-only backup", detail: "Reminders can appear while ALLEVIN is open. Repair the background connection for closed-app delivery." };
+   return { label: "Needs attention", detail: health.lastError || "The notification schedule needs to be refreshed." };
+}
+
 export default function SettingsScreen({
    open,
    onClose,
@@ -84,6 +106,9 @@ export default function SettingsScreen({
    const [active, setActive] = useState<SettingsSection | null>("profile");
    const [testSubject, setTestSubject] = useState("Take a quick break from the screen");
    const [testMessage, setTestMessage] = useState("");
+   const [health, setHealth] = useState<NotificationHealth>(() => readNotificationHealth());
+   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(() => readNotificationPreferences());
+   const [repairing, setRepairing] = useState(false);
 
    useEffect(() => {
       if (!open) return;
@@ -98,6 +123,14 @@ export default function SettingsScreen({
       };
    }, [open, onClose]);
 
+   useEffect(() => {
+      if (!open) return;
+      const updateHealth = () => setHealth(readNotificationHealth());
+      window.addEventListener(NOTIFICATION_HEALTH_UPDATED_EVENT, updateHealth);
+      void refreshNotificationHealth().then(setHealth);
+      return () => window.removeEventListener(NOTIFICATION_HEALTH_UPDATED_EVENT, updateHealth);
+   }, [open]);
+
    if (!open) return null;
 
    const firstSchedule = rhythmState.scheduleBlocks[0];
@@ -105,6 +138,21 @@ export default function SettingsScreen({
       ? `${firstSchedule.title} · ${daySummary(firstSchedule.days)} · ${formatClock(firstSchedule.start)}–${formatClock(firstSchedule.end)}`
       : rhythmState.bedtime ? `Bedtime · ${formatClock(rhythmState.bedtime)}` : "No regular schedule yet";
    const toggle = (id: SettingsSection) => setActive((current) => current === id ? null : id);
+   const healthCopy = notificationHealthCopy(health, rhythmState.remindersEnabled);
+
+   function updateNotificationPreferences(changes: Partial<NotificationPreferences>) {
+      const next = { ...notificationPreferences, ...changes };
+      setNotificationPreferences(next);
+      saveNotificationPreferences(next);
+   }
+
+   async function repairNotifications() {
+      setRepairing(true);
+      const repaired = await repairNotificationSchedule();
+      setHealth(await refreshNotificationHealth());
+      setTestMessage(repaired ? "Your notification schedule is refreshed." : "Background delivery still needs attention. App-open reminders remain available.");
+      setRepairing(false);
+   }
 
    return (
       <div className="settings-screen" role="dialog" aria-modal="true" aria-label="ALLEVIN settings">
@@ -129,10 +177,32 @@ export default function SettingsScreen({
             </AccordionSection>
 
             <AccordionSection id="notifications" title="Notifications" summary={`${rhythmState.remindersEnabled ? "On" : "Off"} · Personal language`} open={active === "notifications"} onToggle={toggle}>
+               <section className={`notification-health-card notification-health-${health.state}`} aria-live="polite">
+                  <header><span>Notification health</span><strong>{healthCopy.label}</strong></header>
+                  <p>{healthCopy.detail}</p>
+                  <dl>
+                     <div><dt>Next</dt><dd>{health.nextDueAt ? dateTimeLabel(health.nextDueAt) : "Nothing queued"}</dd></div>
+                     <div><dt>Last shown</dt><dd>{dateTimeLabel(health.lastShownAt)}</dd></div>
+                     <div><dt>Background check</dt><dd>{dateTimeLabel(health.lastSchedulerRunAt)}</dd></div>
+                     <div><dt>Last checked</dt><dd>{dateTimeLabel(health.lastSyncAt)}</dd></div>
+                  </dl>
+                  <button type="button" className="settings-inline-button" disabled={repairing || !rhythmState.remindersEnabled} onClick={() => void repairNotifications()}>{repairing ? "Repairing…" : "Repair notifications"}</button>
+               </section>
                <div className="settings-reminder-row">
                   <div><strong>Phone reminders</strong><span>{rhythmState.remindersEnabled ? "ALLEVIN can reach you when the app is closed." : "Turn these on when you want ALLEVIN to nudge you."}</span></div>
                   {notificationPermission === "granted" ? <button className="settings-inline-button" onClick={() => onSetRemindersEnabled(!rhythmState.remindersEnabled)}>{rhythmState.remindersEnabled ? "On" : "Off"}</button> : <button className="settings-inline-button" onClick={() => void onEnableReminders()}>Enable</button>}
                </div>
+               <div className="settings-reminder-row settings-quiet-day-row">
+                  <div><strong>Quiet-day check-in</strong><span>One thoughtful morning note when your day has no activities or reminders.</span></div>
+                  <button className="settings-inline-button" type="button" onClick={() => updateNotificationPreferences({ quietDayEnabled: !notificationPreferences.quietDayEnabled })}>{notificationPreferences.quietDayEnabled ? "On" : "Off"}</button>
+               </div>
+               {notificationPreferences.quietDayEnabled ? <label className="settings-field settings-quiet-day-time"><span>Check-in time</span><input type="time" value={notificationPreferences.quietDayTime} onChange={(event) => updateNotificationPreferences({ quietDayTime: event.target.value })} /></label> : null}
+               {health.preview.length ? (
+                  <div className="notification-preview">
+                     <strong>Next notifications</strong>
+                     <div>{health.preview.slice(0, 4).map((item) => <p key={item.id}><span>{item.phase === "checkpoint" ? "Before" : "At time"}</span><b>{item.title}</b><time>{dateTimeLabel(item.dueAt)}</time></p>)}</div>
+                  </div>
+               ) : null}
                <div className="settings-notification-test">
                   <label><span>Test reminder</span><input value={testSubject} onChange={(event) => setTestSubject(event.target.value)} maxLength={120} /></label>
                   <button type="button" className="settings-inline-button" onClick={() => void sendAllevinTestNotification(testSubject).then((sent) => setTestMessage(sent ? "Test sent." : "Turn on notifications first, then try again."))}>Send test</button>

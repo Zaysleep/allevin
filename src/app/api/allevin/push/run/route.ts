@@ -7,6 +7,8 @@ import {
    forgetDevice,
    pushStoreConfigured,
    readDeviceSubscription,
+   recordPushReceipt,
+   recordPushSchedulerHeartbeat,
 } from "@/lib/allevinPushStore";
 
 export const runtime = "nodejs";
@@ -33,6 +35,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Server push is not fully configured." }, { status: 503 });
    }
 
+   await recordPushSchedulerHeartbeat();
+
    // Redis atomically removes due jobs before they are sent. This prevents
    // overlapping serverless cron invocations from producing duplicate pushes.
    const jobs = await claimDuePushJobs(Date.now(), 100);
@@ -56,13 +60,15 @@ export async function GET(request: Request) {
                tag: job.tag,
                url: job.url,
                entryId: job.entryId,
-               data: { phase: job.phase, priority: job.priority, scheduledAt: job.dueAt, actionTarget: job.actionTarget },
+               data: { jobId: job.id, deviceId: job.deviceId, phase: job.phase, priority: job.priority, scheduledAt: job.dueAt, actionTarget: job.actionTarget },
             }),
             { TTL: 300, urgency: job.priority >= 4 ? "high" : "normal" },
          );
          sent += 1;
+         await recordPushReceipt(job.deviceId, job.id, "sent").catch(() => null);
       } catch (error) {
          failed += 1;
+         await recordPushReceipt(job.deviceId, job.id, "failed").catch(() => null);
          const statusCode = typeof error === "object" && error && "statusCode" in error ? Number((error as { statusCode?: number }).statusCode) : 0;
          if (statusCode === 404 || statusCode === 410) await forgetDevice(job.deviceId);
       } finally {
