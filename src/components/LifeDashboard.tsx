@@ -26,7 +26,7 @@ type FooterInfo = "about" | "privacy" | "terms" | null;
 function FooterInfoPanel({ section, onClose }: { section: Exclude<FooterInfo, null>; onClose: () => void }) {
    const content = {
       about: { title: "About ALLEVIN", body: "ALLEVIN is a personal daily assistant from Kin Software LLC." },
-      privacy: { title: "Privacy", body: "Your ALLEVIN items, rhythm, recommendations, and conversation are saved in this browser. AI requests may send relevant information to the configured AI service. For notification wording, ALLEVIN sends only the current item and its nearby verified schedule context. If server reminders are enabled, the next notification window and this device’s push subscription are temporarily stored in the configured server notification store so reminders can arrive while the app is closed." },
+      privacy: { title: "Privacy", body: "Your ALLEVIN items, schedule, interests, recommendations, and conversation are saved in this browser. Live weather, market, and sports requests send only the saved preference needed to the configured data source; relevant verified facts may then be sent to the configured AI service for wording. If server reminders are enabled, the next notification window and this device’s push subscription are temporarily stored so reminders can arrive while the app is closed." },
       terms: { title: "Terms", body: "ALLEVIN uses AI to interpret requests and offer suggestions. Important details should still be checked before you rely on them." },
    }[section];
 

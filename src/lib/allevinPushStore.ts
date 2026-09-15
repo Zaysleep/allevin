@@ -1,5 +1,7 @@
 import "server-only";
 
+import type { InterestNotificationContext } from "@/lib/allevinInterests";
+
 export interface StoredPushJob {
    id: string;
    deviceId: string;
@@ -16,6 +18,7 @@ export interface StoredPushJob {
       id: string;
       dateKey: string;
    };
+   interestContext?: InterestNotificationContext;
 }
 
 const JOBS_KEY = "allevin:push:jobs:v1";
@@ -255,6 +258,22 @@ export async function forgetClaimedJob(job: StoredPushJob) {
    // The global job was already removed atomically when claimed. Remove only
    // the device bookkeeping copy so the next plan replacement stays compact.
    await command(["SREM", deviceJobsKey(job.deviceId), JSON.stringify(job)]).catch(() => null);
+}
+
+export async function rescheduleClaimedJob(job: StoredPushJob, dueAt: number) {
+   const next: StoredPushJob = {
+      ...job,
+      dueAt,
+      interestContext: job.interestContext
+         ? { ...job.interestContext, scheduledAt: dueAt, retryCount: (job.interestContext.retryCount || 0) + 1 }
+         : undefined,
+   };
+   const member = JSON.stringify(next);
+   await pipeline([
+      ["ZADD", JOBS_KEY, dueAt, member],
+      ["SADD", deviceJobsKey(job.deviceId), member],
+      ["EXPIRE", deviceJobsKey(job.deviceId), DEVICE_TTL_SECONDS],
+   ]);
 }
 
 export async function forgetDevice(deviceId: string) {

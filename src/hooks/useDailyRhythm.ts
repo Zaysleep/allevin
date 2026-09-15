@@ -6,6 +6,8 @@ import { enableAllevinNotifications, listenForNotificationReceipts, registerAlle
 import { refreshNotificationHealth, syncServerNotificationSchedule } from "@/lib/allevinServerPushClient";
 import { NOTIFICATION_PREFERENCES_UPDATED_EVENT } from "@/lib/allevinNotificationHealth";
 import { ALLEVIN_TONE_UPDATED_EVENT } from "@/lib/allevinVoice";
+import { ALLEVIN_INTERESTS_UPDATED_EVENT } from "@/lib/allevinInterests";
+import { runInterestNotificationCheck } from "@/lib/allevinInterestNotifications";
 import { LIFE_STATE_UPDATED_EVENT } from "@/lib/lifeStore";
 import {
    buildTodayRhythm,
@@ -52,12 +54,14 @@ export function useDailyRhythm() {
          void syncServerNotificationSchedule();
          void refreshNotificationHealth();
          void runRhythmReminderCheck();
+         void runInterestNotificationCheck();
       };
 
       window.addEventListener(DAILY_RHYTHM_UPDATED_EVENT, onUpdate);
       window.addEventListener(LIFE_STATE_UPDATED_EVENT, syncServerPlan);
       window.addEventListener(ALLEVIN_TONE_UPDATED_EVENT, syncServerPlan);
       window.addEventListener(NOTIFICATION_PREFERENCES_UPDATED_EVENT, syncServerPlan);
+      window.addEventListener(ALLEVIN_INTERESTS_UPDATED_EVENT, syncServerPlan);
       window.addEventListener("storage", onUpdate);
       window.addEventListener("focus", catchUpAfterResume);
       window.addEventListener("online", catchUpAfterResume);
@@ -67,6 +71,7 @@ export function useDailyRhythm() {
       const timer = window.setInterval(() => {
          setClockTick(Date.now());
          void runRhythmReminderCheck();
+         void runInterestNotificationCheck();
       }, 30_000);
       // Reconcile the background queue throughout long-running desktop/PWA
       // sessions. This also catches midnight, timezone changes, restored
@@ -77,12 +82,14 @@ export function useDailyRhythm() {
       }, 15 * 60_000);
       void syncServerNotificationSchedule();
       void runRhythmReminderCheck();
+      void runInterestNotificationCheck();
 
       return () => {
          window.removeEventListener(DAILY_RHYTHM_UPDATED_EVENT, onUpdate);
          window.removeEventListener(LIFE_STATE_UPDATED_EVENT, syncServerPlan);
-      window.removeEventListener(ALLEVIN_TONE_UPDATED_EVENT, syncServerPlan);
+         window.removeEventListener(ALLEVIN_TONE_UPDATED_EVENT, syncServerPlan);
          window.removeEventListener(NOTIFICATION_PREFERENCES_UPDATED_EVENT, syncServerPlan);
+         window.removeEventListener(ALLEVIN_INTERESTS_UPDATED_EVENT, syncServerPlan);
          window.removeEventListener("storage", onUpdate);
          window.removeEventListener("focus", catchUpAfterResume);
          window.removeEventListener("online", catchUpAfterResume);

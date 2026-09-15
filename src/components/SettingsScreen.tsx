@@ -5,6 +5,7 @@ import type { ChangeEvent, ReactNode } from "react";
 import { useEffect, useState } from "react";
 
 import BackupRestoreSettings from "@/components/BackupRestoreSettings";
+import InterestsSettings from "@/components/InterestsSettings";
 import LanguageConnectionStatus from "@/components/LanguageConnectionStatus";
 import RhythmSettingsEditor from "@/components/RhythmSettingsEditor";
 import { sendAllevinTestNotification } from "@/lib/allevinNotifications";
@@ -17,10 +18,11 @@ import {
    type NotificationPreferences,
 } from "@/lib/allevinNotificationHealth";
 import { refreshNotificationHealth, repairNotificationSchedule } from "@/lib/allevinServerPushClient";
+import { ALLEVIN_INTERESTS_UPDATED_EVENT, interestSummary, readInterestPreferences } from "@/lib/allevinInterests";
 import { formatClock, type DailyRhythmState } from "@/lib/dailyRhythm";
 import type { AllevinTone } from "@/lib/allevinVoice";
 
-type SettingsSection = "profile" | "schedule" | "routines" | "notifications" | "data";
+type SettingsSection = "profile" | "schedule" | "routines" | "interests" | "notifications" | "data";
 
 function AccordionSection({
    id,
@@ -108,6 +110,7 @@ export default function SettingsScreen({
    const [testMessage, setTestMessage] = useState("");
    const [health, setHealth] = useState<NotificationHealth>(() => readNotificationHealth());
    const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(() => readNotificationPreferences());
+   const [interestPreferences, setInterestPreferences] = useState(() => readInterestPreferences());
    const [repairing, setRepairing] = useState(false);
 
    useEffect(() => {
@@ -126,9 +129,14 @@ export default function SettingsScreen({
    useEffect(() => {
       if (!open) return;
       const updateHealth = () => setHealth(readNotificationHealth());
+      const updateInterests = () => setInterestPreferences(readInterestPreferences());
       window.addEventListener(NOTIFICATION_HEALTH_UPDATED_EVENT, updateHealth);
+      window.addEventListener(ALLEVIN_INTERESTS_UPDATED_EVENT, updateInterests);
       void refreshNotificationHealth().then(setHealth);
-      return () => window.removeEventListener(NOTIFICATION_HEALTH_UPDATED_EVENT, updateHealth);
+      return () => {
+         window.removeEventListener(NOTIFICATION_HEALTH_UPDATED_EVENT, updateHealth);
+         window.removeEventListener(ALLEVIN_INTERESTS_UPDATED_EVENT, updateInterests);
+      };
    }, [open]);
 
    if (!open) return null;
@@ -174,6 +182,10 @@ export default function SettingsScreen({
 
             <AccordionSection id="routines" title="Daily activities" summary={`${rhythmState.anchors.length} ${rhythmState.anchors.length === 1 ? "activity" : "activities"}`} open={active === "routines"} onToggle={toggle}>
                <RhythmSettingsEditor state={rhythmState} view="routines" />
+            </AccordionSection>
+
+            <AccordionSection id="interests" title="Interests" summary={interestSummary(interestPreferences)} open={active === "interests"} onToggle={toggle}>
+               <InterestsSettings />
             </AccordionSection>
 
             <AccordionSection id="notifications" title="Notifications" summary={`${rhythmState.remindersEnabled ? "On" : "Off"} · Personal language`} open={active === "notifications"} onToggle={toggle}>

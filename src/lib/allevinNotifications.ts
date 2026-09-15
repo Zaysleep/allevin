@@ -30,7 +30,7 @@ import { readLifeState } from "@/lib/lifeStore";
 import type { LifeItem, LifeImportance } from "@/lib/lifeTypes";
 
 const NOTIFICATION_LOG_KEY = "allevin-notification-log-mkxii-3";
-const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxiv-reliable-follow-through-1";
+const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxv-personal-interests-1";
 let reminderCheckRunning = false;
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 

@@ -1516,6 +1516,53 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .recurring-editor-actions button:first-child { border-color: var(--ink); background: var(--ink); color: var(--paper); }
 .recurring-editor-actions .danger-menu-item { color: #9e3f3f; }
 
+/* MK XXV — Interests stays compact until the user chooses a topic. */
+.interests-settings { display: grid; gap: 0; }
+.settings-panel-intro { margin: 0 0 20px; color: var(--muted); font-size: .79rem; line-height: 1.55; }
+.interest-panel { border-top: 1px solid var(--line); }
+.interest-panel:last-of-type { border-bottom: 1px solid var(--line); }
+.interest-panel-trigger { width: 100%; min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 0; background: transparent; padding: 15px 2px; color: var(--ink); text-align: left; }
+.interest-panel-trigger > span { min-width: 0; display: grid; gap: 4px; }
+.interest-panel-trigger strong { font-size: .88rem; }
+.interest-panel-trigger small { overflow: hidden; color: var(--muted); font-size: .72rem; font-weight: 520; text-overflow: ellipsis; white-space: nowrap; }
+.interest-panel-trigger svg { flex: 0 0 auto; color: var(--muted); transition: transform .18s ease; }
+.interest-panel-open > .interest-panel-trigger svg { transform: rotate(180deg); }
+.interest-panel-body { display: grid; gap: 16px; padding: 5px 2px 24px; }
+.interest-toggle-row { min-height: 66px; margin: 0; border: 0; padding: 0; }
+.interest-add-row { display: grid; grid-template-columns: minmax(0, 1fr) 46px; gap: 8px; align-items: end; }
+.interest-add-row label,
+.interest-team-add label { display: grid; gap: 7px; color: var(--muted); font-size: .72rem; font-weight: 750; }
+.interest-add-row input,
+.interest-team-add input,
+.interest-team-add select,
+.interest-small-field select { width: 100%; min-height: 46px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--paper); padding: 0 12px; color: var(--ink); font: inherit; }
+.interest-add-row > button { min-height: 46px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); }
+.interest-chip-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.interest-chip-list > span { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-strong); padding: 7px 9px; color: var(--ink); font-size: .72rem; font-weight: 760; }
+.interest-chip-list button,
+.interest-team-list header > button { display: inline-flex; border: 0; background: transparent; padding: 0; color: var(--muted); }
+.interest-day-picker { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.interest-day-picker button { min-height: 38px; border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink); font-size: .7rem; font-weight: 720; }
+.interest-day-picker button.selected { border-color: var(--ink); background: var(--ink); color: var(--paper); }
+.interest-team-add { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(90px, .6fr) auto; gap: 8px; align-items: end; }
+.interest-team-add > button { min-height: 46px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--ink); background: var(--ink); padding: 0 13px; color: var(--paper); font-weight: 720; }
+.interest-team-list { display: grid; border: 1px solid var(--line-strong); }
+.interest-team-list:empty { display: none; }
+.interest-team-list article { display: grid; gap: 14px; padding: 17px; }
+.interest-team-list article + article { border-top: 1px solid var(--line); }
+.interest-team-list header { display: flex; justify-content: space-between; gap: 16px; }
+.interest-team-list header > div { display: grid; gap: 2px; }
+.interest-team-list header strong { font-size: .82rem; }
+.interest-team-list header span { color: var(--muted); font-size: .68rem; }
+.interest-team-options,
+.interest-briefing-options { display: flex; flex-wrap: wrap; gap: 10px 18px; color: var(--ink); font-size: .72rem; font-weight: 620; }
+.interest-team-options label,
+.interest-briefing-options label { display: inline-flex; align-items: center; gap: 7px; }
+.interest-team-options input,
+.interest-briefing-options input { width: 16px; height: 16px; accent-color: var(--accent); }
+.interest-small-field { display: grid; grid-template-columns: auto minmax(120px, 180px); align-items: center; gap: 14px; color: var(--muted); font-size: .7rem; font-weight: 700; }
+.interests-footer-summary { margin: 18px 0 0; color: var(--muted); font-size: .7rem; line-height: 1.5; }
+
 @media (max-width: 620px) {
    .settings-screen-header,
    .settings-screen-body { width: calc(100% - 40px); }
@@ -1547,6 +1594,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
    .recurring-editor-grid { grid-template-columns: 1fr; }
    .recurring-days { grid-template-columns: repeat(4, minmax(0, 1fr)); }
    .recurring-editor-actions button { flex: 1 1 calc(50% - 8px); }
+   .interest-panel-trigger { min-height: 68px; }
+   .interest-team-add { grid-template-columns: minmax(0, 1fr) 100px; }
+   .interest-team-add > button { grid-column: 1 / -1; }
+   .interest-day-picker { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 @media (max-width: 440px) {

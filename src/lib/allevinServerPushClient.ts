@@ -18,6 +18,8 @@ import {
 import { readAllevinTone } from "@/lib/allevinVoice";
 import { lifeOccurrencesBetween, readLifeState } from "@/lib/lifeStore";
 import type { LifeImportance, LifeItem } from "@/lib/lifeTypes";
+import { planInterestNotifications } from "@/lib/allevinInterestNotifications";
+import type { InterestNotificationContext } from "@/lib/allevinInterests";
 
 export const SERVER_PUSH_ACTIVE_KEY = "allevin-server-push-active-v1";
 export const ALLEVIN_PUSH_DEVICE_ID_KEY = "allevin-push-device-id-v1";
@@ -41,7 +43,8 @@ interface PushPlanJob {
    phase: ReminderPhase;
    priority: ReminderPriority;
    actionTarget?: { source: "rhythm" | "life"; id: string; dateKey: string };
-   copyContext: NotificationCopyContext;
+   copyContext?: NotificationCopyContext;
+   interestContext?: InterestNotificationContext;
 }
 
 function randomId() {
@@ -187,7 +190,7 @@ function hasExplicitTransitionInto(schedule: RhythmEntry, entries: RhythmEntry[]
    });
 }
 
-function buildPushPlan(device: string) {
+async function buildPushPlan(device: string) {
    const rhythm = readDailyRhythm();
    if (!rhythm.remindersEnabled) return [] as PushPlanJob[];
 
@@ -294,11 +297,27 @@ function buildPushPlan(device: string) {
       }
    }
 
+   const interestJobs = await planInterestNotifications();
+   for (const interest of interestJobs) {
+      jobs.push({
+         id: `${device}:${interest.id}`,
+         deviceId: device,
+         dueAt: interest.dueAt,
+         title: interest.title,
+         body: "Preparing a fresh update.",
+         tag: `allevin-interest-${interest.context.occurrenceKey}`,
+         url: `/?interest=${interest.context.kind}`,
+         phase: "start",
+         priority: interest.priority,
+         interestContext: interest.context,
+      });
+   }
+
    return jobs.sort((a, b) => a.dueAt - b.dueAt).slice(0, 160);
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxiv-reliable-follow-through-1", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxv-personal-interests-1", {
       scope: "/",
       updateViaCache: "none",
    });
@@ -336,9 +355,12 @@ export async function syncServerNotificationSchedule() {
    try {
       saveNotificationHealth({ state: "checking", lastError: undefined });
       const device = deviceId();
-      const jobs = buildPushPlan(device);
-      const copies = await prepareNotificationBodies(jobs.map((job) => job.copyContext));
+      const jobs = await buildPushPlan(device);
+      const contextualJobs = jobs.filter((job): job is PushPlanJob & { copyContext: NotificationCopyContext } => Boolean(job.copyContext));
+      const copies = await prepareNotificationBodies(contextualJobs.map((job) => job.copyContext));
       const preparedJobs = jobs.flatMap(({ copyContext, ...job }) => {
+         if (job.interestContext) return [job];
+         if (!copyContext) return [];
          const copy = copies.get(copyContext.id);
          return copy ? [{ ...job, title: copy.title, body: copy.body }] : [];
       });

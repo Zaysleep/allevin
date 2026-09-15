@@ -9,6 +9,7 @@ import { clearConversationDraft, readConversationDraft, stageConversationDraft }
 import { analyzeIncompleteConversationRequest, canonicalTitleIsSafe, looksLikeNewStandaloneRequest, mergeConversationDraft, replyPreservesClockFact } from "@/lib/allevinConversationIntelligence";
 import { adaptationReplySuffix, captureGeneralDayContext, interpretAdaptiveDayConversation, previewAdaptiveDayConversation, reconcileLifeEventsWithRhythm } from "@/lib/allevinDayAdaptation";
 import { buildRecommendationContext, interpretRecommendationConversation } from "@/lib/allevinRecommendations";
+import { answerInterestQuestion, interpretInterestMutation } from "@/lib/allevinInterestsClient";
 import { answerMemoryQuestion, buildMemoryContext } from "@/lib/allevinMemory";
 import { answerContextualScheduleQuestion, interpretContextualLifeMutation } from "@/lib/contextualLifeIntelligence";
 import { clearPendingAssistantChange, isPendingConfirmation, isPendingDecline, readPendingAssistantChange, stagePendingAssistantChange } from "@/lib/allevinPendingChange";
@@ -364,6 +365,33 @@ export default function KinDock() {
          const tone = readAllevinTone();
          const currentState = readLifeState();
          const currentRhythm = readDailyRhythm();
+
+         // Interests are first-class ALLEVIN memory. Deterministic code owns
+         // watchlists, followed teams, and delivery preferences; live sources
+         // provide facts, while the language model only owns the response.
+         const interestMutation = interpretInterestMutation(prompt);
+         if (interestMutation.handled) {
+            const receipt = interestMutation.receipt || "The interest preference was updated.";
+            const reply = await phraseStateAcknowledgement(
+               prompt,
+               receipt,
+               [],
+               conversationBefore,
+               interestMutation.changed ? "state-ack" : "clarify",
+            );
+            deliver(reply);
+            return;
+         }
+
+         const interestAnswer = await answerInterestQuestion(prompt, tone);
+         if (interestAnswer.handled) {
+            if (interestAnswer.reply) deliver(interestAnswer.reply);
+            else {
+               const reply = await phraseStateAcknowledgement(prompt, interestAnswer.receipt || "No interest information is available yet.", [], conversationBefore, "grounded");
+               deliver(reply);
+            }
+            return;
+         }
 
          const conversationDraft = readConversationDraft();
          if (conversationDraft && isPendingDecline(submittedPrompt)) {

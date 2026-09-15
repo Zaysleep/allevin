@@ -1,12 +1,41 @@
 import { NextResponse } from "next/server";
 
 import { mergeDevicePushPlan, pushStoreConfigured, replaceDevicePushPlan, type StoredPushJob } from "@/lib/allevinPushStore";
+import { sanitizeInterestPreferences, type InterestNotificationContext, type SportsTeamPreference } from "@/lib/allevinInterests";
 
 export const runtime = "nodejs";
 
 function cleanDeviceId(value: unknown) {
    const id = String(value || "").trim();
    return /^[a-zA-Z0-9_-]{8,160}$/.test(id) ? id : null;
+}
+
+function cleanInterestContext(value: unknown): InterestNotificationContext | undefined {
+   if (!value || typeof value !== "object") return undefined;
+   const raw = value as Partial<InterestNotificationContext>;
+   const kinds: InterestNotificationContext["kind"][] = ["weather", "stocks", "monthly-stocks", "sports-gameday", "sports-pregame", "sports-final", "briefing"];
+   if (!kinds.includes(raw.kind as InterestNotificationContext["kind"])) return undefined;
+   const team = raw.team && typeof raw.team === "object" ? raw.team : undefined;
+   return {
+      kind: raw.kind as InterestNotificationContext["kind"],
+      occurrenceKey: String(raw.occurrenceKey || "").replace(/[^a-zA-Z0-9:_-]/g, "").slice(0, 240),
+      preferences: sanitizeInterestPreferences(raw.preferences),
+      team: team ? {
+         id: String(team.id || "").slice(0, 100),
+         name: String(team.name || "").trim().slice(0, 80),
+         league: (["MLB", "NBA", "NFL", "NHL", "other"].includes(String(team.league)) ? team.league : "other") as SportsTeamPreference["league"],
+         providerId: team.providerId ? String(team.providerId).slice(0, 80) : undefined,
+         gameDay: team.gameDay !== false,
+         pregame: team.pregame !== false,
+         finalScore: team.finalScore !== false,
+         pregameMinutes: Math.max(5, Math.min(180, Math.round(Number(team.pregameMinutes) || 30))),
+      } : undefined,
+      eventId: raw.eventId ? String(raw.eventId).slice(0, 80) : undefined,
+      scheduledAt: Number.isFinite(Number(raw.scheduledAt)) ? Number(raw.scheduledAt) : Date.now(),
+      retryCount: Math.max(0, Math.min(8, Math.round(Number(raw.retryCount) || 0))),
+      tone: raw.tone === "calm" || raw.tone === "balanced" ? raw.tone : "direct",
+      scheduleFacts: Array.isArray(raw.scheduleFacts) ? raw.scheduleFacts.map((item) => String(item).replace(/[<>\u0000-\u001F\u007F]/g, " ").replace(/\s+/g, " ").trim().slice(0, 160)).filter(Boolean).slice(0, 12) : undefined,
+   };
 }
 
 function cleanJob(raw: unknown, deviceId: string): StoredPushJob | null {
@@ -42,6 +71,7 @@ function cleanJob(raw: unknown, deviceId: string): StoredPushJob | null {
       phase,
       priority: priority as StoredPushJob["priority"],
       actionTarget,
+      interestContext: cleanInterestContext(value.interestContext),
    };
 }
 

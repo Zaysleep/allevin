@@ -9,7 +9,9 @@ import {
    readDeviceSubscription,
    recordPushReceipt,
    recordPushSchedulerHeartbeat,
+   rescheduleClaimedJob,
 } from "@/lib/allevinPushStore";
+import { generateInterestLanguage, resolveInterestFacts } from "@/lib/allevinInterestProviders";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,11 +54,38 @@ export async function GET(request: Request) {
       }
 
       try {
+         let title = job.title;
+         let body = job.body;
+         if (job.interestContext) {
+            const facts = await resolveInterestFacts(job.interestContext);
+            const retryCount = job.interestContext.retryCount || 0;
+            if (!facts.ok || (job.interestContext.kind === "sports-final" && facts.final === false)) {
+               const retryLimit = job.interestContext.kind === "sports-final" ? 6 : 2;
+               if (retryCount < retryLimit) await rescheduleClaimedJob(job, Date.now() + (job.interestContext.kind === "sports-final" ? 20 : 10) * 60_000);
+               else await recordPushReceipt(job.deviceId, job.id, "failed").catch(() => null);
+               failed += 1;
+               continue;
+            }
+            const copy = await generateInterestLanguage({
+               facts,
+               request: `Prepare the scheduled ${job.interestContext.kind} update using only the latest verified facts.`,
+               tone: job.interestContext.tone || "direct",
+               notification: true,
+            });
+            if (!copy) {
+               if (retryCount < 2) await rescheduleClaimedJob(job, Date.now() + 10 * 60_000);
+               else await recordPushReceipt(job.deviceId, job.id, "failed").catch(() => null);
+               failed += 1;
+               continue;
+            }
+            title = copy.title || title;
+            body = copy.body || body;
+         }
          await webpush.sendNotification(
             subscription as PushSubscription,
             JSON.stringify({
-               title: job.title,
-               body: job.body,
+               title,
+               body,
                tag: job.tag,
                url: job.url,
                entryId: job.entryId,

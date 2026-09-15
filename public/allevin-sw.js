@@ -5,7 +5,7 @@
  * can wake the installed PWA later without changing the client UI contract.
  */
 
-const SW_VERSION = "mkxxiv-reliable-follow-through-1";
+const SW_VERSION = "mkxxv-personal-interests-1";
 
 async function reportReceipt(data, kind) {
   if (!data?.deviceId || !data?.jobId) return;
