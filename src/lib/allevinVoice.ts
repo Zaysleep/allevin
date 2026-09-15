@@ -12,7 +12,7 @@ const LINES: Record<AllevinTone, Record<VoiceMoment, string[]>> = {
       ],
       missed: [
          "{item} slipped past. Adjust it or drop it. The clock already voted.",
-         "You missed {item}. Fine. Decide what survives instead of turning it into a documentary.",
+         "The original time for {item} has passed. Decide whether it still belongs in today.",
       ],
       done: [
          "{item}: done. Good. Next thing.",
@@ -37,7 +37,7 @@ const LINES: Record<AllevinTone, Record<VoiceMoment, string[]>> = {
    },
    balanced: {
       start: ["{item} is up next.", "Time for {item}."],
-      missed: ["{item} was missed. Adjust it, move it, or leave it for today.", "The window for {item} passed. Decide what you want to do with it."],
+      missed: ["The time for {item} has passed. Adjust it, move it, or leave it for today.", "The window for {item} passed. Decide what you want to do with it."],
       done: ["{item} is done.", "Done: {item}."],
       skip: ["{item} is skipped for today.", "Skipping {item} today."],
       recovery: ["I adjusted the flexible parts of the day around {item}.", "The plan changed, so I tightened the remaining flexible time around {item}."],

@@ -392,39 +392,48 @@ export async function generateInterestLanguage({
    const responseFormat = notification
       ? { type: "json_schema", json_schema: { name: "allevin_interest_notification", strict: true, schema: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, body: { type: "string" } }, required: ["title", "body"] } } }
       : { type: "json_schema", json_schema: { name: "allevin_interest_reply", strict: true, schema: { type: "object", additionalProperties: false, properties: { reply: { type: "string" } }, required: ["reply"] } } };
-   const providerRequest = () => fetch("https://api.openai.com/v1/chat/completions", {
+   const providerRequest = (requestModel: string) => fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-         model,
-         ...openAICompletionOptions(model, notification ? 500 : 700, 0.8),
+         model: requestModel,
+         ...openAICompletionOptions(requestModel, notification ? 1000 : 2200, 0.8),
          response_format: responseFormat,
          messages: [
             {
                role: "system",
                content: `You are ALLEVIN, a concise and attentive personal assistant. Write ${notification ? "a short notification title and a one- or two-sentence body" : "a short plain-text answer"} using only the verified facts supplied. The source data is authoritative. Never invent a price, score, opponent, game time, weather condition, schedule, or personal motive. Preserve timestamps and freshness language when financial data is not explicitly real-time. Respect noSpoilers: if true, never reveal a score unless the user's request explicitly asks for it. ${tone === "calm" ? "Use a gentle, low-pressure voice." : tone === "balanced" ? "Use a natural, restrained voice." : "Use a clear, confident voice."} Avoid robotic openings, hype, filler, emojis, Markdown, and generic productivity advice. ${notification ? "Keep the body under 190 characters and the title under 70 characters." : "Use real line breaks only when they materially improve a multi-item report."}`,
             },
-            { role: "user", content: `REQUEST\n${clean(request, 500)}\n\nVERIFIED FACTS\n${facts.facts}\n\nSOURCE\n${facts.source || "verified provider"}\n\nOBSERVED AT\n${facts.observedAt ? new Date(facts.observedAt).toISOString() : "unknown"}` },
+            { role: "user", content: `REQUEST\n${clean(request, 500)}\n\nVERIFIED FACTS\n${clean(facts.facts, 18_000)}\n\nSOURCE\n${facts.source || "verified provider"}\n\nOBSERVED AT\n${facts.observedAt ? new Date(facts.observedAt).toISOString() : "unknown"}` },
          ],
       }),
       cache: "no-store",
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(20_000),
    });
-   let response = await providerRequest();
-   if (!response.ok && providerFailureIsRetryable(response.status)) {
-      await response.text();
-      response = await providerRequest();
+
+   const fallbackModel = "gpt-4o-mini";
+   const models = model === fallbackModel ? [model] : [model, fallbackModel];
+   for (const requestModel of models) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+         const response = await providerRequest(requestModel);
+         if (!response.ok) {
+            await response.text();
+            if (!providerFailureIsRetryable(response.status)) break;
+            continue;
+         }
+         const data = await response.json();
+         const content = data?.choices?.[0]?.message?.content;
+         if (typeof content !== "string" || !content.trim()) continue;
+         const parsed = parseJson(content);
+         if (notification) {
+            const title = clean(parsed.title, 70);
+            const body = clean(parsed.body, 220);
+            if (title && body) return { title, body };
+            continue;
+         }
+         const reply = clean(parsed.reply, 2500);
+         if (reply) return { reply };
+      }
    }
-   if (!response.ok) return null;
-   const data = await response.json();
-   const content = data?.choices?.[0]?.message?.content;
-   if (typeof content !== "string" || !content.trim()) return null;
-   const parsed = parseJson(content);
-   if (notification) {
-      const title = clean(parsed.title, 70);
-      const body = clean(parsed.body, 220);
-      return title && body ? { title, body } : null;
-   }
-   const reply = clean(parsed.reply, 2500);
-   return reply ? { reply } : null;
+   return null;
 }

@@ -121,12 +121,6 @@ function lifeItemMinutes(item: LifeItem) {
    return date.getHours() * 60 + date.getMinutes();
 }
 
-function isPassedLifeItem(item: LifeItem, now: Date) {
-   if (item.state === "done" || item.allDay || item.timingPrecision !== "exact") return false;
-   const when = item.endAt || item.startAt || item.dueAt;
-   return Boolean(when && sameLocalDay(when, now) && when < now.getTime());
-}
-
 function formatSelectedDate(date: Date) {
    return date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 }
@@ -265,8 +259,8 @@ export default function CalendarWorkspace({ lifeState, rhythmState, nowMs }: { l
       const rhythm = visibleRhythmForDate(rhythmState, date);
       const life = lifeItemsForDate(lifeState, date);
       const combined = [
-         ...rhythm.map((entry) => ({ key: `r-${entry.id}`, title: entry.title, minutes: minutesFromClock(entry.time), time: formatClock(entry.time), passed: entry.status === "missed" })),
-         ...life.map((item) => ({ key: `l-${item.id}`, title: item.title, minutes: lifeItemMinutes(item), time: item.allDay ? "" : new Date(item.startAt || item.dueAt || 0).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), passed: isPassedLifeItem(item, now) })),
+         ...rhythm.map((entry) => ({ key: `r-${entry.id}`, title: entry.title, minutes: minutesFromClock(entry.time), time: formatClock(entry.time) })),
+         ...life.map((item) => ({ key: `l-${item.id}`, title: item.title, minutes: lifeItemMinutes(item), time: item.allDay ? "" : new Date(item.startAt || item.dueAt || 0).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) })),
       ].sort((a, b) => a.minutes - b.minutes);
       return combined.slice(0, 4);
    }
@@ -300,7 +294,7 @@ export default function CalendarWorkspace({ lifeState, rhythmState, nowMs }: { l
                      <button className={`calendar-week-day ${selected ? "calendar-date-selected" : ""} ${today ? "calendar-date-today" : ""}`} key={localDateKey(date)} onClick={() => chooseDate(date)}>
                         <span>{date.toLocaleDateString([], { weekday: "short" })}</span>
                         <strong>{date.getDate()}</strong>
-                        <div>{renderCompactEntries(date).map((entry) => <i className={entry.passed ? "calendar-entry-passed" : ""} key={entry.key}><b>{entry.time}</b>{entry.title}{entry.passed ? <em>Missed</em> : null}</i>)}</div>
+                        <div>{renderCompactEntries(date).map((entry) => <i key={entry.key}><b>{entry.time}</b>{entry.title}</i>)}</div>
                      </button>
                   );
                })}
@@ -333,15 +327,13 @@ export default function CalendarWorkspace({ lifeState, rhythmState, nowMs }: { l
                {selectedRows.length ? selectedRows.map((row) => {
                   if (row.type === "now") return <div className="calendar-now-line" key={row.key}><span>Now</span><b>{now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</b></div>;
                   if (row.type === "rhythm") {
-                     const passed = row.rhythm.status === "missed";
-                     return <div className={`calendar-day-row calendar-day-row-editable ${passed ? "calendar-entry-passed" : ""}`} key={row.key}><time>{formatClock(row.rhythm.time)}</time><div><strong>{row.rhythm.title}</strong>{passed ? <span className="calendar-missed-label">Missed</span> : row.rhythm.endTime ? <span>{formatClock(row.rhythm.time)}–{formatClock(row.rhythm.endTime)}</span> : <span>{row.rhythm.durationMinutes ? `${row.rhythm.durationMinutes} min` : row.rhythm.category}</span>}</div><button className="icon-button" onClick={() => { setDraft(null); setRhythmEditTarget({ kind: row.rhythm.kind, id: row.rhythm.sourceId }); setRhythmManagerOpen(true); }} aria-label={`Edit ${row.rhythm.title}`}><Pencil size={14} /></button></div>;
+                     return <div className="calendar-day-row calendar-day-row-editable" key={row.key}><time>{formatClock(row.rhythm.time)}</time><div><strong>{row.rhythm.title}</strong>{row.rhythm.endTime ? <span>{formatClock(row.rhythm.time)}–{formatClock(row.rhythm.endTime)}</span> : <span>{row.rhythm.durationMinutes ? `${row.rhythm.durationMinutes} min` : row.rhythm.category}</span>}</div><button className="icon-button" onClick={() => { setDraft(null); setRhythmEditTarget({ kind: row.rhythm.kind, id: row.rhythm.sourceId }); setRhythmManagerOpen(true); }} aria-label={`Edit ${row.rhythm.title}`}><Pencil size={14} /></button></div>;
                   }
-                  const passed = isPassedLifeItem(row.item, now);
                   const timestamp = row.item.startAt || row.item.dueAt;
                   return (
-                     <div className={`calendar-day-row calendar-day-row-editable ${passed ? "calendar-entry-passed" : ""} ${row.item.state === "done" ? "calendar-entry-complete" : ""}`} key={row.key}>
+                     <div className={`calendar-day-row calendar-day-row-editable ${row.item.state === "done" ? "calendar-entry-complete" : ""}`} key={row.key}>
                         <time>{row.item.allDay ? "All day" : timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : ""}</time>
-                        <div><strong>{row.item.title}</strong><span className={passed ? "calendar-missed-label" : undefined}>{passed ? "Missed" : row.item.location || row.item.context}</span></div>
+                        <div><strong>{row.item.title}</strong><span>{row.item.location || row.item.context}</span></div>
                         <button className="icon-button" onClick={() => { setDraft(eventDraftFromItem(row.item)); setConflictMessage(""); setForceSave(false); }} aria-label={`Edit ${row.item.title}`}><Pencil size={14} /></button>
                      </div>
                   );

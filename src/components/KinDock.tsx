@@ -214,6 +214,51 @@ async function phraseStateAcknowledgement(
    return "";
 }
 
+async function phraseInterestAcknowledgement(
+   prompt: string,
+   stateReceipt: string,
+   recentConversation: KinMessage[],
+   responseMode: "state-ack" | "grounded" | "clarify",
+) {
+   const recentReplies = recentConversation
+      .filter((message) => message.role === "assistant")
+      .slice(-6)
+      .map((message) => message.content);
+   let rejectedReply = "";
+
+   // Interest changes do not need the user's entire calendar and life-item
+   // snapshot. Keeping this request compact prevents a successful preference
+   // save from losing its acknowledgement to an oversized wording request.
+   for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await requestKinLLM({
+         mode: "kin-life",
+         responseMode,
+         stateReceipt: responseMode === "clarify"
+            ? `Ask only this unresolved question:\n${stateReceipt}`
+            : `This verified interest preference is already saved. Confirm it naturally without asking another question:\n${stateReceipt}`,
+         input: prompt,
+         nowIso: new Date().toISOString(),
+         timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+         displayName: getAllevinDisplayName(""),
+         assistantContext: "This request concerns only ALLEVIN Interests: weather, stocks, sports, or the daily briefing.",
+         voiceStyle: readAllevinTone(),
+         lifeItems: [],
+         conversation: [],
+         recentReplies: [...recentReplies, ...(rejectedReply ? [rejectedReply] : [])],
+         variationNonce: languageVariationNonce(),
+         rejectedReply: rejectedReply || undefined,
+      });
+      const natural = response.reply.replace(/^(?:got it|understood|noted|okay|all right|alright)[.!,:;—-]*\s*/i, "").trim();
+      const questionShapeIsSafe = responseMode === "clarify" ? replyIsQuestion(natural) : !replyIsQuestion(natural);
+      if (!response.usedFallback && natural && questionShapeIsSafe && groundedReplyIsSafe(natural, stateReceipt, recentConversation, "", prompt, responseMode, attempt === 2)) return natural;
+      rejectedReply = natural || response.reply;
+   }
+
+   // State is already authoritative and saved. A verified receipt is safer
+   // than a blank chat bubble if every language-provider attempt is unavailable.
+   return stateReceipt;
+}
+
 async function prepareMutationLanguage(
    prompt: string,
    stateReceipt: string,
@@ -372,10 +417,9 @@ export default function KinDock() {
          const interestMutation = interpretInterestMutation(prompt);
          if (interestMutation.handled) {
             const receipt = interestMutation.receipt || "The interest preference was updated.";
-            const reply = await phraseStateAcknowledgement(
+            const reply = await phraseInterestAcknowledgement(
                prompt,
                receipt,
-               [],
                conversationBefore,
                interestMutation.changed ? "state-ack" : "clarify",
             );
@@ -387,7 +431,7 @@ export default function KinDock() {
          if (interestAnswer.handled) {
             if (interestAnswer.reply) deliver(interestAnswer.reply);
             else {
-               const reply = await phraseStateAcknowledgement(prompt, interestAnswer.receipt || "No interest information is available yet.", [], conversationBefore, "grounded");
+               const reply = await phraseInterestAcknowledgement(prompt, interestAnswer.receipt || "No interest information is available yet.", conversationBefore, "grounded");
                deliver(reply);
             }
             return;
