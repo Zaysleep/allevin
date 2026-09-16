@@ -3,6 +3,7 @@ import "server-only";
 import { openAICompletionOptions, providerFailureIsRetryable } from "@/lib/allevinOpenAIRequest";
 import { sanitizeInterestPreferences, type AllevinInterestPreferences, type InterestNotificationContext, type SportsTeamPreference } from "@/lib/allevinInterests";
 import type { AllevinTone } from "@/lib/allevinVoice";
+import { briefingAsPlainText, sanitizeMorningBriefing } from "@/lib/allevinBriefing";
 
 export interface InterestFactsResult {
    ok: boolean;
@@ -389,9 +390,41 @@ export async function generateInterestLanguage({
    const apiKey = process.env.OPENAI_API_KEY?.trim();
    const model = (process.env.ALLEVIN_LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
    if (!apiKey) return null;
+   const structuredBriefing = facts.kind === "briefing" && !notification;
    const responseFormat = notification
       ? { type: "json_schema", json_schema: { name: "allevin_interest_notification", strict: true, schema: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, body: { type: "string" } }, required: ["title", "body"] } } }
-      : { type: "json_schema", json_schema: { name: "allevin_interest_reply", strict: true, schema: { type: "object", additionalProperties: false, properties: { reply: { type: "string" } }, required: ["reply"] } } };
+      : structuredBriefing
+         ? {
+            type: "json_schema",
+            json_schema: {
+               name: "allevin_morning_briefing",
+               strict: true,
+               schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                     headline: { type: "string" },
+                     summary: { type: "string" },
+                     sections: {
+                        type: "array",
+                        items: {
+                           type: "object",
+                           additionalProperties: false,
+                           properties: {
+                              id: { type: "string", enum: ["today", "weather", "markets", "sports", "next"] },
+                              title: { type: "string" },
+                              items: { type: "array", items: { type: "string" } },
+                           },
+                           required: ["id", "title", "items"],
+                        },
+                     },
+                     closing: { type: "string" },
+                  },
+                  required: ["headline", "summary", "sections", "closing"],
+               },
+            },
+         }
+         : { type: "json_schema", json_schema: { name: "allevin_interest_reply", strict: true, schema: { type: "object", additionalProperties: false, properties: { reply: { type: "string" } }, required: ["reply"] } } };
    const providerRequest = (requestModel: string) => fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -402,7 +435,7 @@ export async function generateInterestLanguage({
          messages: [
             {
                role: "system",
-               content: `You are ALLEVIN, a concise and attentive personal assistant. Write ${notification ? "a short notification title and a one- or two-sentence body" : "a short plain-text answer"} using only the verified facts supplied. The source data is authoritative. Never invent a price, score, opponent, game time, weather condition, schedule, or personal motive. Preserve timestamps and freshness language when financial data is not explicitly real-time. Respect noSpoilers: if true, never reveal a score unless the user's request explicitly asks for it. ${tone === "calm" ? "Use a gentle, low-pressure voice." : tone === "balanced" ? "Use a natural, restrained voice." : "Use a clear, confident voice."} Avoid robotic openings, hype, filler, emojis, Markdown, and generic productivity advice. ${notification ? "Keep the body under 190 characters and the title under 70 characters." : "Use real line breaks only when they materially improve a multi-item report."}`,
+               content: `You are ALLEVIN, a concise and attentive personal assistant. Write ${notification ? "a short notification title and a single-sentence preview body" : structuredBriefing ? "a structured morning briefing" : "a short plain-text answer"} using only the verified facts supplied. The source data is authoritative. Never invent a price, score, opponent, game time, weather condition, schedule, or personal motive. Preserve timestamps and freshness language when financial data is not explicitly real-time. Respect noSpoilers: if true, never reveal a score unless the user's request explicitly asks for it. ${tone === "calm" ? "Use a gentle, low-pressure voice." : tone === "balanced" ? "Use a natural, restrained voice." : "Use a clear, confident voice."} Avoid robotic openings, hype, filler, emojis, Markdown, and generic productivity advice. ${notification ? "For a briefing notification, prefer the title Morning briefing ready and preview the weather plus the next useful schedule item when both are available. Keep the body under 170 characters and the title under 70 characters." : structuredBriefing ? "Use only sections supported by the facts. Convert schedule times to natural 12-hour local time. Keep each item to one concise sentence. Put the immediate upcoming item in the next section when available. Markets should emphasize notable movement instead of repeating every field. If the schedule is empty, say the morning is open without inventing plans." : "Use real line breaks only when they materially improve a multi-item report."}`,
             },
             { role: "user", content: `REQUEST\n${clean(request, 500)}\n\nVERIFIED FACTS\n${clean(facts.facts, 18_000)}\n\nSOURCE\n${facts.source || "verified provider"}\n\nOBSERVED AT\n${facts.observedAt ? new Date(facts.observedAt).toISOString() : "unknown"}` },
          ],
@@ -429,6 +462,11 @@ export async function generateInterestLanguage({
             const title = clean(parsed.title, 70);
             const body = clean(parsed.body, 220);
             if (title && body) return { title, body };
+            continue;
+         }
+         if (structuredBriefing) {
+            const briefing = sanitizeMorningBriefing({ ...parsed, observedAt: facts.observedAt }, facts.observedAt);
+            if (briefing) return { briefing, reply: briefingAsPlainText(briefing) };
             continue;
          }
          const reply = clean(parsed.reply, 2500);

@@ -317,7 +317,7 @@ async function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxv-personal-interests-1", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxv-morning-briefing-1", {
       scope: "/",
       updateViaCache: "none",
    });

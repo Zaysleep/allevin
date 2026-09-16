@@ -8,6 +8,7 @@ import AppUpdateNotice from "@/components/AppUpdateNotice";
 import KinDock from "@/components/KinDock";
 import LifeItemRow from "@/components/LifeItemRow";
 import ManualReminderForm from "@/components/ManualReminderForm";
+import MorningBriefingSheet from "@/components/MorningBriefingSheet";
 import RecurringReminderRow from "@/components/RecurringReminderRow";
 import LiveClock from "@/components/LiveClock";
 import OnboardingFlow from "@/components/OnboardingFlow";
@@ -263,6 +264,7 @@ export default function LifeDashboard() {
          </section>
 
          {footerInfo ? <FooterInfoPanel section={footerInfo} onClose={() => setFooterInfo(null)} /> : null}
+         <MorningBriefingSheet />
          <footer className="life-footer">
             <div className="life-footer-brand"><strong>ALLEVIN</strong><span>Kin Software LLC</span></div>
             <div className="life-footer-right"><nav aria-label="ALLEVIN information"><button type="button" onClick={() => setFooterInfo(footerInfo === "about" ? null : "about")}>About</button><button type="button" onClick={() => setFooterInfo(footerInfo === "privacy" ? null : "privacy")}>Privacy</button><button type="button" onClick={() => setFooterInfo(footerInfo === "terms" ? null : "terms")}>Terms</button></nav><p>ALLEVIN uses AI to help interpret and organize what you share.</p></div>

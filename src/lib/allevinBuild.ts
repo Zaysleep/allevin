@@ -7,5 +7,5 @@
 export const ALLEVIN_BUILD = {
    version: "0.25.0",
    mark: "MK XXV",
-   languageProtocol: "mkxxv-personal-interests-1",
+   languageProtocol: "mkxxv-morning-briefing-1",
 } as const;
