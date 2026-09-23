@@ -214,7 +214,11 @@ export function upNextTimeLabel(item: UpNextItem, nowMs = Date.now()) {
 export function suggestionCategoryForUpNext(item: UpNextItem) {
    const title = item.title.toLowerCase();
    if (item.category === "exercise" || /workout|gym|run|cardio|strength|lift|yoga|mobility/.test(title)) return "workout" as const;
-   if (item.category === "meal" || /breakfast|coffee|matcha|meal|eat|lunch|dinner/.test(title)) return "breakfast" as const;
+   if (/dinner|supper|cook|unwind/.test(title)) return "dinner" as const;
+   if (/breakfast|coffee|matcha|morning meal/.test(title)) return "breakfast" as const;
+   if (item.category === "meal" || /\b(?:meal|eat|lunch)\b/.test(title)) {
+      return new Date(item.at).getHours() >= 15 ? "dinner" as const : "breakfast" as const;
+   }
    if (/dentist|doctor|appointment|checkup|meeting|call|reservation|interview/.test(title)) return "appointment" as const;
    if (/grocery|groceries|shopping|pick up|pickup|drop off|return|buy|errand/.test(title)) return "errand" as const;
    if (/email|form|paperwork|submit|renew|application|book|schedule/.test(title)) return "admin" as const;

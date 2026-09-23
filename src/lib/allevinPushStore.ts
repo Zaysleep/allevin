@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { InterestNotificationContext } from "@/lib/allevinInterests";
+import type { NotificationCopyContext } from "@/lib/allevinNotificationCopy";
 
 export interface StoredPushJob {
    id: string;
@@ -19,6 +20,7 @@ export interface StoredPushJob {
       dateKey: string;
    };
    interestContext?: InterestNotificationContext;
+   copyContext?: NotificationCopyContext;
 }
 
 const JOBS_KEY = "allevin:push:jobs:v1";

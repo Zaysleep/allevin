@@ -2,7 +2,7 @@ import type { AllevinTone } from "@/lib/allevinVoice";
 import { buildRhythmForDate, getRhythmDayContexts, localDateKey, minutesFromClock, readDailyRhythm, type DailyRhythmState } from "@/lib/dailyRhythm";
 import type { LifeState } from "@/lib/lifeTypes";
 
-export type RecommendationCategory = "workout" | "breakfast" | "focus" | "transition" | "appointment" | "errand" | "admin" | "general";
+export type RecommendationCategory = "workout" | "breakfast" | "dinner" | "focus" | "transition" | "appointment" | "errand" | "admin" | "general";
 export type RecommendationFeedback = "liked" | "disliked" | "skipped" | "accepted";
 
 interface RecommendationOption {
@@ -73,6 +73,10 @@ const OPTIONS: RecommendationOption[] = [
    { id: "breakfast-burrito", category: "breakfast", title: "Make breakfast portable.", detail: "Eggs, beans or potatoes, and whatever else you keep around. Wrap it and keep moving.", minMinutes: 15, maxMinutes: 35 },
    { id: "breakfast-rice-egg", category: "breakfast", title: "Use leftovers intelligently.", detail: "Rice and eggs with something fresh on the side. Fast, filling, and it clears food that was already waiting for a job.", minMinutes: 12, maxMinutes: 28 },
    { id: "breakfast-avocado", category: "breakfast", title: "Make it a slower breakfast if you have the room.", detail: "Avocado toast, eggs, fruit, and your drink. Use this one when the schedule actually gives you breathing space.", minMinutes: 18, maxMinutes: 40 },
+   { id: "dinner-sheet-pan", category: "dinner", title: "Keep dinner to one pan.", detail: "Roast a protein and vegetables together, then add rice, potatoes, or bread if you want it. Dinner stays useful without taking over the evening.", minMinutes: 30, maxMinutes: 75 },
+   { id: "dinner-bowl", category: "dinner", title: "Build an easy dinner bowl.", detail: "Start with rice or another grain, add a protein and vegetables, then finish it with a sauce you already like. Flexible, filling, and light on cleanup.", minMinutes: 20, maxMinutes: 60 },
+   { id: "dinner-pasta", category: "dinner", title: "Use the simple pasta route.", detail: "Pasta, vegetables, and a protein make a straightforward evening meal. Keep the ingredients familiar so the unwinding part still gets a turn.", minMinutes: 20, maxMinutes: 55 },
+   { id: "dinner-leftovers", category: "dinner", title: "Let leftovers handle dinner.", detail: "Reheat what is already ready and add one fresh side if it needs balance. Saving effort is a valid dinner plan.", minMinutes: 5, maxMinutes: 25 },
    { id: "focus-first-hard", category: "focus", title: "Start with the thing that can bite you later.", detail: "Before the day fills up, identify the one commitment or handoff that becomes annoying if it slips and handle that first.", minMinutes: 10, maxMinutes: 120 },
    { id: "focus-meeting-check", category: "focus", title: "Check the fixed commitments first.", detail: "Look for meetings, deadlines, or handoffs before you create extra work. The calendar gets first vote.", minMinutes: 5, maxMinutes: 60 },
    { id: "focus-one-target", category: "focus", title: "Give the block one clear target.", detail: "Pick one outcome for this stretch instead of building a heroic list you will ignore by lunch.", minMinutes: 15, maxMinutes: 180 },
@@ -248,9 +252,13 @@ function nextFixedMinutes(lifeState: LifeState, rhythm: DailyRhythmState, now: D
 }
 
 function plannedRecommendationWindow(rhythm: DailyRhythmState, category: RecommendationCategory, now: Date) {
-   if (category !== "workout" && category !== "breakfast") return null;
+   if (category !== "workout" && category !== "breakfast" && category !== "dinner") return null;
    const categoryMatch = category === "workout" ? "exercise" : "meal";
-   const titleMatch = category === "breakfast" ? /breakfast|coffee|matcha|morning/i : null;
+   const titleMatch = category === "breakfast"
+      ? /breakfast|coffee|matcha|morning/i
+      : category === "dinner"
+         ? /dinner|cook|supper|evening|unwind/i
+         : null;
    const candidate = buildRhythmForDate(rhythm, now)
       .filter((entry) => entry.kind === "anchor" && !entry.completed && !entry.skipped && entry.status !== "missed" && entry.category === categoryMatch)
       .filter((entry) => !titleMatch || titleMatch.test(entry.title))
@@ -268,7 +276,7 @@ function availableWindow(lifeState: LifeState, rhythm: DailyRhythmState, categor
    const planned = plannedRecommendationWindow(rhythm, category, now);
    if (planned) return { minutes: planned.minutes, nextTitle: "", planned: true, contextKey: planned.contextKey, subject: planned.subject };
    const next = nextFixedMinutes(lifeState, rhythm, now);
-   const fallback = category === "breakfast" ? 30 : category === "workout" ? 45 : 30;
+   const fallback = category === "breakfast" || category === "dinner" ? 30 : category === "workout" ? 45 : 30;
    const contextKey = `${localDateKey(now)}:conversation:${category}`;
    if (!next) return { minutes: fallback, nextTitle: "", planned: false, contextKey, subject: "" };
    return { minutes: Math.max(5, Math.min(120, next.minutes - 5)), nextTitle: next.title, planned: false, contextKey, subject: "" };
@@ -281,6 +289,7 @@ function lastCategory(history: RecommendationHistoryEntry[]) {
 function detectCategory(lower: string, state: RecommendationState): RecommendationCategory | null {
    if (/\b(?:workout|exercise|gym|training|cardio|strength|mobility)\b/.test(lower)) return "workout";
    if (/\b(?:breakfast|morning meal|eat in the morning|food before work)\b/.test(lower)) return "breakfast";
+   if (/\b(?:dinner|supper|evening meal|cook tonight|eat tonight)\b/.test(lower)) return "dinner";
    if (/\b(?:focus|work block|study|what should i tackle)\b/.test(lower)) return "focus";
    if (/\b(?:appointment|dentist|doctor|checkup|meeting|call|reservation|interview)\b/.test(lower)) return "appointment";
    if (/\b(?:errand|groceries|grocery|shopping|pick up|pickup|drop off|return|buy)\b/.test(lower)) return "errand";

@@ -12,6 +12,7 @@ import {
    rescheduleClaimedJob,
 } from "@/lib/allevinPushStore";
 import { generateInterestLanguage, resolveInterestFacts } from "@/lib/allevinInterestProviders";
+import type { StoredPushJob } from "@/lib/allevinPushStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,40 @@ function configureWebPush() {
    return true;
 }
 
+async function generateScheduledNotificationLanguage(request: Request, jobs: StoredPushJob[]) {
+   const result = new Map<string, { title: string; body: string }>();
+   const contexts = jobs.flatMap((job) => job.copyContext ? [job.copyContext] : []);
+
+   // Generate language at delivery time, after the reminder is safely queued.
+   // Small batches keep the copy endpoint bounded if several jobs share a minute.
+   for (let offset = 0; offset < contexts.length; offset += 48) {
+      try {
+         const response = await fetch(new URL("/api/allevin/notifications/copy", request.url), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+               contexts: contexts.slice(offset, offset + 48),
+               recentBodies: [],
+               variationNonce: `delivery-${Date.now()}-${offset}`,
+            }),
+            cache: "no-store",
+         });
+         if (!response.ok) continue;
+         const payload = (await response.json()) as {
+            copies?: Array<{ id?: unknown; title?: unknown; body?: unknown; source?: unknown }>;
+         };
+         for (const copy of Array.isArray(payload.copies) ? payload.copies : []) {
+            if (copy.source !== "llm" || typeof copy.id !== "string" || typeof copy.title !== "string" || typeof copy.body !== "string") continue;
+            result.set(copy.id, { title: copy.title, body: copy.body });
+         }
+      } catch {
+         // Every queued job already carries factual emergency copy. A language
+         // outage must never turn into a missing reminder.
+      }
+   }
+   return result;
+}
+
 export async function GET(request: Request) {
    if (!authorized(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
    if (!pushStoreConfigured() || !configureWebPush()) {
@@ -42,6 +77,7 @@ export async function GET(request: Request) {
    // Redis atomically removes due jobs before they are sent. This prevents
    // overlapping serverless cron invocations from producing duplicate pushes.
    const jobs = await claimDuePushJobs(Date.now(), 100);
+   const scheduledCopies = await generateScheduledNotificationLanguage(request, jobs.filter((job) => !job.interestContext));
    let sent = 0;
    let failed = 0;
 
@@ -56,6 +92,13 @@ export async function GET(request: Request) {
       try {
          let title = job.title;
          let body = job.body;
+         if (job.copyContext) {
+            const copy = scheduledCopies.get(job.copyContext.id);
+            if (copy) {
+               title = copy.title;
+               body = copy.body;
+            }
+         }
          if (job.interestContext) {
             const facts = await resolveInterestFacts(job.interestContext);
             const retryCount = job.interestContext.retryCount || 0;

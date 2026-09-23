@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 
 import {
+   sanitizeNotificationCopyContext,
    validateNotificationBody,
    validateNotificationTitle,
    type NotificationCopyContext,
 } from "@/lib/allevinNotificationCopy";
 import { openAICompletionOptions, providerFailureIsRetryable, providerFailureReason } from "@/lib/allevinOpenAIRequest";
-import type { AllevinTone } from "@/lib/allevinVoice";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,64 +37,6 @@ function clean(value: unknown, limit: number) {
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, limit);
-}
-
-function safeInteger(value: unknown, minimum: number, maximum: number) {
-   const number = Number(value);
-   return Number.isFinite(number) ? Math.max(minimum, Math.min(maximum, Math.round(number))) : minimum;
-}
-
-function sanitizeContext(value: unknown): NotificationCopyContext | null {
-   if (!value || typeof value !== "object") return null;
-   const raw = value as Partial<NotificationCopyContext>;
-   const id = clean(raw.id, 320);
-   const occurrenceKey = clean(raw.occurrenceKey, 360);
-   const title = clean(raw.title, 160);
-   const phase = raw.phase === "checkpoint" || raw.phase === "start" ? raw.phase : null;
-   const tone: AllevinTone = raw.tone === "balanced" || raw.tone === "calm" ? raw.tone : "direct";
-   const priority = safeInteger(raw.priority, 1, 5) as NotificationCopyContext["priority"];
-   if (!id || !occurrenceKey || !title || !phase) return null;
-
-   const nextRaw = raw.next;
-   const nextTitle = clean(nextRaw?.title, 160);
-   const previousRaw = raw.previous;
-   const previousTitle = clean(previousRaw?.title, 160);
-   const timeOfDay = raw.timeOfDay === "morning" || raw.timeOfDay === "afternoon" || raw.timeOfDay === "evening" || raw.timeOfDay === "night"
-      ? raw.timeOfDay
-      : "afternoon";
-   return {
-      id,
-      occurrenceKey,
-      title,
-      reason: clean(raw.reason, 220) || undefined,
-      category: clean(raw.category, 80) || "general",
-      phase,
-      tone,
-      priority,
-      leadMinutes: safeInteger(raw.leadMinutes, 0, 60),
-      durationMinutes: safeInteger(raw.durationMinutes, 0, 1440),
-      startsAtLabel: clean(raw.startsAtLabel, 24),
-      endsAtLabel: clean(raw.endsAtLabel, 24),
-      timeOfDay,
-      dayClosing: raw.dayClosing === true,
-      previous: previousRaw && previousTitle
-         ? {
-              title: previousTitle,
-              category: clean(previousRaw.category, 80) || "general",
-              endedAtLabel: clean(previousRaw.endedAtLabel, 24),
-              minutesBeforeCurrent: safeInteger(previousRaw.minutesBeforeCurrent, 0, 360),
-           }
-         : undefined,
-      next: nextRaw && nextTitle
-         ? {
-              title: nextTitle,
-              category: clean(nextRaw.category, 80) || "general",
-              startsAtLabel: clean(nextRaw.startsAtLabel, 24),
-              startsInMinutes: safeInteger(nextRaw.startsInMinutes, 1, 360),
-              minutesFromCurrentEnd: safeInteger(nextRaw.minutesFromCurrentEnd, -1440, 1440),
-           }
-         : undefined,
-   };
 }
 
 function parseJson(content: string) {
@@ -318,7 +260,7 @@ export async function POST(request: Request) {
    } | null;
    const contexts = (Array.isArray(payload?.contexts) ? payload.contexts : [])
       .slice(0, 48)
-      .map(sanitizeContext)
+      .map(sanitizeNotificationCopyContext)
       .filter((context): context is NotificationCopyContext => Boolean(context));
    if (!contexts.length) return NextResponse.json({ error: "No valid notification contexts." }, { status: 400 });
 

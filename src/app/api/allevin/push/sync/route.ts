@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { mergeDevicePushPlan, pushStoreConfigured, replaceDevicePushPlan, type StoredPushJob } from "@/lib/allevinPushStore";
 import { sanitizeInterestPreferences, type InterestNotificationContext, type SportsTeamPreference } from "@/lib/allevinInterests";
+import { sanitizeNotificationCopyContext } from "@/lib/allevinNotificationCopy";
 
 export const runtime = "nodejs";
 
@@ -72,6 +73,7 @@ function cleanJob(raw: unknown, deviceId: string): StoredPushJob | null {
       priority: priority as StoredPushJob["priority"],
       actionTarget,
       interestContext: cleanInterestContext(value.interestContext),
+      copyContext: sanitizeNotificationCopyContext(value.copyContext) || undefined,
    };
 }
 

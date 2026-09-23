@@ -92,6 +92,70 @@ function cleanInline(value: unknown, limit: number) {
       .slice(0, limit);
 }
 
+function safeInteger(value: unknown, minimum: number, maximum: number) {
+   const number = Number(value);
+   return Number.isFinite(number) ? Math.max(minimum, Math.min(maximum, Math.round(number))) : minimum;
+}
+
+/**
+ * Notification context crosses the browser/server boundary with the push plan.
+ * Keep one strict sanitizer shared by both the copy endpoint and queue intake so
+ * delivery-time language can never trust arbitrary client fields.
+ */
+export function sanitizeNotificationCopyContext(value: unknown): NotificationCopyContext | null {
+   if (!value || typeof value !== "object") return null;
+   const raw = value as Partial<NotificationCopyContext>;
+   const id = cleanInline(raw.id, 320);
+   const occurrenceKey = cleanInline(raw.occurrenceKey, 360);
+   const title = cleanInline(raw.title, 160);
+   const phase = raw.phase === "checkpoint" || raw.phase === "start" ? raw.phase : null;
+   const tone: AllevinTone = raw.tone === "balanced" || raw.tone === "calm" ? raw.tone : "direct";
+   const priority = safeInteger(raw.priority, 1, 5) as NotificationCopyContext["priority"];
+   if (!id || !occurrenceKey || !title || !phase) return null;
+
+   const nextRaw = raw.next;
+   const nextTitle = cleanInline(nextRaw?.title, 160);
+   const previousRaw = raw.previous;
+   const previousTitle = cleanInline(previousRaw?.title, 160);
+   const timeOfDay = raw.timeOfDay === "morning" || raw.timeOfDay === "afternoon" || raw.timeOfDay === "evening" || raw.timeOfDay === "night"
+      ? raw.timeOfDay
+      : "afternoon";
+
+   return {
+      id,
+      occurrenceKey,
+      title,
+      reason: cleanInline(raw.reason, 220) || undefined,
+      category: cleanInline(raw.category, 80) || "general",
+      phase,
+      tone,
+      priority,
+      leadMinutes: safeInteger(raw.leadMinutes, 0, 60),
+      durationMinutes: safeInteger(raw.durationMinutes, 0, 1440),
+      startsAtLabel: cleanInline(raw.startsAtLabel, 24),
+      endsAtLabel: cleanInline(raw.endsAtLabel, 24),
+      timeOfDay,
+      dayClosing: raw.dayClosing === true,
+      previous: previousRaw && previousTitle
+         ? {
+              title: previousTitle,
+              category: cleanInline(previousRaw.category, 80) || "general",
+              endedAtLabel: cleanInline(previousRaw.endedAtLabel, 24),
+              minutesBeforeCurrent: safeInteger(previousRaw.minutesBeforeCurrent, 0, 360),
+           }
+         : undefined,
+      next: nextRaw && nextTitle
+         ? {
+              title: nextTitle,
+              category: cleanInline(nextRaw.category, 80) || "general",
+              startsAtLabel: cleanInline(nextRaw.startsAtLabel, 24),
+              startsInMinutes: safeInteger(nextRaw.startsInMinutes, 1, 360),
+              minutesFromCurrentEnd: safeInteger(nextRaw.minutesFromCurrentEnd, -1440, 1440),
+           }
+         : undefined,
+   };
+}
+
 function normalized(value: string) {
    return value.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 }

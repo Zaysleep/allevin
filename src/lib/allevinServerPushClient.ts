@@ -2,7 +2,6 @@
 
 import { buildRhythmForDate, localDateKey, minutesFromClock, readDailyRhythm, type RhythmEntry } from "@/lib/dailyRhythm";
 import { createNotificationCopyContext, notificationTag, type NotificationCopyContext } from "@/lib/allevinNotificationCopy";
-import { prepareNotificationBodies } from "@/lib/allevinNotificationCopyClient";
 import {
    readNotificationHealth,
    readNotificationPreferences,
@@ -25,8 +24,6 @@ export const SERVER_PUSH_ACTIVE_KEY = "allevin-server-push-active-v1";
 export const ALLEVIN_PUSH_DEVICE_ID_KEY = "allevin-push-device-id-v1";
 const HORIZON_HOURS = 48;
 const RECURRING_HORIZON_DAYS = 40;
-let copyRetryTimer: number | undefined;
-let copyRetryAttempts = 0;
 
 type ReminderPhase = "checkpoint" | "start";
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
@@ -148,7 +145,7 @@ function addEventJobs({
          deviceId: device,
          dueAt: checkpointAt,
          title,
-         body: "",
+         body: `${title} is coming up at ${copyContext.startsAtLabel}.`,
          tag: notificationTag(copyContext),
          url: `/?allevinCheckpoint=1&source=${actionTarget?.source || ""}&id=${encodeURIComponent(actionTarget?.id || sourceId)}&date=${dateKey}&title=${encodeURIComponent(title.slice(0, 80))}`,
          entryId: sourceId,
@@ -167,7 +164,7 @@ function addEventJobs({
          deviceId: device,
          dueAt: startAt,
          title,
-         body: "",
+         body: `It’s time for ${title}.`,
          tag: notificationTag(copyContext),
          url: `/?allevinEvent=1&source=${actionTarget?.source || ""}&id=${encodeURIComponent(actionTarget?.id || sourceId)}&date=${dateKey}&title=${encodeURIComponent(title.slice(0, 80))}`,
          entryId: sourceId,
@@ -317,21 +314,12 @@ async function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxv-morning-briefing-1", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxv-reliable-reminders-1", {
       scope: "/",
       updateViaCache: "none",
    });
    await registration.update();
    return registration;
-}
-
-function queueCopyRetry() {
-   if (copyRetryTimer !== undefined || copyRetryAttempts >= 3) return;
-   copyRetryAttempts += 1;
-   copyRetryTimer = window.setTimeout(() => {
-      copyRetryTimer = undefined;
-      void syncServerNotificationSchedule();
-   }, 20_000);
 }
 
 async function ensurePushSubscription() {
@@ -356,35 +344,17 @@ export async function syncServerNotificationSchedule() {
       saveNotificationHealth({ state: "checking", lastError: undefined });
       const device = deviceId();
       const jobs = await buildPushPlan(device);
-      const contextualJobs = jobs.filter((job): job is PushPlanJob & { copyContext: NotificationCopyContext } => Boolean(job.copyContext));
-      const copies = await prepareNotificationBodies(contextualJobs.map((job) => job.copyContext));
-      const preparedJobs = jobs.flatMap(({ copyContext, ...job }) => {
-         if (job.interestContext) return [job];
-         if (!copyContext) return [];
-         const copy = copies.get(copyContext.id);
-         return copy ? [{ ...job, title: copy.title, body: copy.body }] : [];
-      });
-      const complete = preparedJobs.length === jobs.length;
-      if (!complete) queueCopyRetry();
-      else {
-         copyRetryAttempts = 0;
-         if (copyRetryTimer !== undefined) {
-            window.clearTimeout(copyRetryTimer);
-            copyRetryTimer = undefined;
-         }
-      }
       const subscription = await ensurePushSubscription();
       const response = await fetch("/api/allevin/push/sync", {
          method: "POST",
          headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({ deviceId: device, subscription: subscription.toJSON(), jobs: preparedJobs, complete, expectedJobs: jobs.length }),
+         body: JSON.stringify({ deviceId: device, subscription: subscription.toJSON(), jobs, complete: true, expectedJobs: jobs.length }),
       });
 
       if (!response.ok) throw new Error(`Push sync failed (${response.status}).`);
       const payload = (await response.json()) as { jobs?: number; complete?: boolean };
       const acceptedJobs = Math.max(0, Number(payload.jobs) || 0);
-      const healthy = complete && payload.complete === true && acceptedJobs === jobs.length;
-      const missingCopyCount = jobs.length - preparedJobs.length;
+      const healthy = payload.complete === true && acceptedJobs === jobs.length;
       if (healthy && jobs.length > 0) window.localStorage.setItem(SERVER_PUSH_ACTIVE_KEY, "true");
       else window.localStorage.removeItem(SERVER_PUSH_ACTIVE_KEY);
       saveNotificationHealth({
@@ -392,13 +362,9 @@ export async function syncServerNotificationSchedule() {
          lastSyncAt: Date.now(),
          plannedJobs: jobs.length,
          queuedJobs: acceptedJobs,
-         nextDueAt: preparedJobs[0]?.dueAt,
-         lastError: healthy
-            ? undefined
-            : missingCopyCount > 0
-               ? `${missingCopyCount} reminder${missingCopyCount === 1 ? "" : "s"} still need language.`
-               : "The server accepted only part of the notification schedule.",
-         preview: preparedJobs.slice(0, 8).map((job) => ({ id: job.id, title: job.title, dueAt: job.dueAt, phase: job.phase })),
+         nextDueAt: jobs[0]?.dueAt,
+         lastError: healthy ? undefined : "The server accepted only part of the notification schedule.",
+         preview: jobs.slice(0, 8).map((job) => ({ id: job.id, title: job.title, dueAt: job.dueAt, phase: job.phase })),
       });
       return healthy;
    } catch (error) {
