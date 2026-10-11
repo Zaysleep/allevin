@@ -209,6 +209,33 @@ export default function SettingsScreen({
                   <button className="settings-inline-button" type="button" onClick={() => updateNotificationPreferences({ quietDayEnabled: !notificationPreferences.quietDayEnabled })}>{notificationPreferences.quietDayEnabled ? "On" : "Off"}</button>
                </div>
                {notificationPreferences.quietDayEnabled ? <label className="settings-field settings-quiet-day-time"><span>Check-in time</span><input type="time" value={notificationPreferences.quietDayTime} onChange={(event) => updateNotificationPreferences({ quietDayTime: event.target.value })} /></label> : null}
+               <div className="settings-preference-group">
+                  <div className="settings-reminder-row">
+                     <div><strong>Contextual check-ins</strong><span>Opening selected preparation alerts can ask whether the plan is still happening.</span></div>
+                     <button className="settings-inline-button" type="button" onClick={() => updateNotificationPreferences({ contextualCheckInsEnabled: !notificationPreferences.contextualCheckInsEnabled })}>{notificationPreferences.contextualCheckInsEnabled ? "On" : "Off"}</button>
+                  </div>
+                  {notificationPreferences.contextualCheckInsEnabled ? (
+                     <div className="settings-check-in-options" aria-label="Contextual check-in types">
+                        <label><input type="checkbox" checked={notificationPreferences.checkInWorkSchool} onChange={(event) => updateNotificationPreferences({ checkInWorkSchool: event.target.checked })} /> Work & school</label>
+                        <label><input type="checkbox" checked={notificationPreferences.checkInAppointments} onChange={(event) => updateNotificationPreferences({ checkInAppointments: event.target.checked })} /> Appointments</label>
+                        <label><input type="checkbox" checked={notificationPreferences.checkInCommutes} onChange={(event) => updateNotificationPreferences({ checkInCommutes: event.target.checked })} /> Commutes</label>
+                        <label><input type="checkbox" checked={notificationPreferences.checkInRoutines} onChange={(event) => updateNotificationPreferences({ checkInRoutines: event.target.checked })} /> Preparation routines</label>
+                     </div>
+                  ) : null}
+               </div>
+               <div className="settings-preference-group">
+                  <div className="settings-reminder-row">
+                     <div><strong>Quiet hours</strong><span>Routine nudges wait outside this window. Important commitments can remain allowed.</span></div>
+                     <button className="settings-inline-button" type="button" onClick={() => updateNotificationPreferences({ quietHoursEnabled: !notificationPreferences.quietHoursEnabled })}>{notificationPreferences.quietHoursEnabled ? "On" : "Off"}</button>
+                  </div>
+                  {notificationPreferences.quietHoursEnabled ? (
+                     <div className="settings-quiet-hours">
+                        <label className="settings-field"><span>Starts</span><input type="time" value={notificationPreferences.quietHoursStart} onChange={(event) => updateNotificationPreferences({ quietHoursStart: event.target.value })} /></label>
+                        <label className="settings-field"><span>Ends</span><input type="time" value={notificationPreferences.quietHoursEnd} onChange={(event) => updateNotificationPreferences({ quietHoursEnd: event.target.value })} /></label>
+                        <label className="settings-check-row"><input type="checkbox" checked={notificationPreferences.allowImportantDuringQuietHours} onChange={(event) => updateNotificationPreferences({ allowImportantDuringQuietHours: event.target.checked })} /> Allow important commitments</label>
+                     </div>
+                  ) : null}
+               </div>
                {health.preview.length ? (
                   <div className="notification-preview">
                      <strong>Next notifications</strong>

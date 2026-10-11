@@ -28,9 +28,15 @@ import {
 import { readAllevinTone } from "@/lib/allevinVoice";
 import { readLifeState } from "@/lib/lifeStore";
 import type { LifeItem, LifeImportance } from "@/lib/lifeTypes";
+import {
+   lifeInteractionKind,
+   rhythmInteractionKind,
+   shouldSuppressForQuietHours,
+   type NotificationInteractionKind,
+} from "@/lib/allevinNotificationPolicy";
 
 const NOTIFICATION_LOG_KEY = "allevin-notification-log-mkxii-3";
-const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxv-reliable-reminders-1";
+const SERVICE_WORKER_URL = "/allevin-sw.js?v=mkxxvi-adaptive-day-1";
 let reminderCheckRunning = false;
 type ReminderPriority = 1 | 2 | 3 | 4 | 5;
 
@@ -174,13 +180,14 @@ function leadMinutesForPriority(priority: number) {
    return 5;
 }
 
-function eventUrl(kind: "checkpoint" | "start", source: "rhythm" | "life", id: string, dateKey: string, title: string) {
+function eventUrl(kind: "checkpoint" | "start", source: "rhythm" | "life", id: string, dateKey: string, title: string, interaction: NotificationInteractionKind = "none") {
    const query = new URLSearchParams({
       [kind === "checkpoint" ? "allevinCheckpoint" : "allevinEvent"]: "1",
       source,
       id,
       date: dateKey,
       title: title.slice(0, 80),
+      interaction,
    });
    return `/?${query.toString()}`;
 }
@@ -266,16 +273,19 @@ export async function runRhythmReminderCheck(now = new Date()) {
             return Math.abs(candidateEnd - start) <= 2;
          });
          const checkpointKey = `${key}:${entry.sourceId}:${entry.time}:schedule-checkpoint`;
-         if (!hasExplicitTransition && nowMinutes >= checkpointAt && nowMinutes <= checkpointAt + 1 && !log.has(checkpointKey)) {
+         const checkpointTimestamp = new Date(now).setHours(Math.floor(checkpointAt / 60), checkpointAt % 60, 0, 0);
+         const interaction = rhythmInteractionKind(entry, quietPreferences);
+         if (!hasExplicitTransition && !shouldSuppressForQuietHours(checkpointTimestamp, priority, quietPreferences) && nowMinutes >= checkpointAt && nowMinutes <= checkpointAt + 1 && !log.has(checkpointKey)) {
             const context = rhythmNotificationContext({ id: checkpointKey, entry, date: now, phase: "checkpoint", tone, priority, leadMinutes: lead, timeline });
-            if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-schedule-checkpoint`, entry.sourceId, eventUrl("checkpoint", "rhythm", entry.sourceId, key, entry.title))) {
+            if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-schedule-checkpoint`, entry.sourceId, eventUrl("checkpoint", "rhythm", entry.sourceId, key, entry.title, interaction))) {
                log.add(checkpointKey);
                saveLog(log);
             }
          }
 
          const scheduleKey = `${key}:${entry.sourceId}:${entry.time}:schedule-start`;
-         if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(scheduleKey)) {
+         const startTimestamp = new Date(now).setHours(Math.floor(start / 60), start % 60, 0, 0);
+         if (!shouldSuppressForQuietHours(startTimestamp, priority, quietPreferences) && nowMinutes >= start && nowMinutes <= start + 1 && !log.has(scheduleKey)) {
             const context = rhythmNotificationContext({ id: scheduleKey, entry, date: now, phase: "start", tone, priority, leadMinutes: lead, timeline });
             if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-schedule`, entry.sourceId, eventUrl("start", "rhythm", entry.sourceId, key, entry.title))) {
                log.add(scheduleKey);
@@ -298,9 +308,11 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const lead = leadMinutesForPriority(priority);
       const checkpointAt = start - lead;
       const checkpointKey = `${key}:${entry.sourceId}:${entry.time}:checkpoint`;
-      if (nowMinutes >= checkpointAt && nowMinutes <= checkpointAt + 1 && !log.has(checkpointKey)) {
+      const checkpointTimestamp = new Date(now).setHours(Math.floor(checkpointAt / 60), checkpointAt % 60, 0, 0);
+      const interaction = rhythmInteractionKind(entry, quietPreferences);
+      if (!shouldSuppressForQuietHours(checkpointTimestamp, priority, quietPreferences) && nowMinutes >= checkpointAt && nowMinutes <= checkpointAt + 1 && !log.has(checkpointKey)) {
          const context = rhythmNotificationContext({ id: checkpointKey, entry, date: now, phase: "checkpoint", tone, priority, leadMinutes: lead, timeline });
-         if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-checkpoint`, entry.sourceId, eventUrl("checkpoint", "rhythm", entry.sourceId, key, entry.title))) {
+         if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-checkpoint`, entry.sourceId, eventUrl("checkpoint", "rhythm", entry.sourceId, key, entry.title, interaction))) {
             log.add(checkpointKey);
             saveLog(log);
          }
@@ -308,7 +320,8 @@ export async function runRhythmReminderCheck(now = new Date()) {
 
       const startKey = `${key}:${entry.sourceId}:${entry.time}:start`;
 
-      if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(startKey)) {
+      const startTimestamp = new Date(now).setHours(Math.floor(start / 60), start % 60, 0, 0);
+      if (!shouldSuppressForQuietHours(startTimestamp, priority, quietPreferences) && nowMinutes >= start && nowMinutes <= start + 1 && !log.has(startKey)) {
          const context = rhythmNotificationContext({ id: startKey, entry, date: now, phase: "start", tone, priority, leadMinutes: lead, timeline });
          if (await showContextualNotification(context, entry.title, `allevin-${key}-${entry.sourceId}-${entry.time}-start`, entry.sourceId, eventUrl("start", "rhythm", entry.sourceId, key, entry.title))) {
             log.add(startKey);
@@ -329,16 +342,19 @@ export async function runRhythmReminderCheck(now = new Date()) {
       const checkpointAt = start - lead;
       const occurrenceAt = item.startAt || item.dueAt || 0;
       const checkpointKey = `${key}:life:${item.id}:${occurrenceAt}:checkpoint`;
-      if (item.recurrence === "none" && nowMinutes >= checkpointAt && nowMinutes <= checkpointAt + 1 && !log.has(checkpointKey)) {
+      const checkpointTimestamp = new Date(now).setHours(Math.floor(checkpointAt / 60), checkpointAt % 60, 0, 0);
+      const interaction = lifeInteractionKind(item, quietPreferences);
+      if (item.recurrence === "none" && !shouldSuppressForQuietHours(checkpointTimestamp, priority, quietPreferences) && nowMinutes >= checkpointAt && nowMinutes <= checkpointAt + 1 && !log.has(checkpointKey)) {
          const context = lifeNotificationContext({ id: checkpointKey, item, phase: "checkpoint", tone, priority, leadMinutes: lead, timeline });
-         if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-checkpoint`, item.id, eventUrl("checkpoint", "life", item.id, key, item.title))) {
+         if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-checkpoint`, item.id, eventUrl("checkpoint", "life", item.id, key, item.title, interaction))) {
             log.add(checkpointKey);
             saveLog(log);
          }
       }
 
       const eventKey = `${key}:life:${item.id}:${occurrenceAt}:start`;
-      if (nowMinutes >= start && nowMinutes <= start + 1 && !log.has(eventKey)) {
+      const startTimestamp = new Date(now).setHours(Math.floor(start / 60), start % 60, 0, 0);
+      if (!shouldSuppressForQuietHours(startTimestamp, priority, quietPreferences) && nowMinutes >= start && nowMinutes <= start + 1 && !log.has(eventKey)) {
          const context = lifeNotificationContext({ id: eventKey, item, phase: "start", tone, priority, leadMinutes: lead, timeline });
          if (await showContextualNotification(context, item.title, `allevin-${key}-life-${item.id}-start`, item.id, eventUrl("start", "life", item.id, key, item.title))) {
             log.add(eventKey);

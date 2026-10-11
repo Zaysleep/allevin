@@ -2,6 +2,7 @@ import "server-only";
 
 import type { InterestNotificationContext } from "@/lib/allevinInterests";
 import type { NotificationCopyContext } from "@/lib/allevinNotificationCopy";
+import type { NotificationInteractionContext } from "@/lib/allevinNotificationPolicy";
 
 export interface StoredPushJob {
    id: string;
@@ -21,6 +22,9 @@ export interface StoredPushJob {
    };
    interestContext?: InterestNotificationContext;
    copyContext?: NotificationCopyContext;
+   interactionContext?: NotificationInteractionContext;
+   /** Do not deliver an old transition after its useful window has passed. */
+   expiresAt?: number;
 }
 
 const JOBS_KEY = "allevin:push:jobs:v1";

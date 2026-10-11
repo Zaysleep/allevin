@@ -244,6 +244,9 @@ export function previewAdaptiveDayConversation(
       /\b(?:leaving work|leave work|getting off work|get off work|work ends|working until)\b/.test(lower) &&
       /\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(lower) &&
       Boolean(parseClock(lower));
+   const cancelsWork = /\b(?:not going to work|call(?:ed|ing)? out(?: sick| of work)?|taking (?:today|tomorrow|the day) off work|i'?m off work|i am off work|no work|work (?:is |got )?cancelled|work (?:is |got )?canceled)\b/.test(lower);
+   const cancelsSchool = /\b(?:not going to class|not going to school|no class|class (?:is |got )?cancelled|class (?:is |got )?canceled|school (?:is |got )?cancelled|school (?:is |got )?canceled)\b/.test(lower);
+   const worksFromHome = /\b(?:working from home|work from home|wfh|staying home for work)\b/.test(lower);
    if (mentionsEarlyWork && !parseClock(lower)) {
       return { handled: true, requiresConfirmation: false, reply: "What time will Work end? Tell me, for example, “Work ends at 4 today,” and I’ll preview what follows it before changing the day." };
    }
@@ -256,6 +259,23 @@ export function previewAdaptiveDayConversation(
          handled: true,
          requiresConfirmation: true,
          reply: `If I make that change:\n- ${anchor.title} gets another ${extra} minutes\n- later flexible routines may move if the space closes\n- hard commitments stay fixed\n\nWant me to make the change?`,
+      };
+   }
+   if (cancelsWork || cancelsSchool) {
+      const target = cancelsWork && cancelsSchool ? "Work and Class" : cancelsWork ? "Work" : "Class";
+      return {
+         handled: true,
+         requiresConfirmation: true,
+         reply: `If I make that change:\n- ${target} is removed for this date only\n- routines tied to that schedule are recalculated\n- future occurrences remain unchanged\n\nWant me to make the change?`,
+      };
+   }
+   if (worksFromHome) {
+      const date = resolveAdaptiveTargetDate(lower, state);
+      const commute = buildRhythmForDate(state, date).filter((entry) => /commute|drive|travel/i.test(entry.title) && !entry.skipped);
+      return {
+         handled: true,
+         requiresConfirmation: true,
+         reply: `If I make that change:\n- Work stays on the day\n- ${commute.length ? commute.map((entry) => entry.title).join(", ") + " is removed" : "no commute was found to remove"}\n- your normal workday remains unchanged\n\nWant me to make the change?`,
       };
    }
    if (!isLate && !changesWorkEnd) return { handled: false, reply: "" };
@@ -624,7 +644,7 @@ export function interpretAdaptiveDayConversation(
       };
    }
 
-   if (/\b(?:what should i do now|what should i do next|what matters now)\b/.test(lower)) {
+   if (/\b(?:what should i do now|what should i do next|what matters now|resume from here|ready to continue my day|back on track)\b/.test(lower)) {
       const next = buildUpNextItem(lifeState, state, Date.now());
       const contexts = state.dayContexts[localDateKey(new Date())] || [];
       const recoveryContext = contexts.some((context) => context.kind === "recovery");

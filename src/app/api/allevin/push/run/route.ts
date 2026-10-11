@@ -82,6 +82,13 @@ export async function GET(request: Request) {
    let failed = 0;
 
    for (const job of jobs) {
+      // Cron can wake late. Silently discard an obsolete transition instead of
+      // telling the user to prepare for something that has already passed.
+      if (job.expiresAt && Date.now() > job.expiresAt) {
+         await recordPushReceipt(job.deviceId, job.id, "failed").catch(() => null);
+         await forgetClaimedJob(job);
+         continue;
+      }
       const subscription = await readDeviceSubscription(job.deviceId);
       if (!subscription) {
          failed += 1;
@@ -132,7 +139,7 @@ export async function GET(request: Request) {
                tag: job.tag,
                url: job.url,
                entryId: job.entryId,
-               data: { jobId: job.id, deviceId: job.deviceId, phase: job.phase, priority: job.priority, scheduledAt: job.dueAt, actionTarget: job.actionTarget },
+               data: { jobId: job.id, deviceId: job.deviceId, phase: job.phase, priority: job.priority, scheduledAt: job.dueAt, actionTarget: job.actionTarget, interactionContext: job.interactionContext },
             }),
             { TTL: 300, urgency: job.priority >= 4 ? "high" : "normal" },
          );

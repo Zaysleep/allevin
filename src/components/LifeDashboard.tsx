@@ -4,6 +4,7 @@ import { BellPlus, ChevronDown, ChevronRight, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import CalendarWorkspace from "@/components/CalendarWorkspace";
+import AdaptiveDayStatus from "@/components/AdaptiveDayStatus";
 import AppUpdateNotice from "@/components/AppUpdateNotice";
 import KinDock from "@/components/KinDock";
 import LifeItemRow from "@/components/LifeItemRow";
@@ -201,6 +202,7 @@ export default function LifeDashboard() {
          </section>
 
          <section className="day-ledger" aria-label="Daily page">
+            <AdaptiveDayStatus state={rhythm.state} />
             <UpNextPanel lifeState={state} rhythmState={rhythm.state} nowMs={nowMs} onCompleteRhythm={rhythm.completeEntry} />
 
             <CalendarWorkspace lifeState={state} rhythmState={rhythm.state} nowMs={nowMs} />

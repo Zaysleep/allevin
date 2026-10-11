@@ -19,6 +19,12 @@ import { lifeOccurrencesBetween, readLifeState } from "@/lib/lifeStore";
 import type { LifeImportance, LifeItem } from "@/lib/lifeTypes";
 import { planInterestNotifications } from "@/lib/allevinInterestNotifications";
 import type { InterestNotificationContext } from "@/lib/allevinInterests";
+import {
+   lifeInteractionKind,
+   rhythmInteractionKind,
+   shouldSuppressForQuietHours,
+   type NotificationInteractionContext,
+} from "@/lib/allevinNotificationPolicy";
 
 export const SERVER_PUSH_ACTIVE_KEY = "allevin-server-push-active-v1";
 export const ALLEVIN_PUSH_DEVICE_ID_KEY = "allevin-push-device-id-v1";
@@ -42,6 +48,8 @@ interface PushPlanJob {
    actionTarget?: { source: "rhythm" | "life"; id: string; dateKey: string };
    copyContext?: NotificationCopyContext;
    interestContext?: InterestNotificationContext;
+   interactionContext?: NotificationInteractionContext;
+   expiresAt?: number;
 }
 
 function randomId() {
@@ -117,6 +125,8 @@ function addEventJobs({
    buildCopyContext,
    includeCheckpoint,
    actionTarget,
+   interactionKind = "none",
+   notificationPreferences,
 }: {
    jobs: PushPlanJob[];
    device: string;
@@ -128,6 +138,8 @@ function addEventJobs({
    buildCopyContext: (id: string, phase: ReminderPhase, leadMinutes: number) => NotificationCopyContext;
    includeCheckpoint?: boolean;
    actionTarget?: PushPlanJob["actionTarget"];
+   interactionKind?: NotificationInteractionContext["kind"];
+   notificationPreferences: ReturnType<typeof readNotificationPreferences>;
 }) {
    const lead = checkpointLeadMinutes(priority);
    const checkpointAt = startAt - lead * 60_000;
@@ -137,9 +149,28 @@ function addEventJobs({
    // A parent schedule may omit its checkpoint when an
    // explicit transition routine already ends at that exact start time; that
    // avoids two notifications describing the same transition in the same minute.
-   if (includeCheckpoint !== false && checkpointAt > now + 5_000) {
+   if (
+      includeCheckpoint !== false &&
+      checkpointAt > now + 5_000 &&
+      !shouldSuppressForQuietHours(checkpointAt, priority, notificationPreferences)
+   ) {
       const id = `${device}:${dateKey}:${sourceId}:checkpoint:${startAt}`;
       const copyContext = buildCopyContext(id, "checkpoint", lead);
+      const interactionContext: NotificationInteractionContext | undefined = interactionKind === "none" ? undefined : {
+         kind: interactionKind,
+         source: actionTarget?.source,
+         sourceId: actionTarget?.id || sourceId,
+         dateKey,
+         title,
+      };
+      const query = new URLSearchParams({
+         allevinCheckpoint: "1",
+         interaction: interactionKind,
+         source: actionTarget?.source || "",
+         id: actionTarget?.id || sourceId,
+         date: dateKey,
+         title: title.slice(0, 80),
+      });
       jobs.push({
          id,
          deviceId: device,
@@ -147,16 +178,19 @@ function addEventJobs({
          title,
          body: `${title} is coming up at ${copyContext.startsAtLabel}.`,
          tag: notificationTag(copyContext),
-         url: `/?allevinCheckpoint=1&source=${actionTarget?.source || ""}&id=${encodeURIComponent(actionTarget?.id || sourceId)}&date=${dateKey}&title=${encodeURIComponent(title.slice(0, 80))}`,
+         url: `/?${query.toString()}`,
          entryId: sourceId,
          phase: "checkpoint",
          priority,
          actionTarget,
          copyContext,
+         interactionContext,
+         // A preparation question is no longer useful after the event starts.
+         expiresAt: startAt,
       });
    }
 
-   if (startAt > now + 5_000) {
+   if (startAt > now + 5_000 && !shouldSuppressForQuietHours(startAt, priority, notificationPreferences)) {
       const id = `${device}:${dateKey}:${sourceId}:start:${startAt}`;
       const copyContext = buildCopyContext(id, "start", lead);
       jobs.push({
@@ -172,6 +206,8 @@ function addEventJobs({
          priority,
          actionTarget,
          copyContext,
+         // Exact-time notices get a small scheduler grace period, never hours.
+         expiresAt: startAt + 10 * 60_000,
       });
    }
 }
@@ -223,9 +259,9 @@ async function buildPushPlan(device: string) {
             priority,
             buildCopyContext: (id, phase, leadMinutes) => rhythmNotificationContext({ id, entry, date, phase, tone, priority, leadMinutes, timeline }),
             includeCheckpoint: !hasExplicitTransitionInto(entry, entries),
-            actionTarget: entry.kind === "anchor"
-               ? { source: "rhythm", id: entry.sourceId, dateKey }
-               : undefined,
+            actionTarget: { source: "rhythm", id: entry.sourceId, dateKey },
+            interactionKind: rhythmInteractionKind(entry, notificationPreferences),
+            notificationPreferences,
          });
       }
 
@@ -256,6 +292,7 @@ async function buildPushPlan(device: string) {
                   timelineId: "quiet-day",
                   timeline,
                }),
+               notificationPreferences,
             });
          }
       }
@@ -290,6 +327,8 @@ async function buildPushPlan(device: string) {
             // occurrence, not turn into a checkpoint/start avalanche.
             includeCheckpoint: item.recurrence !== "none" ? false : undefined,
             actionTarget: { source: "life", id: item.id, dateKey },
+            interactionKind: lifeInteractionKind(item, notificationPreferences),
+            notificationPreferences,
          });
       }
    }
@@ -307,6 +346,7 @@ async function buildPushPlan(device: string) {
          phase: "start",
          priority: interest.priority,
          interestContext: interest.context,
+         expiresAt: interest.dueAt + 30 * 60_000,
       });
    }
 
@@ -314,7 +354,7 @@ async function buildPushPlan(device: string) {
 }
 
 async function registerPushServiceWorker() {
-   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxv-reliable-reminders-1", {
+   const registration = await navigator.serviceWorker.register("/allevin-sw.js?v=mkxxvi-adaptive-day-1", {
       scope: "/",
       updateViaCache: "none",
    });

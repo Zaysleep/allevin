@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { mergeDevicePushPlan, pushStoreConfigured, replaceDevicePushPlan, type StoredPushJob } from "@/lib/allevinPushStore";
 import { sanitizeInterestPreferences, type InterestNotificationContext, type SportsTeamPreference } from "@/lib/allevinInterests";
 import { sanitizeNotificationCopyContext } from "@/lib/allevinNotificationCopy";
+import type { NotificationInteractionContext } from "@/lib/allevinNotificationPolicy";
 
 export const runtime = "nodejs";
 
@@ -59,6 +60,18 @@ function cleanJob(raw: unknown, deviceId: string): StoredPushJob | null {
       /^\d{4}-\d{2}-\d{2}$/.test(String(target.dateKey || ""))
       ? { source: target.source, id: target.id.slice(0, 220), dateKey: String(target.dateKey) }
       : undefined;
+   const interaction = value.interactionContext as Partial<NotificationInteractionContext> | undefined;
+   const interactionContext: NotificationInteractionContext | undefined = interaction &&
+      (interaction.kind === "confirm-plan" || interaction.kind === "open-briefing")
+      ? {
+         kind: interaction.kind,
+         source: interaction.source === "rhythm" || interaction.source === "life" ? interaction.source : undefined,
+         sourceId: interaction.sourceId ? String(interaction.sourceId).slice(0, 220) : undefined,
+         dateKey: /^\d{4}-\d{2}-\d{2}$/.test(String(interaction.dateKey || "")) ? String(interaction.dateKey) : undefined,
+         title: interaction.title ? String(interaction.title).replace(/[<>\u0000-\u001F\u007F]/g, " ").trim().slice(0, 80) : undefined,
+      }
+      : undefined;
+   const expiresAt = Number(value.expiresAt);
 
    return {
       id,
@@ -74,6 +87,8 @@ function cleanJob(raw: unknown, deviceId: string): StoredPushJob | null {
       actionTarget,
       interestContext: cleanInterestContext(value.interestContext),
       copyContext: sanitizeNotificationCopyContext(value.copyContext) || undefined,
+      interactionContext,
+      expiresAt: Number.isFinite(expiresAt) && expiresAt >= dueAt ? expiresAt : undefined,
    };
 }
 

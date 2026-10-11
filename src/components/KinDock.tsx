@@ -21,6 +21,7 @@ import { buildRhythmContextForPrompt, buildRhythmNarrationContextForPrompt, inte
 import { analyzeRecurringReminderRequest, buildDeterministicLifeReadback, interpretKinLocally } from "@/lib/lifeEngine";
 import { applyKinActions, getLifeSnapshot, readLifeState } from "@/lib/lifeStore";
 import { appendKinMessage, clearKinConversation, KIN_CONVERSATION_UPDATED_EVENT, readKinConversation, type KinMessage } from "@/lib/kinConversation";
+import { ALLEVIN_OPEN_BRIEFING_EVENT } from "@/components/MorningBriefingSheet";
 
 export const KIN_FOCUS_EVENT = "allevin-kin-focus";
 
@@ -350,11 +351,30 @@ export default function KinDock() {
       const url = new URL(window.location.href);
       if (url.searchParams.get("allevinCheckpoint") !== "1" && url.searchParams.get("allevinEvent") !== "1") return;
       const title = (url.searchParams.get("title") || "").trim().slice(0, 80);
-      setCheckpointTitle(title);
-      setOpen(true);
-      for (const key of ["allevinCheckpoint", "allevinEvent", "source", "id", "date", "title"]) url.searchParams.delete(key);
+      const interactive = url.searchParams.get("interaction") === "confirm-plan" && url.searchParams.get("allevinCheckpoint") === "1";
+      // Only selected preparation notifications become conversations. Exact
+      // start alerts still open the app, but do not create an unnecessary chat.
+      if (interactive) {
+         // Defer the React state handoff so this effect remains an external URL
+         // synchronizer instead of creating a synchronous render cascade.
+         window.setTimeout(() => {
+            setCheckpointTitle(title);
+            setOpen(true);
+         }, 0);
+         const recent = readKinConversation();
+         void phraseStateAcknowledgement(
+            `I opened the preparation notification for ${title || "this plan"}.`,
+            `Ask whether ${title || "the plan"} is still happening as planned. No schedule change has been saved.`,
+            [],
+            recent,
+            "clarify",
+         ).then((reply) => {
+            if (reply) appendKinMessage("assistant", reply);
+         });
+      }
+      for (const key of ["allevinCheckpoint", "allevinEvent", "interaction", "source", "id", "date", "title"]) url.searchParams.delete(key);
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-      window.setTimeout(() => inputRef.current?.focus(), 80);
+      if (interactive) window.setTimeout(() => inputRef.current?.focus(), 80);
    }, []);
 
    useEffect(() => {
@@ -394,6 +414,19 @@ export default function KinDock() {
       setLanguageStatus("");
 
       try {
+         if (/^(?:refresh my day|refresh today|show my (?:morning |daily )?briefing)[.!?]?$/i.test(prompt)) {
+            window.dispatchEvent(new CustomEvent(ALLEVIN_OPEN_BRIEFING_EVENT));
+            const reply = await phraseStateAcknowledgement(
+               prompt,
+               "A fresh briefing for today is opening now.",
+               [],
+               conversationBefore,
+               "grounded",
+            );
+            deliver(reply);
+            return;
+         }
+
          if (isUndoPrompt(prompt)) {
             const undone = undoLastAssistantChange();
             const reply = await phraseStateAcknowledgement(
@@ -813,6 +846,14 @@ ${buildMemoryContext(effectiveRhythm, tone)}`,
                {!messages.length ? (
                   <div className="kin-quick-prompts">
                      {quickPrompts.map((prompt) => <button key={prompt} onClick={() => void send(prompt)}>{prompt}</button>)}
+                  </div>
+               ) : null}
+
+               {checkpointTitle ? (
+                  <div className="kin-check-in-actions" aria-label={`Update ${checkpointTitle}`}>
+                     <button type="button" onClick={() => void send("It is still happening as planned.")}>Still happening</button>
+                     <button type="button" onClick={() => void send("I’m running 15 minutes late.")}>15 min later</button>
+                     <button type="button" onClick={() => void send("It is not happening today.")}>Skip today</button>
                   </div>
                ) : null}
 

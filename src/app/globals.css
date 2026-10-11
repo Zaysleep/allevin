@@ -262,6 +262,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .kin-quick-prompts button { min-height: 46px; border: 0; border-right: 1px solid var(--line); border-radius: 0; background: var(--paper-strong); padding: 8px 11px; color: var(--muted); font-size: .71rem; }
 .kin-quick-prompts button:last-child { border-right: 0; }
 .kin-quick-prompts button:hover { color: var(--ink); background: rgba(25,33,50,.035); }
+.kin-check-in-actions { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
+.kin-check-in-actions button { min-height: 42px; border: 0; border-right: 1px solid var(--line); background: var(--paper-strong); color: var(--ink); padding: 7px; font-size: .68rem; font-weight: 720; }
+.kin-check-in-actions button:last-child { border-right: 0; color: var(--danger); }
 .kin-composer {
    min-height: 50px;
    display: grid;
@@ -480,6 +483,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
    font-weight: 700;
 }
 .settings-inline-button:hover { border-color: var(--ink); }
+.settings-preference-group { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 18px; }
+.settings-check-in-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 16px; padding: 2px 0 4px; }
+.settings-check-in-options label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .72rem; font-weight: 650; }
+.settings-check-in-options input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.settings-quiet-hours { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.settings-quiet-hours .settings-check-row { grid-column: 1 / -1; margin-top: 12px; }
 
 .kin-mark,
 .kin-empty-mark {
@@ -828,6 +837,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 .live-clock-time-group i { color: var(--soft); font-size: .62rem; font-style: normal; font-weight: 700; text-transform: uppercase; }
 
 /* One decision surface at the top. The full schedule lives only in Calendar. */
+.adaptive-day-status { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 2px solid var(--accent); border-bottom: 1px solid var(--line); padding: 18px 0; }
+.adaptive-day-status > div { display: grid; gap: 4px; }
+.adaptive-day-status span { color: var(--accent); font-size: .62rem; font-weight: 820; letter-spacing: .09em; }
+.adaptive-day-status strong { font-size: 1rem; }
+.adaptive-day-status p, .adaptive-day-status small { margin: 0; color: var(--muted); font-size: .73rem; line-height: 1.45; }
+.adaptive-day-status button { min-height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-strong); background: transparent; padding: 0 11px; color: var(--ink); font-size: .7rem; font-weight: 740; }
+.adaptive-day-status button:disabled { opacity: .45; }
 .up-next-block { border-top: 1px solid var(--line-strong); }
 .up-next-content {
    display: grid;
@@ -870,6 +886,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(49, 91, 214,
 }
 
 @media (max-width: 620px) {
+   .adaptive-day-status { align-items: flex-start; flex-direction: column; gap: 14px; }
    .life-brand-logo-full { width: 82px; height: 60px; }
    .life-topbar { min-height: 82px; }
    .live-clock { gap: 10px; }

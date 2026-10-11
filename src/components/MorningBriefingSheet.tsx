@@ -10,6 +10,7 @@ import { readAllevinTone } from "@/lib/allevinVoice";
 
 const CACHE_PREFIX = "allevin-morning-briefing-cache-mkxxv-1:";
 const DISMISSED_PREFIX = "allevin-morning-briefing-dismissed-mkxxv-1:";
+export const ALLEVIN_OPEN_BRIEFING_EVENT = "allevin-open-morning-briefing";
 
 function displayClock(value: string) {
    const [hours, minutes] = value.split(":").map(Number);
@@ -103,6 +104,12 @@ export default function MorningBriefingSheet() {
          const timer = window.setTimeout(() => showBriefing(false), 0);
          return () => window.clearTimeout(timer);
       }
+   }, [showBriefing]);
+
+   useEffect(() => {
+      const openFreshBriefing = () => showBriefing(true);
+      window.addEventListener(ALLEVIN_OPEN_BRIEFING_EVENT, openFreshBriefing);
+      return () => window.removeEventListener(ALLEVIN_OPEN_BRIEFING_EVENT, openFreshBriefing);
    }, [showBriefing]);
 
    useEffect(() => {

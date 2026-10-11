@@ -32,6 +32,15 @@ export interface NotificationHealth {
 export interface NotificationPreferences {
    quietDayEnabled: boolean;
    quietDayTime: string;
+   contextualCheckInsEnabled: boolean;
+   checkInWorkSchool: boolean;
+   checkInAppointments: boolean;
+   checkInCommutes: boolean;
+   checkInRoutines: boolean;
+   quietHoursEnabled: boolean;
+   quietHoursStart: string;
+   quietHoursEnd: string;
+   allowImportantDuringQuietHours: boolean;
 }
 
 const EMPTY_HEALTH: NotificationHealth = {
@@ -44,7 +53,20 @@ const EMPTY_HEALTH: NotificationHealth = {
 const DEFAULT_PREFERENCES: NotificationPreferences = {
    quietDayEnabled: false,
    quietDayTime: "09:00",
+   contextualCheckInsEnabled: true,
+   checkInWorkSchool: true,
+   checkInAppointments: true,
+   checkInCommutes: true,
+   checkInRoutines: false,
+   quietHoursEnabled: false,
+   quietHoursStart: "22:00",
+   quietHoursEnd: "06:00",
+   allowImportantDuringQuietHours: true,
 };
+
+function safeTime(value: unknown, fallback: string) {
+   return /^\d{2}:\d{2}$/.test(String(value || "")) ? String(value) : fallback;
+}
 
 function dispatch(name: string) {
    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(name));
@@ -92,8 +114,21 @@ export function readNotificationPreferences(): NotificationPreferences {
    if (typeof window === "undefined") return DEFAULT_PREFERENCES;
    try {
       const raw = JSON.parse(window.localStorage.getItem(PREFERENCES_KEY) || "null") as Partial<NotificationPreferences> | null;
-      const quietDayTime = /^\d{2}:\d{2}$/.test(String(raw?.quietDayTime || "")) ? String(raw?.quietDayTime) : DEFAULT_PREFERENCES.quietDayTime;
-      return { quietDayEnabled: raw?.quietDayEnabled === true, quietDayTime };
+      // Merge rather than replace so older installations gain safe defaults
+      // when a new notification preference is introduced.
+      return {
+         quietDayEnabled: raw?.quietDayEnabled === true,
+         quietDayTime: safeTime(raw?.quietDayTime, DEFAULT_PREFERENCES.quietDayTime),
+         contextualCheckInsEnabled: raw?.contextualCheckInsEnabled !== false,
+         checkInWorkSchool: raw?.checkInWorkSchool !== false,
+         checkInAppointments: raw?.checkInAppointments !== false,
+         checkInCommutes: raw?.checkInCommutes !== false,
+         checkInRoutines: raw?.checkInRoutines === true,
+         quietHoursEnabled: raw?.quietHoursEnabled === true,
+         quietHoursStart: safeTime(raw?.quietHoursStart, DEFAULT_PREFERENCES.quietHoursStart),
+         quietHoursEnd: safeTime(raw?.quietHoursEnd, DEFAULT_PREFERENCES.quietHoursEnd),
+         allowImportantDuringQuietHours: raw?.allowImportantDuringQuietHours !== false,
+      };
    } catch {
       return DEFAULT_PREFERENCES;
    }
@@ -101,7 +136,11 @@ export function readNotificationPreferences(): NotificationPreferences {
 
 export function saveNotificationPreferences(next: NotificationPreferences) {
    if (typeof window === "undefined") return;
-   const quietDayTime = /^\d{2}:\d{2}$/.test(next.quietDayTime) ? next.quietDayTime : DEFAULT_PREFERENCES.quietDayTime;
-   window.localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ quietDayEnabled: next.quietDayEnabled, quietDayTime }));
+   window.localStorage.setItem(PREFERENCES_KEY, JSON.stringify({
+      ...next,
+      quietDayTime: safeTime(next.quietDayTime, DEFAULT_PREFERENCES.quietDayTime),
+      quietHoursStart: safeTime(next.quietHoursStart, DEFAULT_PREFERENCES.quietHoursStart),
+      quietHoursEnd: safeTime(next.quietHoursEnd, DEFAULT_PREFERENCES.quietHoursEnd),
+   }));
    dispatch(NOTIFICATION_PREFERENCES_UPDATED_EVENT);
 }

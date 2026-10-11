@@ -3,6 +3,7 @@ import { LIFE_STATE_STORAGE_KEY } from "@/lib/lifeStore";
 
 const UNDO_STORAGE_KEY = "allevin-assistant-undo-mkxii";
 const MAX_UNDO = 12;
+export const ALLEVIN_UNDO_UPDATED_EVENT = "allevin-assistant-undo-updated";
 
 interface UndoSnapshot {
    id: string;
@@ -25,6 +26,14 @@ function readUndo(): UndoSnapshot[] {
 function writeUndo(items: UndoSnapshot[]) {
    if (typeof window === "undefined") return;
    window.localStorage.setItem(UNDO_STORAGE_KEY, JSON.stringify(items.slice(-MAX_UNDO)));
+   window.dispatchEvent(new CustomEvent(ALLEVIN_UNDO_UPDATED_EVENT));
+}
+
+export function readAssistantUndoHistory() {
+   return readUndo()
+      .slice()
+      .reverse()
+      .map(({ id, at, label }) => ({ id, at, label }));
 }
 
 export function captureAssistantUndo(label: string) {
@@ -58,5 +67,8 @@ export function undoLastAssistantChange() {
 }
 
 export function clearAssistantUndo() {
-   if (typeof window !== "undefined") window.localStorage.removeItem(UNDO_STORAGE_KEY);
+   if (typeof window !== "undefined") {
+      window.localStorage.removeItem(UNDO_STORAGE_KEY);
+      window.dispatchEvent(new CustomEvent(ALLEVIN_UNDO_UPDATED_EVENT));
+   }
 }
